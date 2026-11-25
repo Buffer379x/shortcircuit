@@ -217,8 +217,8 @@
   <section class="panel panel-pad stack" aria-labelledby={panelId + '-import'} aria-busy={busy}>
     <h2 id={panelId + '-import'}>{t.exchangeImport}</h2>
     <label class="field">
-      <span>{t.exchangeChooseFile}</span>
-      <input type="file" accept=".json,application/json" bind:this={fileInput} onchange={chooseFile} disabled={busy} aria-describedby={panelId + '-file-hint'} />
+      <span id={panelId + '-file-label'}>{t.exchangeChooseFile}</span>
+      <input type="file" accept=".json,application/json" bind:this={fileInput} onchange={chooseFile} disabled={busy} aria-labelledby={panelId + '-file-label'} aria-describedby={panelId + '-file-hint'} />
       <small id={panelId + '-file-hint'}>{t.exchangeFileHint}</small>
     </label>
     <div class="exchange-actions row">
