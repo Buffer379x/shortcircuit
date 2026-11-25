@@ -22,10 +22,10 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Slug generation settings | Planned | P1 | Allow a configurable generated length while preserving database uniqueness and bounded retries. |
 | Tags | Current | P1 | View tag counts, rename or merge tags, and remove their assignments. Tag suggestions and colors are planned. |
 | Crawler controls | Planned | P1 | Configure crawler directives and per-link crawlability. Check reserved route collisions before serving `robots.txt`. |
-| Duplicate detection | Planned | P2 | Detect exact matches while keeping distinct host and query values visible. Evaluate approximate matches and manual merge separately. |
+| Duplicate detection | Current | P2 | Lookup matches against the exact stored destination. The creation and edit forms offer copying an existing short URL. Approximate matches and merge are planned. |
 | Link history and protected links | Planned | P2 | Record destination changes with restore and retention controls. Support confirmed one-time access and atomic consumption. |
 | Rule editor and simulator | Planned | P2 | Preview the selected destination for representative inputs. Preserve rule order during edits and support keyboard reordering. |
-| URL Cleaner | Planned | P2 | Preview a proposed change locally and update the stored destination after operator confirmation. |
+| URL Cleaner | Current | P2 | Review known trackers and one-time exceptions locally. Use the proposed URL explicitly before saving. Leave recognized signed URLs unchanged. |
 | Favorites and archives | Planned | P2 | Pin frequently used links and archive links from the active list. |
 | Collections | Optional | P2 | Evaluate a lightweight collections model as an additional organization option. |
 | Link Pages | Optional | P3 | Evaluate a bounded content model with templates, branding, and scheduled availability. |

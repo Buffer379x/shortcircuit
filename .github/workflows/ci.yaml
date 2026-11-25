@@ -25,6 +25,7 @@ jobs:
           node-version: 24.22.3
       - run: npm ci --prefix frontend --no-audit --no-fund
       - run: npm run check --prefix frontend
+      - run: node tests/url-cleaner.cjs
       - run: npm run build --prefix frontend
       - run: rustup toolchain install 1.100.0 --profile minimal --component rustfmt,clippy
       - run: cargo test --locked --all-targets

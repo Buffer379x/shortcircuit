@@ -13,6 +13,8 @@
   type Format = keyof typeof contentTypes;
 
   let preview = $state<'loading' | 'ready' | 'error'>('loading');
+  const resolutions = [256, 384, 512, 768, 1024];
+  let size = $state(384);
   let downloading = $state(false);
   let downloadError = $state<keyof Messages | null>(null);
   const downloads = new AbortController();
@@ -20,7 +22,7 @@
   onDestroy(() => downloads.abort());
 
   function qrUrl(format: Format): string {
-    return `/api/v1/links/${link.id}/qr?format=${format}`;
+    return `/api/v1/links/${link.id}/qr?format=${format}&size=${size}`;
   }
 
   async function downloadQr(format: Format) {
@@ -54,6 +56,15 @@
 
 <Dialog {t} title={t.qrCode} open={true} {onclose}>
   <div class="dialog-body stack">
+    <label class="field">
+      <span>{t.qrResolution}</span>
+      <select value={size} disabled={downloading} onchange={(event) => {
+        size = Number(event.currentTarget.value);
+        preview = 'loading';
+      }}>
+        {#each resolutions as resolution (resolution)}<option value={resolution}>{resolution} × {resolution}</option>{/each}
+      </select>
+    </label>
     <figure class="qr-content stack compact">
       <div class="qr-preview">
         {#if preview === 'error'}
@@ -62,7 +73,7 @@
             <button class="button" type="button" onclick={() => { preview = 'loading'; }}>{t.retry}</button>
           </div>
         {:else}
-          <img src={qrUrl('svg')} alt={t.qrCode} hidden={preview === 'loading'} onload={() => { preview = 'ready'; }} onerror={() => { preview = 'error'; }} />
+          {#key size}<img src={qrUrl('svg')} alt={t.qrCode} hidden={preview === 'loading'} onload={() => { preview = 'ready'; }} onerror={() => { preview = 'error'; }} />{/key}
           {#if preview === 'loading'}<p role="status">{t.loading}</p>{/if}
         {/if}
       </div>

@@ -4,6 +4,8 @@
   import type { Api, Domains, Link, LinkPage } from './api';
   import Dialog from './Dialog.svelte';
   import { formatDate, problemMessage } from './format';
+  import DuplicateLookup from './DuplicateLookup.svelte';
+  import UrlCleaner from './UrlCleaner.svelte';
   import LinkQr from './LinkQr.svelte';
   import PolicyEditor from './PolicyEditor.svelte';
   import Icon from './Icon.svelte';
@@ -309,6 +311,10 @@
         <input name="target" type="url" required placeholder="https://example.com/" bind:value={target} disabled={saving} aria-labelledby="target-label" aria-describedby="target-hint" aria-invalid={formError === 'invalidTarget'} />
         <small id="target-hint">{t.targetHint}</small>
       </label>
+      {#if formOpen && !saving}
+        <UrlCleaner {t} value={target} onapply={(value) => target = value} />
+        <DuplicateLookup {t} {api} {domains} value={target} excludeId={editing?.id} />
+      {/if}
       <label class="field">
         <span>{t.title}</span><input name="title" bind:value={title} disabled={saving} aria-invalid={formError === 'invalidTitle'} />
       </label>
