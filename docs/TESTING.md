@@ -1,0 +1,29 @@
+# Test and Release Strategy
+
+The 0.1 foundation has five passing schema tests under `python3 tests/schema.py`. Rust checks and Docker smoke tests remain unverified. The design preview has its own verification status. See [Project Status](PROJECT_STATUS.md).
+
+| When | Checks | Evidence |
+|---|---|---|
+| Each relevant change | Rust formatting, Clippy, and tests. Frontend type checks and linting, OpenAPI contract checks, SQLite schema upgrade chains, and focused UI and redirect fixtures as those features land. | Deterministic seeds and synthetic data. |
+| Each module | Slug, domain, proxy, parsing, fallback, and rule fixtures. Sessions and scopes, outbound network policy in isolated fixtures, import and restore failures, accessibility, and input states. | Targeted coverage of boundary and failure cases. |
+| Each release | Redirects through the intended proxy configuration, a rehearsal for any planned traffic switch, failure and recovery cases, Docker on amd64, end-to-end tests, dependency and license checks, a container scan, and the Unraid installation workflow. | Archive a test report with versions, environment, and reproducible results. |
+| Extended coverage | Multiple architectures, longer load profiles, fuzzing or property-based tests, and independent security review. | Prioritize changes to outbound fetching, authentication, limit enforcement, backup, or atomic restore. |
+
+## P0 Cases
+
+- Compare redirects by host, exact slug, method, status, `Location`, and other headers. Cover case, IDNA, multiple path segments, encoding, query strings and fragments, extra paths, unknown hosts, fallbacks, expiry, deactivation, dynamic rule order, and route collisions. Verify QR payloads and deployed QR image URLs separately where relevant.
+- Check permissions for each object and action. Verify that setup works only within its intended trust boundary. Test CSRF, CORS, rate limits, proxy headers, session rotation, and revocation. Verify that outbound connections can reach only approved addresses.
+- Test preset remaining allowances under concurrent `GET`, `HEAD`, and preview requests. Cover analytics loss, retries, races, a full database, shutdown, and rollback.
+- Test repeated, interrupted, and canceled native CSV and JSON imports, conflict handling, and the counting of new visits. Verify exact host, slug, and destination when manually recreating a short URL intended to stay in service.
+- Test backup and restore with low disk space, corrupted content, incompatible versions, concurrent operations, and process termination. Verify recovery to the previous database generation.
+- Run the artifact on the target system and verify the non-root user, separate listeners, health checks, restart, and stop. Check signatures or digests and the SBOM for stable artifacts. Review dependencies and licenses with `cargo audit` and `cargo deny` or equivalent tools.
+
+## UI and Release Report
+
+Test core workflows in Dark, Light, and System themes, in English and German, at all seven target resolutions. Cover keyboard input, focus, form errors, loading and empty states, and races. Measure contrast and manually review WCAG 2.2 AA conformance with at least one screen reader and Mobile Safari. Check asset requests and common browsers. Scan real QR PNG and SVG output at different sizes and on different backgrounds. [WCAG 2.2](https://www.w3.org/TR/WCAG22/)
+
+The release review report records severity from P0 through P4, component, impact, evidence and reproduction steps, resolution, effort, and benefit. Track required 1.0 features and any deviations by version in the test report. Unresolved critical or high risks, an unverified planned traffic switch, or an untested restore block release. Stable version tags and `latest` follow approval.
+
+## CI and Versioning
+
+The Git workflow checks changes before they merge into the main branch. Key CI caches by toolchain, architecture, and lockfile. Release CI builds amd64 images reproducibly with a pinned toolchain and base image, then adds OCI labels, an SBOM, a vulnerability scan, and verifiable digests. Review dependency updates as individual changes. Tag release candidate images with a SemVer prerelease tag. Apply stable tags and `latest` only after stable release authorization. Document the schema version, pre-upgrade backup, and supported rollback path. Add arm64 when the target system requires it and dedicated release checks pass.

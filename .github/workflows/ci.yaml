@@ -1,0 +1,46 @@
+name: Core checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.100.0 --profile minimal --component rustfmt,clippy
+      - run: cargo test --locked --all-targets
+      - run: python3 tests/schema.py
+        if: always()
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo fmt --all -- --check
+        if: always()
+  container:
+    needs: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker compose up --build --detach --wait --wait-timeout 90
+      - name: Check listener separation
+        run: |
+          curl --fail --silent http://127.0.0.1:8081/readyz
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/readyz)" = "404"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8081/api/v1/links)" = "404"
+          test "$(docker inspect --format '{{.Config.User}}' "$(docker compose ps -q shortcircuit)")" = "10001:10001"
+      - if: always()
+        run: docker compose down --volumes
