@@ -35,6 +35,7 @@
   let slug = $state('');
   let host = $state('');
   let tags = $state('');
+  let analyticsEnabled = $state(true);
 
   const availableTags = $derived([...new Set(items.flatMap((link) => link.tags))].sort((a, b) => a.localeCompare(b, language)));
   const query = $derived(search.trim().toLocaleLowerCase(language));
@@ -79,6 +80,7 @@
     slug = link?.slug ?? '';
     host = link?.host ?? domains.hosts[0] ?? '';
     tags = link?.tags.join(', ') ?? '';
+    analyticsEnabled = link?.analytics_enabled ?? true;
     formError = null;
     formOpen = true;
   }
@@ -108,6 +110,7 @@
       if (editing) {
         const changes = {
           ...(fields.target !== editing.target ? { target: fields.target } : {}),
+          ...(analyticsEnabled !== editing.analytics_enabled ? { analytics_enabled: analyticsEnabled } : {}),
           ...(fields.title !== editing.title ? { title: fields.title } : {}),
           ...(fields.tags.join(', ') !== editing.tags.join(', ') ? { tags: fields.tags } : {}),
         };
@@ -327,6 +330,7 @@
         <input name="tags" bind:value={tags} disabled={saving} aria-labelledby="tags-label" aria-describedby="tags-hint" aria-invalid={formError === 'invalidTags'} />
         <small id="tags-hint">{t.tagsHint}</small>
       </label>
+      {#if editing}<label class="row"><input type="checkbox" bind:checked={analyticsEnabled} disabled={saving} />{t.countLinkVisits}</label>{/if}
       {#if formError}<p class="notice error" role="alert">{t[formError]}</p>{/if}
     </div>
     <footer class="dialog-foot row">

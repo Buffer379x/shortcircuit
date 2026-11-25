@@ -10,17 +10,17 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 |---|---|---|---|
 | Create and list links | Current | P0 | The authenticated admin API accepts absolute HTTP or HTTPS destinations, preserves their stored URI spelling, and lists links with a cursor. |
 | Custom and generated slugs | Current | P0 | Slugs are case-sensitive and can contain multiple segments. Custom segments use ASCII letters, digits, hyphens, and underscores. Generated slugs use 10 random characters. The database enforces uniqueness per host. |
-| Host-bound redirects | Current | P0 | Configured hosts can reuse the same slug independently. For a matching link, public GET and HEAD return `302` with the stored `Location` and `Cache-Control: no-store`. Matching uses the normalized host and exact path. |
+| Host-bound redirects | Current | P0 | Configured hosts can reuse the same slug independently. Public GET and HEAD use `302` by default and include `Cache-Control: no-store`. Matching uses the normalized host and exact path with optional extra path forwarding. |
 | Verify published addresses | Planned | P0 | Recreate required short URLs and check the configured host, exact slug, status, and destination through the intended proxy. Scan printed QR codes or compare their decoded URLs when applicable. |
 | Edit links and destinations | Current | P0 | Update destinations, titles, tags, and enabled status. Published hosts and slugs stay fixed. |
-| Activation windows and visit limits | Planned | P0 | Evaluate time windows in UTC. Reserve limited visits atomically using a dedicated ledger with separate analytics counting. |
-| Redirect status and forwarding options | Planned | P0 | Add per-link status and explicit query forwarding and extra-path policies. Keep temporary redirects and `no-store` for protected and limited links. Verify encoded paths, query keys, and fragments. |
-| Domain management and fallbacks | Planned | P0/P1 | Manage allowed public hosts from the admin UI and configure validated fallback targets per domain. Test route collisions, errors, and redirect loops. |
-| Ordered redirect rules | Planned | P1 | The first matching rule wins. Define condition types, ordering, and the behavior for unknown attributes. Use fixtures for forwarded parameters, languages, and device categories. |
+| Activation windows and visit limits | Current | P0 | Evaluate time windows in UTC. Reserve limited visits atomically using a dedicated ledger with separate analytics counting. |
+| Redirect status and forwarding options | Current | P0 | Add per-link status and explicit query forwarding and extra-path policies. Keep temporary redirects and `no-store` for protected and limited links. Verify encoded paths, query keys, and fragments. |
+| Domain management and fallbacks | Current | P0/P1 | Manage allowed public hosts from the admin UI and configure validated fallback targets per domain. Test route collisions, errors, and redirect loops. |
+| Ordered redirect rules | Current | P1 | The first matching rule wins. The administration interface edits and reorders rules. Conditions use language, device, operating system, browser, and query values. |
 | Path matching extensions and aliases | Optional | P2 | Evaluate Unicode slugs, case-insensitive or trailing-slash matching, and explicit aliases against collision, encoding, and proxy requirements. |
 | Search and bulk actions | Planned | P1 | Search, filter, and sort links by fields such as status, tag, and domain. Preview bulk actions and audit sensitive changes, including deletion and expired-link cleanup. |
 | Slug generation settings | Planned | P1 | Allow a configurable generated length while preserving database uniqueness and bounded retries. |
-| Tags and colors | Planned | P1 | Suggest, sort, rename, merge, and delete tags. Store colors with their tags and check contrast. |
+| Tags | Current | P1 | View tag counts, rename or merge tags, and remove their assignments. Tag suggestions and colors are planned. |
 | Crawler controls | Planned | P1 | Configure crawler directives and per-link crawlability. Check reserved route collisions before serving `robots.txt`. |
 | Duplicate detection | Planned | P2 | Detect exact matches while keeping distinct host and query values visible. Evaluate approximate matches and manual merge separately. |
 | Link history and protected links | Planned | P2 | Record destination changes with restore and retention controls. Support confirmed one-time access and atomic consumption. |
@@ -34,11 +34,11 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 
 | Capability | Status | Priority | Scope |
 |---|---|---|---|
-| Visit totals and time series | Planned | P1 | Report totals by link, tag, domain, and date using bounded ingestion and indexed aggregates. |
+| Visit totals and time series | Current | P1 | Report totals by UTC date and top link using bounded ingestion and indexed aggregates. Tag and domain views remain planned. |
 | Visit details and unmatched requests | Planned | P1 | Show retained details and classify requests to the site root, invalid short links, and other unmatched paths. Prevent sensitive URL values from entering analytics. |
 | Referrers, devices, and bots | Planned | P1 | Store referrer domains and coarse browser, operating system, and device categories by default. Show unknown categories and allow filtering by bot classification. |
-| Privacy settings, retention, and deletion | Planned | P1 | Honor opt-outs and Do Not Track under the configured policy. Support per-link controls, retention limits, scoped deletion, and access-controlled exports. Keep analytics opt-outs separate from visit limits. |
-| Period comparisons and report controls | Planned | P1 | Compare against the previous period. Show trends and breakdowns in charts and tables with date-range controls and configurable visit columns. |
+| Privacy settings, retention, and deletion | Current | P1 | Honor global and per-link opt-outs and Do Not Track, with configurable retention and a clear-all action. Analytics collection operates independently of visit limits. |
+| Period comparisons and report controls | Current | P1 | Compare fixed 7-, 30-, 90-, and 365-day views against the preceding UTC period. Custom dates and additional visualization are planned. |
 | Geolocation | Optional | P1 | Use an operator-provided local GeoIP dataset. Apply the configured granularity and handle missing data explicitly in both reports and rules. |
 | Multiple segment comparisons | Optional | P2 | Compare selected links, tags, or domains when reporting needs justify the extra views. Use consistent time boundaries. |
 | Advanced visualizations and estimates | Optional | P4 | Evaluate local maps, heatmaps, milestones, and unique visitor estimates against accessibility and privacy requirements. |
@@ -65,9 +65,9 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 
 | Capability | Status | Priority | Scope |
 |---|---|---|---|
-| Admin interface | Current | P1 | Account setup, links, tags, and API key management are available in the responsive embedded interface. The design preview covers planned dashboard and monitoring screens. [Design system](DESIGN_SYSTEM.md) |
+| Admin interface | Current | P1 | Account setup, links, domains, tags, analytics, and API key management are available in the responsive embedded interface. The design preview covers planned dashboard and monitoring screens. [Design system](DESIGN_SYSTEM.md) |
 | Localization and themes | Current | P1 | Support English and German interface text, dark, light, and system themes, and locale-aware date and number display. |
-| Local QR generation | Planned | P1 | Export basic SVG and PNG codes locally and test them with an independent decoder. |
+| Local QR generation | Current | P1 | Export basic SVG and PNG codes locally and test them with an independent decoder. |
 | QR Studio | Planned | P1 | Add error correction, quiet zone, colors, transparency, templates, and optional logos after validating scan reliability. |
 | Destination title lookup | Optional | P1 | Enable title fetching explicitly through the shared outbound HTTP client, with validated targets and response limits. |
 | Health Monitor | Planned | P2 | After explicit activation, run bounded, scheduled probes under the shared outbound request policy. Report status without deactivating links. |

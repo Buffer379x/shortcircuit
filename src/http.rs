@@ -8,6 +8,7 @@ use axum::{
 use sqlx::SqlitePool;
 
 use crate::{
+    analytics::{Analytics, Kind},
     domains,
     input::{PublicHosts, request_host, valid_slug},
     redirect::{self, Outcome, RedirectRequest},
@@ -19,12 +20,33 @@ const MAX_REQUEST_URI: usize = 8192;
 struct AppState {
     pool: SqlitePool,
     hosts: PublicHosts,
+    analytics: Option<Analytics>,
 }
 
 pub fn public_router(pool: SqlitePool, hosts: PublicHosts) -> Router {
+    build_public_router(pool, hosts, None)
+}
+
+pub fn public_router_with_analytics(
+    pool: SqlitePool,
+    hosts: PublicHosts,
+    analytics: Analytics,
+) -> Router {
+    build_public_router(pool, hosts, Some(analytics))
+}
+
+fn build_public_router(
+    pool: SqlitePool,
+    hosts: PublicHosts,
+    analytics: Option<Analytics>,
+) -> Router {
     Router::new()
         .fallback(resolve)
-        .with_state(AppState { pool, hosts })
+        .with_state(AppState {
+            pool,
+            hosts,
+            analytics,
+        })
         .layer(middleware::from_fn(response_headers))
 }
 
@@ -74,6 +96,11 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         return fallback(&host, "/", domain.root_target.as_deref());
     }
     if !valid_slug(slug) {
+        if parts.method == Method::GET
+            && let Some(analytics) = &state.analytics
+        {
+            analytics.record(&host, None, Kind::Missing, &parts.headers);
+        }
         return StatusCode::NOT_FOUND.into_response();
     }
     let value = |name| {
@@ -90,12 +117,33 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         language: value(header::ACCEPT_LANGUAGE),
         head: parts.method == Method::HEAD,
     };
-    match redirect::resolve(&state.pool, lookup).await {
-        Ok(Outcome::Redirect { target, status }) => respond(&target, status),
-        Ok(Outcome::Missing) => fallback(&host, uri.path(), domain.missing_target.as_deref()),
-        Ok(Outcome::Blocked) => StatusCode::NOT_FOUND.into_response(),
-        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    let Ok(result) = redirect::resolve_with_subject(&state.pool, lookup).await else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let (kind, response) = match result.outcome {
+        Outcome::Redirect { target, status } => (Kind::Redirect, respond(&target, status)),
+        Outcome::Missing => (
+            Kind::Missing,
+            fallback(&host, uri.path(), domain.missing_target.as_deref()),
+        ),
+        Outcome::Blocked => (Kind::Blocked, StatusCode::NOT_FOUND.into_response()),
+    };
+    if !lookup.head
+        && !response.status().is_server_error()
+        && result
+            .subject
+            .as_ref()
+            .is_none_or(|subject| subject.analytics_enabled)
+        && let Some(analytics) = &state.analytics
+    {
+        analytics.record(
+            &host,
+            result.subject.map(|subject| subject.id),
+            kind,
+            &parts.headers,
+        );
     }
+    response
 }
 
 fn fallback(host: &str, path: &str, target: Option<&str>) -> Response {

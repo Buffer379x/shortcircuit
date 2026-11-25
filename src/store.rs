@@ -27,6 +27,7 @@ pub(crate) struct Link {
     pub(crate) created_at: String,
     pub(crate) title: String,
     pub(crate) enabled: bool,
+    pub(crate) analytics_enabled: bool,
     #[sqlx(skip)]
     pub(crate) tags: Vec<String>,
 }
@@ -44,6 +45,7 @@ pub(crate) struct LinkUpdate {
     pub(crate) target: Option<String>,
     pub(crate) title: Option<String>,
     pub(crate) enabled: Option<bool>,
+    pub(crate) analytics_enabled: Option<bool>,
     pub(crate) tags: Option<Vec<String>>,
 }
 
@@ -121,7 +123,7 @@ pub(crate) async fn insert_link(
     let rows = sqlx::query_as::<_, Link>(
         "INSERT INTO links (host, slug, target, title) VALUES (?, ?, ?, ?)
          ON CONFLICT(host, slug) DO NOTHING
-         RETURNING id, host, slug, target, created_at, title, enabled",
+         RETURNING id, host, slug, target, created_at, title, enabled, analytics_enabled",
     )
     .bind(&draft.host)
     .bind(&draft.slug)
@@ -155,10 +157,12 @@ pub(crate) async fn update_link(
         .push_bind(update.title)
         .push(", title), enabled = COALESCE(")
         .push_bind(update.enabled)
-        .push(", enabled) WHERE id = ")
+        .push(", enabled), analytics_enabled = COALESCE(")
+        .push_bind(update.analytics_enabled)
+        .push(", analytics_enabled) WHERE id = ")
         .push_bind(id);
     push_host_scope(&mut query, hosts);
-    query.push(" RETURNING id, host, slug, target, created_at, title, enabled");
+    query.push(" RETURNING id, host, slug, target, created_at, title, enabled, analytics_enabled");
     let rows = query
         .build_query_as::<Link>()
         .fetch_all(&mut *transaction)
@@ -233,7 +237,7 @@ pub(crate) async fn list(
 ) -> Result<Vec<Link>, sqlx::Error> {
     let mut query = QueryBuilder::new(
         "WITH page AS (
-            SELECT id, host, slug, target, created_at, title, enabled FROM links WHERE id > ",
+            SELECT id, host, slug, target, created_at, title, enabled, analytics_enabled FROM links WHERE id > ",
     );
     query.push_bind(after_id);
     push_host_scope(&mut query, hosts);
@@ -309,6 +313,10 @@ mod tests {
             .await
             .unwrap();
 
+        sqlx::raw_sql(include_str!("../migrations/0006_analytics.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
         let links = list(&pool, &[HOST.to_owned()], 0).await.unwrap();
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].id, 42);
@@ -342,6 +350,7 @@ mod tests {
                 target: None,
                 title: Some("Archived docs".to_owned()),
                 enabled: Some(false),
+                analytics_enabled: Some(false),
                 tags: None,
             },
         )
@@ -354,6 +363,7 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].id, link.id);
         assert!(!links[0].enabled);
+        assert!(!links[0].analytics_enabled);
         assert_eq!(links[0].title, "Archived docs");
         assert_eq!(links[0].target, TARGET);
         assert_eq!(links[0].tags, ["docs", "work"]);
@@ -389,6 +399,7 @@ mod tests {
                 target: Some("https://target.example/changed".to_owned()),
                 title: None,
                 enabled: None,
+                analytics_enabled: None,
                 tags: Some(vec!["reject".to_owned()]),
             },
         )

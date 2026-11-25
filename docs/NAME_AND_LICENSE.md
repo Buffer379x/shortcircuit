@@ -24,7 +24,7 @@ The repository results document public use in the same product category. Tradema
 
 ## Trademark registers
 
-The initial review checked official search portals and indexed results for `ShortCircuit`, `Short Circuit`, and `Short-Circuit`. An exact search for the tagline **Take the shorter route.** returned no relevant trademark result for the intended product. The review lacks reproducible register results for all variants and target jurisdictions. A follow-up search should include phonetic and visual variants.
+The initial review checked official search portals and indexed results for `ShortCircuit`, `Short Circuit`, and `Short-Circuit`. The review lacks reproducible register results for all variants and target jurisdictions. A follow-up search should include phonetic and visual variants.
 
 | Register | Research findings |
 |---|---|

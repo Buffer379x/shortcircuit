@@ -2,6 +2,14 @@
 
 This design assumes ShortCircuit can run on its own. The visitor's browser, the proxy, and the destination server are separate systems. The operator decides why data is collected, what to collect, what to disclose to visitors, who can access the data, how long to retain it, and how to delete it. Privacy-protective defaults and export and deletion tools support those decisions. The GDPR addresses purpose limitation and data minimisation in Article 5, the right to erasure in Article 17, and data protection by design and by default in Article 25. [GDPR on EUR-Lex](https://eur-lex.europa.eu/eli/reg/2016/679/oj)
 
+## Current implementation
+
+The current application exposes analytics in the admin UI. It records successful GET redirects, blocked links, and unmatched non-root requests on configured public domains. It excludes HEAD and recognizes `DNT: 1` by default. Per-link opt-out covers matched redirects and blocks. A configured fallback for an unmatched path is reported as an unmatched request.
+
+Detail records contain time, host, the optional link ID, outcome, estimated visit class, a fixed client category, and an optional DNS hostname from the referrer. The collector discards literal-IP referrers, credentials, path, query, fragment, raw user agent, and visitor IP. The dashboard shows UTC daily rollups. Collection options, retention, and clear-all apply locally. The admin API lists and deletes retained visits. Geolocation and analytics exports are planned.
+
+The bounded queue has capacity for 1,024 events. It writes in batches of up to 64 events and gives the writer two seconds to drain after HTTP shutdown. The dashboard counts events lost to queue congestion and failed batch commits since startup. An abrupt stop or expired flush can lose events without a count.
+
 ## Data Collection
 
 | Data or feature | Proposed default for new instances | Configuration |

@@ -63,13 +63,24 @@ async function verify() {
     assert.equal((await page.request.get(publicOrigin + '/test/guide', { maxRedirects: 0 })).status(), 302);
     assert.equal((await page.request.get(publicOrigin + '/test/guide', { maxRedirects: 0 })).status(), 404);
 
+    await page.getByRole('button', { name: 'Analytics', exact: true }).click();
+    await page.getByRole('heading', { name: 'Traffic summary', exact: true }).waitFor();
+    await page.getByRole('checkbox', { name: 'Honor Do Not Track', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Clear analytics data', exact: true }).click();
+    const clear = page.getByRole('dialog', { name: 'Clear analytics data', exact: true });
+    const cleared = page.waitForResponse(response =>
+      response.url().endsWith('/api/v1/analytics/data') && response.request().method() === 'DELETE');
+    await clear.getByRole('button', { name: 'Clear analytics data', exact: true }).click();
+    assert.equal((await cleared).status(), 204);
+    await page.getByText('Analytics data cleared.', { exact: true }).waitFor();
+
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);
     assert.deepEqual(errors, []);
-    console.log('Browser smoke passed: setup, create link, QR, visit limits, mobile layout and sign-out.');
+    console.log('Browser smoke passed: setup, create link, QR, visit limits, analytics controls, mobile layout and sign-out.');
   } finally {
     await browser.close();
   }

@@ -30,6 +30,8 @@ jobs:
       - run: cargo test --locked --all-targets
       - run: python3 tests/schema.py
         if: always()
+      - run: python3 tests/analytics_schema.py
+        if: always()
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: |
           cargo fmt --all

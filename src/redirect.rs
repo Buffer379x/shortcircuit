@@ -119,6 +119,16 @@ pub(crate) enum Outcome {
     Blocked,
 }
 
+pub(crate) struct VisitSubject {
+    pub(crate) id: i64,
+    pub(crate) analytics_enabled: bool,
+}
+
+pub(crate) struct Resolution {
+    pub(crate) outcome: Outcome,
+    pub(crate) subject: Option<VisitSubject>,
+}
+
 #[derive(sqlx::FromRow)]
 struct StoredPolicy {
     status: Option<u16>,
@@ -165,11 +175,22 @@ struct SelectedLink {
     target: String,
     enabled: bool,
     now: i64,
+    analytics_enabled: bool,
     #[sqlx(flatten)]
     policy: StoredPolicy,
 }
 
 impl SelectedLink {
+    fn resolution(&self, outcome: Outcome) -> Resolution {
+        Resolution {
+            outcome,
+            subject: Some(VisitSubject {
+                id: self.id,
+                analytics_enabled: self.analytics_enabled,
+            }),
+        }
+    }
+
     fn blocked(&self) -> bool {
         !self.enabled
             || self.policy.starts_at.is_some_and(|start| self.now < start)
@@ -344,7 +365,7 @@ fn valid_language_tag(tag: &str) -> bool {
 
 fn select_link(request: RedirectRequest<'_>) -> QueryBuilder<Sqlite> {
     let mut query = QueryBuilder::new(
-        "SELECT links.id, links.slug, links.target, links.enabled, unixepoch() AS now, ",
+        "SELECT links.id, links.slug, links.target, links.enabled, links.analytics_enabled, unixepoch() AS now, ",
     );
     query
         .push(POLICY_COLUMNS)
@@ -368,22 +389,38 @@ fn select_link(request: RedirectRequest<'_>) -> QueryBuilder<Sqlite> {
     query
 }
 
+#[cfg(test)]
 pub(crate) async fn resolve(
     pool: &SqlitePool,
     request: RedirectRequest<'_>,
 ) -> Result<Outcome, sqlx::Error> {
+    resolve_with_subject(pool, request)
+        .await
+        .map(|result| result.outcome)
+}
+
+pub(crate) async fn resolve_with_subject(
+    pool: &SqlitePool,
+    request: RedirectRequest<'_>,
+) -> Result<Resolution, sqlx::Error> {
+    let missing = Resolution {
+        outcome: Outcome::Missing,
+        subject: None,
+    };
     let Some(link) = select_link(request)
         .build_query_as::<SelectedLink>()
         .fetch_optional(pool)
         .await?
     else {
-        return Ok(Outcome::Missing);
+        return Ok(missing);
     };
     if link.blocked() {
-        return Ok(Outcome::Blocked);
+        return Ok(link.resolution(Outcome::Blocked));
     }
     if request.head || link.policy.max_visits.is_none() {
-        return link.redirect(request);
+        return link
+            .redirect(request)
+            .map(|outcome| link.resolution(outcome));
     }
 
     // The winner and its policy may have changed while acquiring the write lock.
@@ -393,8 +430,8 @@ pub(crate) async fn resolve(
         .fetch_optional(&mut *transaction)
         .await?;
     let outcome = match link {
-        None => Outcome::Missing,
-        Some(link) if link.blocked() => Outcome::Blocked,
+        None => missing,
+        Some(link) if link.blocked() => link.resolution(Outcome::Blocked),
         Some(link) => {
             let outcome = link.redirect(request)?;
             if link.policy.max_visits.is_some() {
@@ -406,7 +443,7 @@ pub(crate) async fn resolve(
                 .execute(&mut *transaction)
                 .await?;
             }
-            outcome
+            link.resolution(outcome)
         }
     };
     transaction.commit().await?;
@@ -641,10 +678,12 @@ mod tests {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
         insert(&pool, "Team/Docs", true).await;
-        sqlx::raw_sql(include_str!("../migrations/0004_redirect_policies.sql"))
-            .execute(&pool)
-            .await
-            .unwrap();
+        for migration in [
+            include_str!("../migrations/0004_redirect_policies.sql"),
+            include_str!("../migrations/0006_analytics.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
 
         let mut req = request("Team/Docs");
         req.query = Some("target=https://other.example");
