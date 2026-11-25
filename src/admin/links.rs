@@ -1,21 +1,27 @@
+use std::collections::BTreeMap;
+
 use axum::{
     Extension, Json, Router,
+    body::Bytes,
     extract::{
         Path, Query, State,
         rejection::{JsonRejection, PathRejection, QueryRejection},
     },
-    http::StatusCode,
+    http::{StatusCode, header},
     routing::{get, patch},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::{
-    input::{PublicHosts, normalize_host, valid_slug, valid_target},
+    domains,
+    input::{normalize_host, valid_slug, valid_target},
+    qr::{self, Format, QrError},
+    redirect::{self, Policy, PolicyDetails, PolicyError},
     store::{self, Link, LinkDraft, LinkUpdate, PAGE_SIZE},
 };
 
-use super::{AppState, Problem, access::LinkAccess, json_payload, resource_id};
+use super::{AppState, Problem, access::LinkAccess, catalog::tag_name, json_payload, resource_id};
 
 const SHORTCODE_ALPHABET: &[u8; 64] =
     b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
@@ -33,33 +39,61 @@ pub(super) fn routes(pool: SqlitePool, app: AppState) -> Router {
         .route("/api/v1/domains", get(domains))
         .route("/api/v1/links", get(list_links).post(create_link))
         .route("/api/v1/links/{id}", patch(update_link).delete(remove_link))
+        .route(
+            "/api/v1/links/{id}/policy",
+            get(read_policy).patch(replace_policy),
+        )
+        .route("/api/v1/links/{id}/qr", get(link_qr))
         .with_state(LinkState { pool, app })
 }
 
 impl LinkAccess {
-    fn allowed_hosts<'a>(&'a self, hosts: &'a PublicHosts) -> &'a [String] {
-        match &self.host {
-            Some(host) if hosts.contains(host) => std::slice::from_ref(host),
-            Some(_) => &[],
-            None => hosts.all(),
+    async fn allowed_hosts(&self, state: &LinkState, active: bool) -> Result<Vec<String>, Problem> {
+        let hosts = if active {
+            domains::active_hosts(&state.pool, &state.app.hosts).await
+        } else {
+            domains::list(&state.pool, &state.app.hosts, state.app.config.local_port)
+                .await
+                .map(|items| items.into_iter().map(|domain| domain.host).collect())
         }
+        .map_err(|_| Problem::unavailable())?;
+        Ok(hosts
+            .into_iter()
+            .filter(|host| self.permits(host))
+            .collect())
+    }
+
+    fn permits(&self, host: &str) -> bool {
+        self.host.as_deref().is_none_or(|scope| scope == host)
     }
 }
 
 #[derive(Serialize)]
 struct Domains {
     hosts: Vec<String>,
+    origins: BTreeMap<String, String>,
     local_port: u16,
 }
 
 async fn domains(
     State(state): State<LinkState>,
     Extension(access): Extension<LinkAccess>,
-) -> Json<Domains> {
-    Json(Domains {
-        hosts: access.allowed_hosts(&state.app.hosts).to_vec(),
+) -> Result<Json<Domains>, Problem> {
+    let items = domains::list(&state.pool, &state.app.hosts, state.app.config.local_port)
+        .await
+        .map_err(|_| Problem::unavailable())?;
+    let mut response = Domains {
+        hosts: Vec::new(),
+        origins: BTreeMap::new(),
         local_port: state.app.config.local_port,
-    })
+    };
+    for domain in items.into_iter().filter(|d| access.permits(&d.host)) {
+        if domain.enabled {
+            response.hosts.push(domain.host.clone());
+        }
+        response.origins.insert(domain.host, domain.origin);
+    }
+    Ok(Json(response))
 }
 
 #[derive(Deserialize)]
@@ -78,15 +112,16 @@ async fn create_link(
     body: Result<Json<NewLink>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Link>), Problem> {
     let input = json_payload(body)?;
-    let hosts = access.allowed_hosts(&state.app.hosts);
+    let hosts = access.allowed_hosts(&state, true).await?;
     let host = match input.host {
-        Some(host) => normalize_host(&host)
-            .filter(|host| state.app.hosts.contains(host))
-            .ok_or_else(|| Problem::invalid("invalid_host"))?,
+        Some(host) => normalize_host(&host).ok_or_else(|| Problem::invalid("invalid_host"))?,
         None => hosts.first().ok_or_else(forbidden)?.to_owned(),
     };
-    if !hosts.contains(&host) {
+    if !access.permits(&host) {
         return Err(forbidden());
+    }
+    if !hosts.contains(&host) {
+        return Err(Problem::invalid("invalid_host"));
     }
     if !valid_target(&input.target) {
         return Err(Problem::invalid("invalid_target"));
@@ -139,14 +174,7 @@ fn tags(values: Vec<String>) -> Result<Vec<String>, Problem> {
     }
     let mut checked = Vec::with_capacity(values.len());
     for tag in values {
-        let tag = tag.trim();
-        if tag.is_empty()
-            || tag.chars().count() > 40
-            || tag.contains(',')
-            || tag.chars().any(char::is_control)
-        {
-            return Err(Problem::invalid("invalid_tags"));
-        }
+        let tag = tag_name(&tag).ok_or_else(|| Problem::invalid("invalid_tags"))?;
         checked.push(tag.to_owned());
     }
     checked.sort_unstable();
@@ -187,7 +215,7 @@ async fn list_links(
     }
     let mut items = store::list(
         &state.pool,
-        access.allowed_hosts(&state.app.hosts),
+        &access.allowed_hosts(&state, false).await?,
         after_id,
     )
     .await
@@ -244,7 +272,7 @@ async fn update_link(
     let id = resource_id(id)?;
     store::update_link(
         &state.pool,
-        access.allowed_hosts(&state.app.hosts),
+        &access.allowed_hosts(&state, false).await?,
         id,
         update,
     )
@@ -261,7 +289,7 @@ async fn remove_link(
 ) -> Result<StatusCode, Problem> {
     let removed = store::remove_link(
         &state.pool,
-        access.allowed_hosts(&state.app.hosts),
+        &access.allowed_hosts(&state, false).await?,
         resource_id(id)?,
     )
     .await
@@ -270,4 +298,97 @@ async fn remove_link(
         return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn read_policy(
+    State(state): State<LinkState>,
+    Extension(access): Extension<LinkAccess>,
+    id: Result<Path<i64>, PathRejection>,
+) -> Result<Json<PolicyDetails>, Problem> {
+    let hosts = access.allowed_hosts(&state, false).await?;
+    redirect::read_policy(&state.pool, &hosts, resource_id(id)?)
+        .await
+        .map_err(|_| Problem::unavailable())?
+        .map(Json)
+        .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
+}
+
+async fn replace_policy(
+    State(state): State<LinkState>,
+    Extension(access): Extension<LinkAccess>,
+    id: Result<Path<i64>, PathRejection>,
+    body: Result<Json<Policy>, JsonRejection>,
+) -> Result<Json<PolicyDetails>, Problem> {
+    let policy = json_payload(body)?;
+    let hosts = access.allowed_hosts(&state, false).await?;
+    redirect::replace_policy(&state.pool, &hosts, resource_id(id)?, policy)
+        .await
+        .map_err(|error| match error {
+            PolicyError::Invalid(code) => Problem::invalid(code),
+            PolicyError::Database(error) => {
+                tracing::debug!(
+                    code = ?error.as_database_error().and_then(|error| error.code()),
+                    "redirect policy write failed"
+                );
+                Problem::unavailable()
+            }
+        })?
+        .map(Json)
+        .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
+}
+
+static QR_WORK: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QrQuery {
+    format: Option<String>,
+    size: Option<u16>,
+}
+
+async fn link_qr(
+    State(state): State<LinkState>,
+    Extension(access): Extension<LinkAccess>,
+    id: Result<Path<i64>, PathRejection>,
+    query: Result<Query<QrQuery>, QueryRejection>,
+) -> Result<([(header::HeaderName, &'static str); 1], Bytes), Problem> {
+    let Query(options) = query.map_err(|error| Problem(error.status(), "invalid_query"))?;
+    let (format, content_type) = match options.format.as_deref().unwrap_or("svg") {
+        "svg" => (Format::Svg, "image/svg+xml"),
+        "png" => (Format::Png, "image/png"),
+        _ => return Err(Problem::invalid("invalid_qr_format")),
+    };
+    let (host, slug) =
+        sqlx::query_as::<_, (String, String)>("SELECT host, slug FROM links WHERE id = ?")
+            .bind(resource_id(id)?)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|_| Problem::unavailable())?
+            .filter(|(host, _)| access.permits(host))
+            .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
+    let domain = domains::lookup(
+        &state.pool,
+        &state.app.hosts,
+        &host,
+        state.app.config.local_port,
+    )
+    .await
+    .map_err(|_| Problem::unavailable())?
+    .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
+    let value = format!("{}/{}", domain.origin, slug);
+    let permit = QR_WORK
+        .try_acquire()
+        .map_err(|_| Problem(StatusCode::TOO_MANY_REQUESTS, "try_again_later"))?;
+    let bytes = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        qr::generate(&value, format, options.size)
+    })
+    .await
+    .map_err(|_| Problem::unavailable())?
+    .map_err(|error| match error {
+        QrError::InvalidSize => Problem::invalid("invalid_qr_size"),
+        QrError::DataTooLong => Problem::invalid("qr_data_too_long"),
+        QrError::EncodingFailed => Problem::unavailable(),
+    })?;
+    Ok(([(header::CONTENT_TYPE, content_type)], Bytes::from(bytes)))
 }

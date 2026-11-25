@@ -213,6 +213,7 @@ pub(crate) async fn remove_link(
     Ok(query.build().execute(pool).await?.rows_affected() == 1)
 }
 
+#[cfg(test)]
 pub(crate) async fn resolve(
     pool: &SqlitePool,
     host: &str,
@@ -257,7 +258,7 @@ pub(crate) async fn list(
     Ok(links)
 }
 
-fn push_host_scope(query: &mut QueryBuilder<Sqlite>, hosts: &[String]) {
+pub(crate) fn push_host_scope(query: &mut QueryBuilder<Sqlite>, hosts: &[String]) {
     query.push(" AND host IN (");
     let mut placeholders = query.separated(", ");
     for host in hosts {

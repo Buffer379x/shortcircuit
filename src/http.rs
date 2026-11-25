@@ -8,8 +8,9 @@ use axum::{
 use sqlx::SqlitePool;
 
 use crate::{
+    domains,
     input::{PublicHosts, request_host, valid_slug},
-    store,
+    redirect::{self, Outcome, RedirectRequest},
 };
 
 const MAX_REQUEST_URI: usize = 8192;
@@ -43,34 +44,70 @@ pub(crate) async fn response_headers(request: Request, next: Next) -> Response {
 }
 
 async fn resolve(State(state): State<AppState>, request: Request) -> Response {
-    if !matches!(*request.method(), Method::GET | Method::HEAD) {
+    let (parts, _) = request.into_parts();
+    if !matches!(parts.method, Method::GET | Method::HEAD) {
         return (
             StatusCode::METHOD_NOT_ALLOWED,
             [(header::ALLOW, "GET, HEAD")],
         )
             .into_response();
     }
-    let uri = request.uri();
+    let uri = &parts.uri;
     if uri
         .path_and_query()
         .is_some_and(|value| value.as_str().len() > MAX_REQUEST_URI)
     {
         return StatusCode::URI_TOO_LONG.into_response();
     }
-    let Some(host) = request_host(uri, request.headers()).filter(|host| state.hosts.contains(host))
-    else {
+    let Some(host) = request_host(uri, &parts.headers) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Some(slug) = uri.path().strip_prefix('/').filter(|slug| valid_slug(slug)) else {
+    let domain = match domains::lookup(&state.pool, &state.hosts, &host, 8080).await {
+        Ok(Some(domain)) if domain.enabled => domain,
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let Some(slug) = uri.path().strip_prefix('/') else {
         return StatusCode::NOT_FOUND.into_response();
     };
-
-    match store::resolve(&state.pool, &host, slug).await {
-        Ok(Some(target)) => match HeaderValue::from_str(&target) {
-            Ok(location) => (StatusCode::FOUND, [(header::LOCATION, location)]).into_response(),
-            Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        },
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+    if slug.is_empty() {
+        return fallback(&host, "/", domain.root_target.as_deref());
+    }
+    if !valid_slug(slug) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let value = |name| {
+        parts
+            .headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+    };
+    let lookup = RedirectRequest {
+        host: &host,
+        slug,
+        query: uri.query(),
+        user_agent: value(header::USER_AGENT),
+        language: value(header::ACCEPT_LANGUAGE),
+        head: parts.method == Method::HEAD,
+    };
+    match redirect::resolve(&state.pool, lookup).await {
+        Ok(Outcome::Redirect { target, status }) => respond(&target, status),
+        Ok(Outcome::Missing) => fallback(&host, uri.path(), domain.missing_target.as_deref()),
+        Ok(Outcome::Blocked) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+fn fallback(host: &str, path: &str, target: Option<&str>) -> Response {
+    match target {
+        Some(target) if !domains::fallback_loops(host, path, target) => respond(target, 302),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+fn respond(target: &str, status: u16) -> Response {
+    match (StatusCode::from_u16(status), HeaderValue::from_str(target)) {
+        (Ok(status), Ok(location)) => (status, [(header::LOCATION, location)]).into_response(),
+        _ => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }

@@ -2,8 +2,11 @@
 
 mod admin;
 mod auth;
+mod domains;
 mod http;
 mod input;
+mod qr;
+mod redirect;
 mod store;
 
 pub use admin::{AdminConfig, admin_router};

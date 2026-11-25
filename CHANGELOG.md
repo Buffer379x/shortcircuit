@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add managed domains and fallback URLs, the tag catalog, redirect rules and visit limits, and local QR exports.
+
 - Add one-time CLI setup and recovery, Argon2id passwords, revocable sessions, and scoped API keys.
 - Add the embedded Svelte admin interface with English and German copy, theme settings, and local assets.
 - Add link editing, enable and disable, deletion, tags, and JSON export of displayed results.

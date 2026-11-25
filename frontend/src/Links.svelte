@@ -4,6 +4,8 @@
   import type { Api, Domains, Link, LinkPage } from './api';
   import Dialog from './Dialog.svelte';
   import { formatDate, problemMessage } from './format';
+  import LinkQr from './LinkQr.svelte';
+  import PolicyEditor from './PolicyEditor.svelte';
   import Icon from './Icon.svelte';
   import type { Language, Messages } from './i18n';
 
@@ -23,6 +25,8 @@
 
   let formOpen = $state(false);
   let editing = $state<Link | null>(null);
+  let qrLink = $state<Link | null>(null);
+  let policyLink = $state<Link | null>(null);
   let removing = $state<Link | null>(null);
   let formError = $state<keyof Messages | null>(null);
   let saving = $state(false);
@@ -37,7 +41,7 @@
   const visible = $derived(items.filter((link) => (
     (!tag || link.tags.includes(tag)) &&
     (!status || link.enabled === (status === 'enabled')) &&
-    (!query || [link.title ?? '', link.slug, link.host, link.target, shortUrl(link, domains.local_port), ...link.tags]
+    (!query || [link.title ?? '', link.slug, link.host, link.target, shortUrl(link, domains), ...link.tags]
       .some((value) => value.toLocaleLowerCase(language).includes(query)))
   )));
   const limit = $derived(new Intl.NumberFormat(language));
@@ -173,7 +177,7 @@
     notice = null;
     actionError = null;
     try {
-      await navigator.clipboard.writeText(shortUrl(link, domains.local_port));
+      await navigator.clipboard.writeText(shortUrl(link, domains));
       notice = 'copiedUrl';
     } catch {
       actionError = 'copyFailed';
@@ -241,7 +245,7 @@
                   <span class="link-symbol"><Icon name="link" /></span>
                   <div class="link-text">
                     {#if link.title}<strong>{link.title}</strong>{/if}
-                    <a class="mono link-short" href={shortUrl(link, domains.local_port)} target="_blank" rel="noreferrer">{link.host}/{link.slug}</a>
+                    <a class="mono link-short" href={shortUrl(link, domains)} target="_blank" rel="noreferrer">{link.host}/{link.slug}</a>
                     <span class="link-target" title={link.target}>{link.target}</span>
                   </div>
                 </div>
@@ -259,6 +263,8 @@
                 <div class="row row-actions">
                   <button class="icon-button ghost" type="button" aria-label={t.copyUrl} title={t.copyUrl} onclick={() => copy(link)}><Icon name="copy" /></button>
                   <button class="icon-button ghost" type="button" aria-label={t.editLink} title={t.editLink} onclick={() => openForm(link)}><Icon name="edit" /></button>
+                  <button class="icon-button ghost" type="button" aria-label={t.redirectPolicy} title={t.redirectPolicy} onclick={() => policyLink = link}><Icon name="rule" /></button>
+                  <button class="icon-button ghost" type="button" aria-label={t.qrCode} title={t.qrCode} onclick={() => qrLink = link}><Icon name="qr" /></button>
                   <button class="button toggle-button" type="button" disabled={updating !== null} onclick={() => toggle(link)}>{link.enabled ? t.disable : t.enable}</button>
                   <button class="icon-button ghost delete-button" type="button" aria-label={t.deleteLink} title={t.deleteLink} onclick={() => { formError = null; removing = link; }}><Icon name="trash" /></button>
                 </div>
@@ -286,10 +292,15 @@
   </div>
 </section>
 
+{#if qrLink}<LinkQr link={qrLink} {t} onclose={() => qrLink = null} />{/if}
+{#if policyLink}
+  <PolicyEditor link={policyLink} {api} {t} onclose={() => policyLink = null} onsaved={() => { policyLink = null; notice = 'linkUpdated'; }} />
+{/if}
+
 <Dialog {t} title={editing ? t.editLink : t.addLink} open={formOpen} busy={saving} onclose={() => formOpen = false}>
   <form onsubmit={save} aria-busy={saving}>
     <div class="dialog-body stack">
-      {#if editing}<a class="mono link-short" href={shortUrl(editing, domains.local_port)} target="_blank" rel="noreferrer">{shortUrl(editing, domains.local_port)}</a>{/if}
+      {#if editing}<a class="mono link-short" href={shortUrl(editing, domains)} target="_blank" rel="noreferrer">{shortUrl(editing, domains)}</a>{/if}
       <label class="field">
         <span id="target-label">{t.target}</span>
         <input name="target" type="url" required placeholder="https://example.com/" bind:value={target} disabled={saving} aria-labelledby="target-label" aria-describedby="target-hint" aria-invalid={formError === 'invalidTarget'} />

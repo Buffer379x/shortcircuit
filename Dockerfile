@@ -17,7 +17,7 @@ RUN cargo build --locked --release
 FROM debian:bookworm-slim AS runtime
 LABEL org.opencontainers.image.title="ShortCircuit" \
       org.opencontainers.image.description="Self-hosted URL shortener and link management" \
-      org.opencontainers.image.version="0.2.0"
+      org.opencontainers.image.version="0.3.0"
 RUN install -d -m 0700 -o 10001 -g 10001 /data
 COPY --from=build /build/target/release/shortcircuit /usr/local/bin/shortcircuit
 ENV DATA_DIR=/data \

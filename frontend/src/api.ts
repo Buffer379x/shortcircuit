@@ -10,7 +10,45 @@ export interface Session {
 
 export interface Domains {
   hosts: string[];
+  origins: Record<string, string>;
   local_port: number;
+}
+
+export interface Domain {
+  host: string;
+  origin: string;
+  enabled: boolean;
+  root_target: string | null;
+  missing_target: string | null;
+}
+
+export interface Tag {
+  name: string;
+  link_count: number;
+}
+
+export type ConditionType = 'language' | 'device' | 'os' | 'browser' | 'query';
+
+export interface RedirectCondition {
+  type: ConditionType;
+  key?: string;
+  value: string;
+}
+
+export interface RedirectRule {
+  target: string;
+  conditions: RedirectCondition[];
+}
+
+export interface Policy {
+  status: number;
+  starts_at: number | null;
+  expires_at: number | null;
+  max_visits: number | null;
+  forward_query: boolean;
+  forward_path: boolean;
+  rules: RedirectRule[];
+  visits_used: number;
 }
 
 export interface Link {
@@ -73,9 +111,9 @@ export function createApi(csrf: () => string | undefined, request = fetch): Api 
   };
 }
 
-export function shortUrl(link: Pick<Link, 'host' | 'slug'>, port: number): string {
-  const local = link.host === 'localhost' || link.host === '[::1]' || /^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(link.host);
-  return `${local ? `http://${link.host}:${port}` : `https://${link.host}`}/${link.slug}`;
+export function shortUrl(link: Pick<Link, 'host' | 'slug'>, domains: Domains): string {
+  const configured = Object.hasOwn(domains.origins, link.host) ? domains.origins[link.host] : undefined;
+  return `${configured ?? `https://${link.host}`}/${link.slug}`;
 }
 
 export function linkName(link: Link): string {
