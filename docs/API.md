@@ -40,6 +40,12 @@ Analytics endpoints require a browser administrator session. Changes require the
 | `DELETE /api/v1/analytics/events/{id}` | Deletes one retained event and adjusts its daily count atomically. Returns `204`. |
 | `DELETE /api/v1/analytics/data` | Deletes details, every UTC-day rollup, and queued events from the previous generation. Returns `204`. |
 
+### Native link exchange
+
+`GET /api/v1/exchange/links` returns version 1, a bounded page of items, and `next_after_id`. Use that value as `after_id` to continue. The exported link fields are `host`, `slug`, `target`, `title`, `tags`, `enabled`, and `analytics_enabled`.
+
+`POST /api/v1/exchange/links` accepts `version: 1`, a Boolean `preview`, and up to 100 `items` within the request size limit. Existing domains must be active. The server returns per-link `create`, `unchanged`, or `conflict` results. An apply rechecks conflicts in the same transaction as the insert. If any item conflicts, the response is `409` and all existing links remain intact. This format transfers basic link data. A full snapshot includes settings, policies, and visit history.
+
 ### Public redirect behavior
 
 An exact path takes precedence. When the exact path is missing, the longest stored prefix that allows extra paths can handle the request. Disabled or out-of-window links and exhausted visit limits return `404`. Unknown paths and the root path can use their configured domain fallback and otherwise return `404`. Disabled domains return `404` and remain editable on the admin listener.

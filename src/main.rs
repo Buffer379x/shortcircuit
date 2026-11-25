@@ -11,7 +11,7 @@ use std::{
 
 use shortcircuit::{
     AdminConfig, Analytics, Auth, BootstrapKind, PublicHosts, admin_router_with_analytics,
-    open_database, public_router_with_analytics,
+    create_snapshot, data_lock, open_database, public_router_with_analytics, restore_snapshot,
 };
 use tokio::{net::TcpListener, sync::watch, time};
 use tracing_subscriber::EnvFilter;
@@ -42,7 +42,9 @@ fn database_path() -> PathBuf {
 }
 
 async fn issue_bootstrap(kind: BootstrapKind) -> Result<(), AppError> {
-    let pool = open_database(&database_path()).await?;
+    let database = database_path();
+    let _lock = data_lock(&database, false)?;
+    let pool = open_database(&database).await?;
     let token = Auth::new(pool.clone()).issue_bootstrap(kind).await?;
     pool.close().await;
     println!("{token}");
@@ -90,7 +92,9 @@ async fn serve() -> Result<(), AppError> {
         )
         .into());
     }
-    let pool = open_database(&database_path()).await?;
+    let database = database_path();
+    let _lock = data_lock(&database, false)?;
+    let pool = open_database(&database).await?;
 
     let public_socket = TcpListener::bind(public_addr).await?;
     let admin_socket = TcpListener::bind(admin_addr).await?;
@@ -146,6 +150,38 @@ async fn serve() -> Result<(), AppError> {
     Ok(())
 }
 
+async fn backup() -> Result<(), AppError> {
+    let database = database_path();
+    let _lock = data_lock(&database, false)?;
+    if !database.is_file() {
+        return Err(io::Error::other("no ShortCircuit database exists").into());
+    }
+    let directory = database
+        .parent()
+        .ok_or_else(|| io::Error::other("data path has no parent"))?;
+    let pool = open_database(&database).await?;
+    let result = create_snapshot(&pool, &directory.join("backups")).await;
+    pool.close().await;
+    println!("{}", result?.display());
+    Ok(())
+}
+
+async fn restore(source: PathBuf) -> Result<(), AppError> {
+    let result = restore_snapshot(&database_path(), &source).await?;
+    println!(
+        "Restored database schema {} from snapshot created at UTC Unix timestamp {}",
+        result.schema_version, result.created_at
+    );
+    if let Some(path) = result.rollback {
+        if result.rollback_is_snapshot {
+            println!("Rollback snapshot: {}", path.display());
+        } else {
+            println!("Saved previous database file: {}", path.display());
+        }
+    }
+    Ok(())
+}
+
 fn healthcheck() -> Result<(), AppError> {
     let mut address = bind_address("ADMIN_BIND", "127.0.0.1:8081")?;
     if address.ip().is_unspecified() {
@@ -170,19 +206,31 @@ fn healthcheck() -> Result<(), AppError> {
 
 fn main() -> Result<(), AppError> {
     let mut arguments = env::args_os().skip(1);
-    match (arguments.next(), arguments.next()) {
-        (Some(command), None) if command == "healthcheck" => healthcheck(),
-        (Some(command), None) if command == "setup-token" => {
+    let command = arguments.next();
+    let target = arguments.next();
+    let confirmation = arguments.next();
+    let extra = arguments.next();
+    match (command, target, confirmation, extra) {
+        (Some(command), None, None, None) if command == "healthcheck" => healthcheck(),
+        (Some(command), None, None, None) if command == "setup-token" => {
             runtime()?.block_on(issue_bootstrap(BootstrapKind::Setup))
         }
-        (Some(command), None) if command == "recovery-token" => {
+        (Some(command), None, None, None) if command == "recovery-token" => {
             runtime()?.block_on(issue_bootstrap(BootstrapKind::Recovery))
         }
-        (Some(command), None) if command == "--version" => {
+        (Some(command), None, None, None) if command == "--version" => {
             println!("shortcircuit {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        (None, None) => {
+        (Some(command), None, None, None) if command == "backup" => {
+            runtime()?.block_on(backup())
+        }
+        (Some(command), Some(source), Some(confirm), None)
+            if command == "restore" && confirm == "--confirm" =>
+        {
+            runtime()?.block_on(restore(PathBuf::from(source)))
+        }
+        (None, None, None, None) => {
             let level = setting("LOG_LEVEL", "info")?;
             let filter =
                 EnvFilter::try_new(level).map_err(|_| io::Error::other("invalid LOG_LEVEL"))?;
@@ -193,7 +241,7 @@ fn main() -> Result<(), AppError> {
             runtime()?.block_on(serve())
         }
         _ => Err(io::Error::other(
-            "usage: shortcircuit [healthcheck|setup-token|recovery-token|--version]",
+            "usage: shortcircuit [healthcheck|setup-token|recovery-token|backup|restore FILE --confirm|--version]",
         )
         .into()),
     }

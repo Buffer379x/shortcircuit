@@ -6,7 +6,7 @@ This design assumes ShortCircuit can run on its own. The visitor's browser, the 
 
 The current application exposes analytics in the admin UI. It records successful GET redirects, blocked links, and unmatched non-root requests on configured public domains. It excludes HEAD and recognizes `DNT: 1` by default. Per-link opt-out covers matched redirects and blocks. A configured fallback for an unmatched path is reported as an unmatched request.
 
-Detail records contain time, host, the optional link ID, outcome, estimated visit class, a fixed client category, and an optional DNS hostname from the referrer. The collector discards literal-IP referrers, credentials, path, query, fragment, raw user agent, and visitor IP. The dashboard shows UTC daily rollups. Collection options, retention, and clear-all apply locally. The admin API lists and deletes retained visits. Geolocation and analytics exports are planned.
+Detail records contain time, host, the optional link ID, outcome, estimated visit class, a fixed client category, and an optional DNS hostname from the referrer. The collector discards literal-IP referrers, credentials, path, query, fragment, raw user agent, and visitor IP. The dashboard shows UTC daily rollups. Collection options, retention, and clear-all apply locally. The admin API lists and deletes retained visits. Removing a link also removes its detailed visits and daily link counts. Geolocation and analytics exports are planned.
 
 The bounded queue has capacity for 1,024 events. It writes in batches of up to 64 events and gives the writer two seconds to drain after HTTP shutdown. The dashboard counts events lost to queue congestion and failed batch commits since startup. An abrupt stop or expired flush can lose events without a count.
 

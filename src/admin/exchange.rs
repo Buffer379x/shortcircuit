@@ -1,0 +1,590 @@
+use std::collections::{HashMap, HashSet};
+
+use axum::{
+    Json, Router,
+    extract::{
+        DefaultBodyLimit, Query, State,
+        rejection::{JsonRejection, QueryRejection},
+    },
+    http::StatusCode,
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
+use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
+
+use crate::{
+    domains,
+    input::{PublicHosts, normalize_host, valid_slug, valid_target},
+};
+
+use super::{BODY_LIMIT, Problem, catalog::tag_name};
+
+const EXCHANGE_VERSION: u8 = 1;
+const MAX_ITEMS: usize = 100;
+const MAX_SERIALIZED_ITEMS: usize = BODY_LIMIT - 768;
+
+#[derive(Clone)]
+struct ExchangeState {
+    pool: SqlitePool,
+    hosts: PublicHosts,
+}
+
+pub(super) fn routes(pool: SqlitePool, hosts: PublicHosts) -> Router {
+    Router::new()
+        .route(
+            "/api/v1/exchange/links",
+            get(export_links).post(import_links),
+        )
+        .layer(DefaultBodyLimit::max(BODY_LIMIT))
+        .with_state(ExchangeState { pool, hosts })
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, sqlx::FromRow)]
+#[serde(deny_unknown_fields)]
+struct LinkMetadata {
+    host: String,
+    slug: String,
+    target: String,
+    title: String,
+    #[sqlx(skip)]
+    tags: Vec<String>,
+    enabled: bool,
+    analytics_enabled: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct TaggedLink {
+    id: i64,
+    #[sqlx(flatten)]
+    link: LinkMetadata,
+    tag: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportQuery {
+    after_id: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct ExportPage {
+    version: u8,
+    items: Vec<LinkMetadata>,
+    next_after_id: Option<i64>,
+}
+
+async fn export_links(
+    State(state): State<ExchangeState>,
+    query: Result<Query<ExportQuery>, QueryRejection>,
+) -> Result<Json<ExportPage>, Problem> {
+    let Query(query) = query.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
+    let after_id = query.after_id.unwrap_or(0);
+    if after_id < 0 {
+        return Err(invalid());
+    }
+    let rows = sqlx::query_as::<_, TaggedLink>(
+        "WITH page AS (
+             SELECT id, host, slug, target, title, enabled, analytics_enabled
+             FROM links WHERE id > ? ORDER BY id LIMIT ?
+         )
+         SELECT page.*, link_tags.tag FROM page
+         LEFT JOIN link_tags ON link_tags.link_id = page.id
+         ORDER BY page.id, link_tags.tag",
+    )
+    .bind(after_id)
+    .bind((MAX_ITEMS + 1) as i64)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| Problem::unavailable())?;
+
+    let mut items = Vec::new();
+    let mut used_bytes = 0;
+    let mut last_id = None;
+    let mut next_after_id = None;
+    for (id, item) in combine_tags(rows) {
+        // Keep the page small enough to post back with the import wrapper.
+        let bytes = serde_json::to_vec(&item)
+            .map_err(|_| Problem::unavailable())?
+            .len()
+            + 1;
+        if items.len() == MAX_ITEMS || used_bytes + bytes > MAX_SERIALIZED_ITEMS {
+            next_after_id = Some(last_id.ok_or_else(Problem::unavailable)?);
+            break;
+        }
+        used_bytes += bytes;
+        last_id = Some(id);
+        items.push(item);
+    }
+
+    Ok(Json(ExportPage {
+        version: EXCHANGE_VERSION,
+        items,
+        next_after_id,
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImportPage {
+    version: u8,
+    preview: bool,
+    items: Vec<LinkMetadata>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ImportOutcome {
+    Create,
+    Unchanged,
+    Conflict,
+}
+
+#[derive(Serialize)]
+struct ImportRow {
+    host: String,
+    slug: String,
+    status: ImportOutcome,
+}
+
+#[derive(Serialize)]
+struct ImportReport {
+    version: u8,
+    preview: bool,
+    applied: bool,
+    items: Vec<ImportRow>,
+}
+
+async fn import_links(
+    State(state): State<ExchangeState>,
+    body: Result<Json<ImportPage>, JsonRejection>,
+) -> Result<(StatusCode, Json<ImportReport>), Problem> {
+    let Json(mut input) = body.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
+    validate(&mut input)?;
+
+    let statement = if input.preview {
+        "BEGIN"
+    } else {
+        "BEGIN IMMEDIATE"
+    };
+    let mut transaction = state
+        .pool
+        .begin_with(statement)
+        .await
+        .map_err(|_| Problem::unavailable())?;
+    let active = domains::active_hosts(&mut *transaction, &state.hosts)
+        .await
+        .map_err(|_| Problem::unavailable())?;
+    if input.items.iter().any(|item| !active.contains(&item.host)) {
+        return Err(invalid());
+    }
+    let outcomes = compare_existing(&mut transaction, &input.items)
+        .await
+        .map_err(|_| Problem::unavailable())?;
+    let conflict = outcomes.contains(&ImportOutcome::Conflict);
+    let applied = !input.preview && !conflict;
+    if applied {
+        for (item, outcome) in input.items.iter().zip(&outcomes) {
+            if *outcome == ImportOutcome::Create {
+                insert_link(&mut transaction, item)
+                    .await
+                    .map_err(|_| Problem::unavailable())?;
+            }
+        }
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|_| Problem::unavailable())?;
+
+    let status = if conflict && !input.preview {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::OK
+    };
+    let items = input
+        .items
+        .into_iter()
+        .zip(outcomes)
+        .map(|(item, status)| ImportRow {
+            host: item.host,
+            slug: item.slug,
+            status,
+        })
+        .collect();
+    Ok((
+        status,
+        Json(ImportReport {
+            version: EXCHANGE_VERSION,
+            preview: input.preview,
+            applied,
+            items,
+        }),
+    ))
+}
+
+fn invalid() -> Problem {
+    Problem::invalid("invalid_exchange")
+}
+
+fn validate(input: &mut ImportPage) -> Result<(), Problem> {
+    if input.version != EXCHANGE_VERSION || !(1..=MAX_ITEMS).contains(&input.items.len()) {
+        return Err(invalid());
+    }
+    for item in &mut input.items {
+        item.host = normalize_host(item.host.trim()).ok_or_else(invalid)?;
+        if !valid_slug(&item.slug)
+            || !valid_target(&item.target)
+            || item.title.chars().count() > 160
+            || item.title.chars().any(char::is_control)
+            || item.tags.len() > 20
+        {
+            return Err(invalid());
+        }
+        for tag in &mut item.tags {
+            *tag = tag_name(tag).ok_or_else(invalid)?.to_owned();
+        }
+        item.tags.sort_unstable();
+        item.tags.dedup();
+    }
+    let mut seen = HashSet::with_capacity(input.items.len());
+    if input
+        .items
+        .iter()
+        .any(|item| !seen.insert((item.host.as_str(), item.slug.as_str())))
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+async fn compare_existing(
+    connection: &mut SqliteConnection,
+    items: &[LinkMetadata],
+) -> Result<Vec<ImportOutcome>, sqlx::Error> {
+    let mut query = QueryBuilder::<Sqlite>::new("WITH requested(host, slug) AS (");
+    query.push_values(items, |mut values, item| {
+        values.push_bind(&item.host).push_bind(&item.slug);
+    });
+    query.push(
+        ") SELECT links.id, links.host, links.slug, links.target, links.title,
+                  links.enabled, links.analytics_enabled, link_tags.tag
+           FROM requested
+           JOIN links ON links.host = requested.host AND links.slug = requested.slug
+           LEFT JOIN link_tags ON link_tags.link_id = links.id
+           ORDER BY links.id, link_tags.tag",
+    );
+    let existing = combine_tags(
+        query
+            .build_query_as::<TaggedLink>()
+            .fetch_all(connection)
+            .await?,
+    );
+    let by_identity: HashMap<_, _> = existing
+        .iter()
+        .map(|(_, item)| ((item.host.as_str(), item.slug.as_str()), item))
+        .collect();
+    Ok(items
+        .iter()
+        .map(
+            |item| match by_identity.get(&(item.host.as_str(), item.slug.as_str())) {
+                Some(previous) if *previous == item => ImportOutcome::Unchanged,
+                Some(_) => ImportOutcome::Conflict,
+                None => ImportOutcome::Create,
+            },
+        )
+        .collect())
+}
+
+fn combine_tags(rows: Vec<TaggedLink>) -> Vec<(i64, LinkMetadata)> {
+    let mut items: Vec<(i64, LinkMetadata)> = Vec::new();
+    for TaggedLink { id, link, tag } in rows {
+        if items.last().is_none_or(|(previous, _)| *previous != id) {
+            items.push((id, link));
+        }
+        if let (Some((_, item)), Some(tag)) = (items.last_mut(), tag) {
+            item.tags.push(tag);
+        }
+    }
+    items
+}
+
+async fn insert_link(
+    connection: &mut SqliteConnection,
+    item: &LinkMetadata,
+) -> Result<(), sqlx::Error> {
+    let id = sqlx::query(
+        "INSERT INTO links (host, slug, target, title, enabled, analytics_enabled)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&item.host)
+    .bind(&item.slug)
+    .bind(&item.target)
+    .bind(&item.title)
+    .bind(item.enabled)
+    .bind(item.analytics_enabled)
+    .execute(&mut *connection)
+    .await?
+    .last_insert_rowid();
+    if !item.tags.is_empty() {
+        let mut query = QueryBuilder::<Sqlite>::new("INSERT INTO link_tags (link_id, tag) ");
+        query.push_values(&item.tags, |mut values, tag| {
+            values.push_bind(id).push_bind(tag);
+        });
+        query.build().execute(connection).await?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Method, Request, header},
+    };
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
+
+    use super::*;
+
+    const PATH: &str = "/api/v1/exchange/links";
+
+    async fn app() -> (tempfile::TempDir, SqlitePool, Router) {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = crate::open_database(&directory.path().join("exchange.sqlite"))
+            .await
+            .unwrap();
+        let router = routes(pool.clone(), PublicHosts::parse("go.example").unwrap());
+        (directory, pool, router)
+    }
+
+    fn item(slug: &str, target: &str) -> Value {
+        json!({
+            "host": "GO.example.",
+            "slug": slug,
+            "target": target,
+            "title": "Released",
+            "tags": [" docs ", "team", "docs"],
+            "enabled": false,
+            "analytics_enabled": false
+        })
+    }
+
+    async fn request(
+        router: &Router,
+        method: Method,
+        path: &str,
+        data: Value,
+    ) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(data.to_string()))
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 200_000).await.unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    async fn import(router: &Router, preview: bool, items: Vec<Value>) -> (StatusCode, Value) {
+        request(
+            router,
+            Method::POST,
+            PATH,
+            json!({"version": 1, "preview": preview, "items": items}),
+        )
+        .await
+    }
+
+    async fn link_count(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM links")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn preview_and_retry_preserve_destination_spellings_and_normalize_tag_sets() {
+        let (_directory, pool, router) = app().await;
+        let destination = "https://files.example/A%2fB?x=A+B&x=C#Keep";
+        let archived = item("Team/Docs", destination);
+
+        let (status, preview) = import(&router, true, vec![archived.clone()]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            preview,
+            json!({
+                "version": 1, "preview": true, "applied": false,
+                "items": [{"host": "go.example", "slug": "Team/Docs", "status": "create"}]
+            })
+        );
+        assert_eq!(link_count(&pool).await, 0);
+
+        let (status, report) = import(&router, false, vec![archived.clone()]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(report["applied"], true);
+        assert_eq!(report["items"][0]["status"], "create");
+        let (status, repeated) = import(&router, false, vec![archived]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(repeated["items"][0]["status"], "unchanged");
+
+        let (status, exported) = request(&router, Method::GET, PATH, Value::Null).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            exported,
+            json!({
+                "version": 1, "next_after_id": null,
+                "items": [{"host": "go.example", "slug": "Team/Docs", "target": destination,
+                           "title": "Released", "tags": ["docs", "team"], "enabled": false,
+                           "analytics_enabled": false}]
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_checks_conflicts_again_and_leaves_the_whole_page_unchanged() {
+        let (_directory, pool, router) = app().await;
+        let items = vec![
+            item("one", "https://example.test/a%2fb"),
+            item("two", "https://example.test/two"),
+        ];
+        let (_, preview) = import(&router, true, items.clone()).await;
+        assert_eq!(preview["items"][0]["status"], "create");
+        let (status, competing) = import(
+            &router,
+            false,
+            vec![item("one", "https://example.test/a%2Fb")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(competing["applied"], true);
+
+        let (status, rejected) = import(&router, false, items).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(rejected["applied"], false);
+        assert_eq!(rejected["items"][0]["status"], "conflict");
+        assert_eq!(rejected["items"][1]["status"], "create");
+        let targets: Vec<String> = sqlx::query_scalar("SELECT target FROM links ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(targets, ["https://example.test/a%2Fb"]);
+    }
+
+    #[tokio::test]
+    async fn invalid_items_reject_the_document_without_echoing_private_fields() {
+        let (_directory, pool, router) = app().await;
+        let valid = item("one", "https://example.test/a");
+        let mut duplicate = valid.clone();
+        duplicate["host"] = json!("go.example");
+        let mut inactive = item("two", "https://secret.example/private");
+        inactive["host"] = json!("inactive.example");
+        inactive["tags"] = json!(["private tag"]);
+        let mut invalid_url = inactive.clone();
+        invalid_url["host"] = json!("go.example");
+        invalid_url["target"] = json!("https://secret@example.test/private");
+
+        for rejected in [duplicate, inactive, invalid_url] {
+            let (status, body) = import(&router, false, vec![valid.clone(), rejected]).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(body["code"], "invalid_exchange");
+            let body = body.to_string();
+            assert!(!body.contains("private"));
+            assert!(!body.contains("secret"));
+        }
+        sqlx::query(
+            "INSERT INTO domains (host, origin, enabled)
+             VALUES ('go.example', 'https://go.example', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (status, body) = import(&router, true, vec![valid]).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["code"], "invalid_exchange");
+        assert_eq!(link_count(&pool).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_write_error_rolls_back_every_new_link_on_the_page() {
+        let (_directory, pool, router) = app().await;
+        sqlx::raw_sql(
+            "CREATE TRIGGER deny_rejected_tag BEFORE INSERT ON link_tags
+             WHEN NEW.tag = 'reject' BEGIN SELECT RAISE(ABORT, 'test veto'); END;",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut rejected = item("two", "https://example.test/two");
+        rejected["tags"] = json!(["reject"]);
+        let (status, _) = import(
+            &router,
+            false,
+            vec![item("one", "https://example.test/one"), rejected],
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(link_count(&pool).await, 0);
+    }
+
+    #[tokio::test]
+    async fn byte_capped_export_can_be_imported_without_skipping_rows() {
+        let (_directory, pool, router) = app().await;
+        let target = format!("https://files.example/{}", "a".repeat(4070));
+        for number in 1..=10 {
+            sqlx::query("INSERT INTO links (host, slug, target) VALUES ('go.example', ?, ?)")
+                .bind(format!("link-{number}"))
+                .bind(&target)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let (status, first) = request(&router, Method::GET, PATH, Value::Null).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(first["items"].as_array().unwrap().len(), 7);
+        assert_eq!(first["next_after_id"], 7);
+        let first_items = first["items"].as_array().unwrap().clone();
+        let (status, report) = import(&router, true, first_items).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(report["items"][6]["status"], "unchanged");
+        let (_, last) = request(
+            &router,
+            Method::GET,
+            &format!("{PATH}?after_id=7"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(last["items"].as_array().unwrap().len(), 3);
+        assert_eq!(last["items"][0]["slug"], "link-8");
+        assert_eq!(last["next_after_id"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn export_pages_all_stored_metadata_in_id_order() {
+        let (_directory, pool, router) = app().await;
+        sqlx::query(
+            "WITH RECURSIVE ids(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM ids WHERE n < 101)
+             INSERT INTO links (host, slug, target)
+             SELECT 'past.example', printf('link-%d', n), 'https://example.test' FROM ids",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (_, first) = request(&router, Method::GET, PATH, Value::Null).await;
+        assert_eq!(first["items"].as_array().unwrap().len(), 100);
+        assert_eq!(first["items"][0]["slug"], "link-1");
+        assert_eq!(first["next_after_id"], 100);
+        let (_, last) = request(
+            &router,
+            Method::GET,
+            &format!("{PATH}?after_id=100"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(last["next_after_id"], Value::Null);
+        assert_eq!(last["items"].as_array().unwrap().len(), 1);
+        assert_eq!(last["items"][0]["slug"], "link-101");
+    }
+}

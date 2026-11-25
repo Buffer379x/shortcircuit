@@ -33,9 +33,7 @@ jobs:
       - run: python3 tests/analytics_schema.py
         if: always()
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: |
-          cargo fmt --all
-          git diff --exit-code --no-color -- '*.rs'
+      - run: cargo fmt --all -- --check
         if: always()
   container:
     needs: rust
@@ -59,9 +57,20 @@ jobs:
         run: |
           browser_deps="$RUNNER_TEMP/shortcircuit-browser"
           npm install --prefix "$browser_deps" --no-save --no-audit --no-fund playwright@1.65.0
-          "$browser_deps/node_modules/.bin/playwright" install --with-deps chromium
+          "$browser_deps/node_modules/.bin/playwright" install --with-deps --only-shell chromium
           setup_token=$(docker compose exec -T shortcircuit shortcircuit setup-token)
           printf '::add-mask::%s\n' "$setup_token"
           SHORTCIRCUIT_SETUP_TOKEN="$setup_token" SHORTCIRCUIT_PLAYWRIGHT="$browser_deps/node_modules/playwright" node tests/admin-browser.cjs
+      - name: Exercise backup and offline restore
+        run: |
+          snapshot=$(docker compose exec -T shortcircuit shortcircuit backup)
+          case "$snapshot" in /data/backups/shortcircuit-*.sqlite) ;; *) exit 1 ;; esac
+          if docker compose exec -T shortcircuit shortcircuit restore "$snapshot" --confirm; then
+            exit 1
+          fi
+          docker compose stop shortcircuit
+          docker compose run --rm --no-deps -T shortcircuit restore "$snapshot" --confirm
+          docker compose up --detach --wait --wait-timeout 90
+          test "$(curl --silent --output /dev/null --write-out '%{redirect_url}' http://localhost:8080/backup-check)" = "https://example.test/backup-check"
       - if: always()
         run: docker compose down --volumes

@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, net::IpAddr};
 
 use axum::http::uri::Authority;
 use serde::Serialize;
-use sqlx::SqlitePool;
+use sqlx::{Executor, Sqlite, SqlitePool};
 use url::Url;
 
 use crate::input::{PublicHosts, normalize_host, valid_target};
@@ -44,13 +44,13 @@ pub(crate) async fn list(
     Ok(domains)
 }
 
-pub(crate) async fn active_hosts(
-    pool: &SqlitePool,
+pub(crate) async fn active_hosts<'e>(
+    executor: impl Executor<'e, Database = Sqlite>,
     hosts: &PublicHosts,
 ) -> Result<Vec<String>, sqlx::Error> {
     let mut managed: BTreeMap<_, _> =
         sqlx::query_as::<_, (String, bool)>("SELECT host, enabled FROM domains")
-            .fetch_all(pool)
+            .fetch_all(executor)
             .await?
             .into_iter()
             .collect();
