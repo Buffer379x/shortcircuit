@@ -184,7 +184,10 @@ impl SelectedLink {
     fn resolution(&self, outcome: Outcome) -> Resolution {
         Resolution {
             outcome,
-            subject: Some(VisitSubject { id: self.id, analytics_enabled: self.analytics_enabled }),
+            subject: Some(VisitSubject {
+                id: self.id,
+                analytics_enabled: self.analytics_enabled,
+            }),
         }
     }
 
@@ -391,14 +394,19 @@ pub(crate) async fn resolve(
     pool: &SqlitePool,
     request: RedirectRequest<'_>,
 ) -> Result<Outcome, sqlx::Error> {
-    resolve_with_subject(pool, request).await.map(|result| result.outcome)
+    resolve_with_subject(pool, request)
+        .await
+        .map(|result| result.outcome)
 }
 
 pub(crate) async fn resolve_with_subject(
     pool: &SqlitePool,
     request: RedirectRequest<'_>,
 ) -> Result<Resolution, sqlx::Error> {
-    let missing = Resolution { outcome: Outcome::Missing, subject: None };
+    let missing = Resolution {
+        outcome: Outcome::Missing,
+        subject: None,
+    };
     let Some(link) = select_link(request)
         .build_query_as::<SelectedLink>()
         .fetch_optional(pool)
@@ -410,7 +418,9 @@ pub(crate) async fn resolve_with_subject(
         return Ok(link.resolution(Outcome::Blocked));
     }
     if request.head || link.policy.max_visits.is_none() {
-        return link.redirect(request).map(|outcome| link.resolution(outcome));
+        return link
+            .redirect(request)
+            .map(|outcome| link.resolution(outcome));
     }
 
     // The winner and its policy may have changed while acquiring the write lock.

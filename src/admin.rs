@@ -93,8 +93,10 @@ fn build_admin_router(
             middleware::from_fn_with_state(state.clone(), access::browser_access),
         );
     let analytics_routes = analytics.map_or_else(Router::new, |service| {
-        metrics::routes(pool.clone(), service)
-            .route_layer(middleware::from_fn_with_state(state.clone(), access::browser_access))
+        metrics::routes(pool.clone(), service).route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            access::browser_access,
+        ))
     });
     let application = Router::new()
         .route("/api/v1/auth/session", get(session_status))

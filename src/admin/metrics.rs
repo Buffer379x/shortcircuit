@@ -1,8 +1,8 @@
 use axum::{
     Json, Router,
     extract::{
-        Query, State,
-        rejection::{JsonRejection, QueryRejection},
+        Path, Query, State,
+        rejection::{JsonRejection, PathRejection, QueryRejection},
     },
     http::StatusCode,
     routing::{delete, get},
@@ -12,7 +12,7 @@ use sqlx::SqlitePool;
 
 use crate::analytics::{Analytics, Settings};
 
-use super::{Problem, json_payload};
+use super::{Problem, json_payload, resource_id};
 
 #[derive(Clone)]
 struct MetricsState {
@@ -23,8 +23,13 @@ struct MetricsState {
 pub(super) fn routes(pool: SqlitePool, analytics: Analytics) -> Router {
     Router::new()
         .route("/api/v1/analytics/summary", get(summary))
-        .route("/api/v1/analytics/settings", get(settings).patch(save_settings))
+        .route(
+            "/api/v1/analytics/settings",
+            get(settings).patch(save_settings),
+        )
         .route("/api/v1/analytics/data", delete(clear))
+        .route("/api/v1/analytics/events", get(list_events))
+        .route("/api/v1/analytics/events/{id}", delete(delete_event))
         .with_state(MetricsState { analytics, pool })
 }
 
@@ -143,7 +148,15 @@ async fn read_summary(pool: &SqlitePool, days: u16, dropped: u64) -> Result<Summ
     .fetch_all(&mut *transaction)
     .await?;
     transaction.commit().await?;
-    Ok(Summary { days, today, totals, previous_redirects, daily, top_links, dropped })
+    Ok(Summary {
+        days,
+        today,
+        totals,
+        previous_redirects,
+        daily,
+        top_links,
+        dropped,
+    })
 }
 
 async fn settings(State(state): State<MetricsState>) -> Json<Settings> {
@@ -160,12 +173,137 @@ async fn save_settings(
     {
         return Err(Problem::invalid("invalid_retention"));
     }
-    state.analytics.save_settings(updated).await.map(Json).map_err(|_| Problem::unavailable())
+    state
+        .analytics
+        .save_settings(updated)
+        .await
+        .map(Json)
+        .map_err(|_| Problem::unavailable())
 }
 
 async fn clear(State(state): State<MetricsState>) -> Result<StatusCode, Problem> {
-    state.analytics.clear().await.map_err(|_| Problem::unavailable())?;
+    state
+        .analytics
+        .clear()
+        .await
+        .map_err(|_| Problem::unavailable())?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EventCursor {
+    before_id: Option<i64>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct VisitEvent {
+    id: i64,
+    occurred_at: i64,
+    link_id: Option<i64>,
+    host: String,
+    kind: String,
+    visit_class: String,
+    source: String,
+    referrer: Option<String>,
+}
+
+#[derive(Serialize)]
+struct EventPage {
+    items: Vec<VisitEvent>,
+    next_before_id: Option<i64>,
+}
+
+async fn list_events(
+    State(state): State<MetricsState>,
+    query: Result<Query<EventCursor>, QueryRejection>,
+) -> Result<Json<EventPage>, Problem> {
+    let Query(query) = query.map_err(|error| Problem(error.status(), "invalid_query"))?;
+    let before = query.before_id.unwrap_or(i64::MAX);
+    if before <= 0 {
+        return Err(Problem::invalid("invalid_event_cursor"));
+    }
+    let mut items = sqlx::query_as::<_, VisitEvent>(
+        "SELECT id, occurred_at, link_id, host, kind, visit_class, source, referrer
+         FROM analytics_events WHERE id < ? ORDER BY id DESC LIMIT 101",
+    )
+    .bind(before)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| Problem::unavailable())?;
+    let has_more = items.len() > 100;
+    items.truncate(100);
+    let next_before_id = if has_more {
+        items.last().map(|event| event.id)
+    } else {
+        None
+    };
+    Ok(Json(EventPage { items, next_before_id }))
+}
+
+#[derive(sqlx::FromRow)]
+struct Bucket {
+    day: i64,
+    link_id: i64,
+    host: String,
+    kind: String,
+    visit_class: String,
+}
+
+async fn delete_event_row(pool: &SqlitePool, id: i64) -> Result<bool, sqlx::Error> {
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let rows = sqlx::query_as::<_, Bucket>(
+        "DELETE FROM analytics_events WHERE id = ?
+         RETURNING occurred_at / 86400 AS day, COALESCE(link_id, 0) AS link_id,
+                   host, kind, visit_class",
+    )
+    .bind(id)
+    .fetch_all(&mut *transaction)
+    .await?;
+    let Some(bucket) = rows.into_iter().next() else {
+        return Ok(false);
+    };
+    let deleted = sqlx::query(
+        "DELETE FROM analytics_daily
+         WHERE day = ? AND link_id = ? AND host = ? AND kind = ? AND visit_class = ? AND total = 1",
+    )
+    .bind(bucket.day)
+    .bind(bucket.link_id)
+    .bind(&bucket.host)
+    .bind(&bucket.kind)
+    .bind(&bucket.visit_class)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    if deleted == 0 {
+        sqlx::query(
+            "UPDATE analytics_daily SET total = total - 1
+             WHERE day = ? AND link_id = ? AND host = ? AND kind = ? AND visit_class = ? AND total > 1",
+        )
+        .bind(bucket.day)
+        .bind(bucket.link_id)
+        .bind(&bucket.host)
+        .bind(&bucket.kind)
+        .bind(&bucket.visit_class)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(true)
+}
+
+async fn delete_event(
+    State(state): State<MetricsState>,
+    id: Result<Path<i64>, PathRejection>,
+) -> Result<StatusCode, Problem> {
+    if delete_event_row(&state.pool, resource_id(id)?)
+        .await
+        .map_err(|_| Problem::unavailable())?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(Problem(StatusCode::NOT_FOUND, "not_found"))
+    }
 }
 
 #[cfg(test)]
@@ -175,7 +313,9 @@ mod tests {
     #[tokio::test]
     async fn reports_compare_adjacent_utc_periods_and_fill_empty_days() {
         let directory = tempfile::tempdir().unwrap();
-        let pool = crate::open_database(&directory.path().join("report.db")).await.unwrap();
+        let pool = crate::open_database(&directory.path().join("report.db"))
+            .await
+            .unwrap();
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO links (host, slug, target) VALUES ('go.example', 'notes', 'https://example.test') RETURNING id",
         )
@@ -187,7 +327,12 @@ mod tests {
                     (unixepoch() / 86400 - 7, ?, 'go.example', 'redirect', 'unknown', 3),
                     (unixepoch() / 86400 - 2, 0, 'go.example', 'missing', 'unknown', 4)",
         )
-        .bind(id).bind(id).bind(id).execute(&pool).await.unwrap();
+        .bind(id)
+        .bind(id)
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
         let summary = read_summary(&pool, 7, 2).await.unwrap();
         assert_eq!(summary.totals.redirect, 6);
         assert_eq!(summary.totals.human, 5);
@@ -200,5 +345,19 @@ mod tests {
         assert_eq!(summary.daily[6].redirect, 6);
         assert_eq!(summary.top_links[0].total, 6);
         assert_eq!(summary.dropped, 2);
+
+        let event: i64 = sqlx::query_scalar(
+            "INSERT INTO analytics_events (occurred_at, link_id, host, kind, visit_class, source)
+             VALUES (unixepoch(), ?, 'go.example', 'redirect', 'human', 'chrome') RETURNING id",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(delete_event_row(&pool, event).await.unwrap());
+        assert!(!delete_event_row(&pool, event).await.unwrap());
+        let updated = read_summary(&pool, 7, 2).await.unwrap();
+        assert_eq!(updated.totals.redirect, 5);
+        assert_eq!(updated.totals.human, 4);
     }
 }

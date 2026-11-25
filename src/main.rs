@@ -103,8 +103,11 @@ async fn serve() -> Result<(), AppError> {
 
     let (analytics, mut writer) = Analytics::start(pool.clone()).await?;
     let (stop, receiver) = watch::channel(false);
-    let public = axum::serve(public_socket, public_router_with_analytics(pool.clone(), hosts.clone(), analytics.clone()))
-        .with_graceful_shutdown(wait_for_stop(receiver.clone()));
+    let public = axum::serve(
+        public_socket,
+        public_router_with_analytics(pool.clone(), hosts.clone(), analytics.clone()),
+    )
+    .with_graceful_shutdown(wait_for_stop(receiver.clone()));
     let admin = axum::serve(
         admin_socket,
         admin_router_with_analytics(pool.clone(), hosts, config, analytics)
@@ -126,7 +129,7 @@ async fn serve() -> Result<(), AppError> {
         }
     };
     match time::timeout(Duration::from_secs(2), &mut writer).await {
-        Ok(Ok(())) => {},
+        Ok(Ok(())) => {}
         Ok(Err(_)) => tracing::warn!("analytics writer stopped unexpectedly"),
         Err(_) => {
             writer.abort();

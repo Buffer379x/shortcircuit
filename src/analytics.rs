@@ -22,7 +22,9 @@ use crate::input::normalize_host;
 const QUEUE_CAPACITY: usize = 1024;
 const BATCH_SIZE: usize = 64;
 const BATCH_WINDOW: Duration = Duration::from_millis(25);
-const RETENTION_INTERVAL: Duration = Duration::from_secs(86_400);
+const RETENTION_INTERVAL: Duration = Duration::from_secs(3600);
+const PRUNE_BATCH_SIZE: u64 = 512;
+const MAX_PRUNE_BATCHES: usize = 64;
 const MAX_HEADER_BYTES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, sqlx::FromRow)]
@@ -55,7 +57,10 @@ impl Shared {
     }
 
     fn update(&self, next: Snapshot) {
-        let mut current = self.snapshot.write().unwrap_or_else(PoisonError::into_inner);
+        let mut current = self
+            .snapshot
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
         if next.generation >= current.generation {
             *current = next;
         }
@@ -355,11 +360,11 @@ async fn write_batch(
     let snapshot = load_snapshot(&mut *transaction).await?;
     shared.update(snapshot);
 
-    let mut current = batch
+    let current: Vec<_> = batch
         .iter()
-        .filter(|event| snapshot.settings.enabled && event.generation == snapshot.generation)
-        .peekable();
-    if current.peek().is_none() {
+        .filter(|event: &&Event| snapshot.settings.enabled && event.generation == snapshot.generation)
+        .collect();
+    if current.is_empty() {
         return transaction.commit().await;
     }
 
@@ -411,20 +416,39 @@ async fn write_batch(
 }
 
 async fn prune(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let mut transaction = pool.begin().await?;
-    sqlx::raw_sql(
-        "DELETE FROM analytics_events
-         WHERE occurred_at < unixepoch() - 86400 * (
-             SELECT detail_days FROM analytics_settings WHERE id = 1
-         );
-         DELETE FROM analytics_daily
-         WHERE day < unixepoch() / 86400 + 1 - (
-             SELECT aggregate_days FROM analytics_settings WHERE id = 1
-         );",
-    )
-    .execute(&mut *transaction)
-    .await?;
-    transaction.commit().await
+    for _ in 0..MAX_PRUNE_BATCHES {
+        let expired_details = sqlx::query(
+            "DELETE FROM analytics_events WHERE id IN (
+                SELECT id FROM analytics_events
+                WHERE occurred_at < unixepoch() - 86400 * (
+                    SELECT detail_days FROM analytics_settings WHERE id = 1
+                )
+                ORDER BY occurred_at, id LIMIT ?
+             )",
+        )
+        .bind(PRUNE_BATCH_SIZE as i64)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        let expired_rollups = sqlx::query(
+            "DELETE FROM analytics_daily WHERE (day, host, link_id, kind, visit_class) IN (
+                SELECT day, host, link_id, kind, visit_class FROM analytics_daily
+                WHERE day < unixepoch() / 86400 + 1 - (
+                    SELECT aggregate_days FROM analytics_settings WHERE id = 1
+                )
+                ORDER BY day, host, link_id, kind, visit_class LIMIT ?
+             )",
+        )
+        .bind(PRUNE_BATCH_SIZE as i64)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        if expired_details < PRUNE_BATCH_SIZE && expired_rollups < PRUNE_BATCH_SIZE {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -548,7 +572,9 @@ mod tests {
             &request_headers(),
         )
         .unwrap();
-        write_batch(&pool, &analytics.shared, &[event]).await.unwrap();
+        write_batch(&pool, &analytics.shared, &[event])
+            .await
+            .unwrap();
 
         let mut settings = analytics.settings();
         settings.referrers = false;

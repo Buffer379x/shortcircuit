@@ -15,7 +15,7 @@ CREATE TABLE analytics_settings (
 INSERT INTO analytics_settings (id) VALUES (1);
 
 CREATE TABLE analytics_events (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     occurred_at INTEGER NOT NULL CHECK (occurred_at >= 0),
     link_id INTEGER REFERENCES links(id) ON DELETE CASCADE CHECK (link_id > 0),
     host TEXT NOT NULL CHECK (length(host) BETWEEN 1 AND 253),

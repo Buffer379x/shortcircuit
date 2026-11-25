@@ -35,10 +35,18 @@ pub fn public_router_with_analytics(
     build_public_router(pool, hosts, Some(analytics))
 }
 
-fn build_public_router(pool: SqlitePool, hosts: PublicHosts, analytics: Option<Analytics>) -> Router {
+fn build_public_router(
+    pool: SqlitePool,
+    hosts: PublicHosts,
+    analytics: Option<Analytics>,
+) -> Router {
     Router::new()
         .fallback(resolve)
-        .with_state(AppState { pool, hosts, analytics })
+        .with_state(AppState {
+            pool,
+            hosts,
+            analytics,
+        })
         .layer(middleware::from_fn(response_headers))
 }
 
@@ -88,7 +96,9 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         return fallback(&host, "/", domain.root_target.as_deref());
     }
     if !valid_slug(slug) {
-        if parts.method == Method::GET && let Some(analytics) = &state.analytics {
+        if parts.method == Method::GET
+            && let Some(analytics) = &state.analytics
+        {
             analytics.record(&host, None, Kind::Missing, &parts.headers);
         }
         return StatusCode::NOT_FOUND.into_response();
@@ -112,15 +122,26 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
     };
     let (kind, response) = match result.outcome {
         Outcome::Redirect { target, status } => (Kind::Redirect, respond(&target, status)),
-        Outcome::Missing => (Kind::Missing, fallback(&host, uri.path(), domain.missing_target.as_deref())),
+        Outcome::Missing => (
+            Kind::Missing,
+            fallback(&host, uri.path(), domain.missing_target.as_deref()),
+        ),
         Outcome::Blocked => (Kind::Blocked, StatusCode::NOT_FOUND.into_response()),
     };
     if !lookup.head
         && !response.status().is_server_error()
-        && result.subject.is_none_or(|subject| subject.analytics_enabled)
+        && result
+            .subject
+            .as_ref()
+            .is_none_or(|subject| subject.analytics_enabled)
         && let Some(analytics) = &state.analytics
     {
-        analytics.record(&host, result.subject.map(|subject| subject.id), kind, &parts.headers);
+        analytics.record(
+            &host,
+            result.subject.map(|subject| subject.id),
+            kind,
+            &parts.headers,
+        );
     }
     response
 }

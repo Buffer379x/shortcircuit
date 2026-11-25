@@ -36,6 +36,8 @@ Analytics endpoints require a browser administrator session. Changes require the
 |---|---|
 | `GET /api/v1/analytics/summary?days=30` | Accepts 1 to 365 UTC days. Returns successful redirects, blocked links, missing links, visitor classes for redirects, the preceding period's redirect count, a daily series, up to ten top links, and a process-local dropped-events count. |
 | `GET` and `PATCH /api/v1/analytics/settings` | Reads or replaces the settings `enabled`, `referrers`, `classify`, `honor_dnt`, `detail_days`, and `aggregate_days`. Retention is between 1 and 3650 days. The aggregate period must cover at least the detail period. |
+| `GET /api/v1/analytics/events` | Lists up to 100 retained events newest first. Accepts the optional `before_id` cursor. Returns `items` and `next_before_id`. |
+| `DELETE /api/v1/analytics/events/{id}` | Deletes one retained event and adjusts its daily count atomically. Returns `204`. |
 | `DELETE /api/v1/analytics/data` | Deletes details, every UTC-day rollup, and queued events from the previous generation. Returns `204`. |
 
 ### Public redirect behavior
