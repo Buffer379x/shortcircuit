@@ -33,9 +33,7 @@ jobs:
       - run: python3 tests/analytics_schema.py
         if: always()
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: |
-          cargo fmt --all
-          git diff --exit-code --no-color -- '*.rs'
+      - run: cargo fmt --all -- --check
         if: always()
   container:
     needs: rust

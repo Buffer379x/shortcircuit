@@ -31,7 +31,10 @@ struct ExchangeState {
 
 pub(super) fn routes(pool: SqlitePool, hosts: PublicHosts) -> Router {
     Router::new()
-        .route("/api/v1/exchange/links", get(export_links).post(import_links))
+        .route(
+            "/api/v1/exchange/links",
+            get(export_links).post(import_links),
+        )
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .with_state(ExchangeState { pool, hosts })
 }
@@ -158,7 +161,11 @@ async fn import_links(
     let Json(mut input) = body.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
     validate(&mut input)?;
 
-    let statement = if input.preview { "BEGIN" } else { "BEGIN IMMEDIATE" };
+    let statement = if input.preview {
+        "BEGIN"
+    } else {
+        "BEGIN IMMEDIATE"
+    };
     let mut transaction = state
         .pool
         .begin_with(statement)
@@ -184,7 +191,10 @@ async fn import_links(
             }
         }
     }
-    transaction.commit().await.map_err(|_| Problem::unavailable())?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| Problem::unavailable())?;
 
     let status = if conflict && !input.preview {
         StatusCode::CONFLICT
@@ -263,18 +273,25 @@ async fn compare_existing(
            LEFT JOIN link_tags ON link_tags.link_id = links.id
            ORDER BY links.id, link_tags.tag",
     );
-    let existing = combine_tags(query.build_query_as::<TaggedLink>().fetch_all(connection).await?);
+    let existing = combine_tags(
+        query
+            .build_query_as::<TaggedLink>()
+            .fetch_all(connection)
+            .await?,
+    );
     let by_identity: HashMap<_, _> = existing
         .iter()
         .map(|(_, item)| ((item.host.as_str(), item.slug.as_str()), item))
         .collect();
     Ok(items
         .iter()
-        .map(|item| match by_identity.get(&(item.host.as_str(), item.slug.as_str())) {
-            Some(previous) if *previous == item => ImportOutcome::Unchanged,
-            Some(_) => ImportOutcome::Conflict,
-            None => ImportOutcome::Create,
-        })
+        .map(
+            |item| match by_identity.get(&(item.host.as_str(), item.slug.as_str())) {
+                Some(previous) if *previous == item => ImportOutcome::Unchanged,
+                Some(_) => ImportOutcome::Conflict,
+                None => ImportOutcome::Create,
+            },
+        )
         .collect())
 }
 
