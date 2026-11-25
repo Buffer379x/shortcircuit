@@ -239,6 +239,7 @@ struct PatchLink {
     target: Option<String>,
     title: Option<String>,
     enabled: Option<bool>,
+    analytics_enabled: Option<bool>,
     tags: Option<Vec<String>>,
 }
 
@@ -252,6 +253,7 @@ async fn update_link(
     if input.target.is_none()
         && input.title.is_none()
         && input.enabled.is_none()
+        && input.analytics_enabled.is_none()
         && input.tags.is_none()
     {
         return Err(Problem::invalid("empty_update"));
@@ -267,6 +269,7 @@ async fn update_link(
         target: input.target,
         title: input.title.map(title).transpose()?,
         enabled: input.enabled,
+        analytics_enabled: input.analytics_enabled,
         tags: input.tags.map(tags).transpose()?,
     };
     let id = resource_id(id)?;

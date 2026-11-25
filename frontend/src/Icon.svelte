@@ -17,6 +17,7 @@
     toggle: 'M7 7h10a5 5 0 1 1 0 10H7A5 5 0 1 1 7 7z M7 10v4',
     tag: 'M3 3h7l11 11-7 7L3 10V3z M7.5 7.5h.01',
     qr: 'M3 3h6v6H3z M15 3h6v6h-6z M3 15h6v6H3z M15 15h2v2h-2z M21 15v2 M15 21h2 M21 21h.01',
+    analytics: 'M4 19h16 M6 15V9 M12 15V4 M18 15v-4',
     rule: 'M4 6h16 M4 12h16 M4 18h16 M8 4v4 M15 10v4 M10 16v4',
   } as const;
 

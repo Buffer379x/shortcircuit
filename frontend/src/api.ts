@@ -58,6 +58,7 @@ export interface Link {
   host: string;
   title: string;
   enabled: boolean;
+  analytics_enabled: boolean;
   tags: string[];
   created_at: string;
 }

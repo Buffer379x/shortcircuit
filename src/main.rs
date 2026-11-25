@@ -10,7 +10,8 @@ use std::{
 };
 
 use shortcircuit::{
-    AdminConfig, Auth, BootstrapKind, PublicHosts, admin_router, open_database, public_router,
+    AdminConfig, Analytics, Auth, BootstrapKind, PublicHosts, admin_router_with_analytics,
+    open_database, public_router_with_analytics,
 };
 use tokio::{net::TcpListener, sync::watch, time};
 use tracing_subscriber::EnvFilter;
@@ -100,12 +101,13 @@ async fn serve() -> Result<(), AppError> {
         "ShortCircuit ready"
     );
 
+    let (analytics, mut writer) = Analytics::start(pool.clone()).await?;
     let (stop, receiver) = watch::channel(false);
-    let public = axum::serve(public_socket, public_router(pool.clone(), hosts.clone()))
+    let public = axum::serve(public_socket, public_router_with_analytics(pool.clone(), hosts.clone(), analytics.clone()))
         .with_graceful_shutdown(wait_for_stop(receiver.clone()));
     let admin = axum::serve(
         admin_socket,
-        admin_router(pool.clone(), hosts, config)
+        admin_router_with_analytics(pool.clone(), hosts, config, analytics)
             .into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(wait_for_stop(receiver));
@@ -123,6 +125,14 @@ async fn serve() -> Result<(), AppError> {
             Ok(())
         }
     };
+    match time::timeout(Duration::from_secs(2), &mut writer).await {
+        Ok(Ok(())) => {},
+        Ok(Err(_)) => tracing::warn!("analytics writer stopped unexpectedly"),
+        Err(_) => {
+            writer.abort();
+            tracing::warn!("analytics flush deadline reached");
+        }
+    }
     if time::timeout(Duration::from_secs(2), pool.close())
         .await
         .is_err()

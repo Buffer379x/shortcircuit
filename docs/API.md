@@ -14,7 +14,7 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `GET /api/v1/domains` | Returns active `hosts`, an `origins` map for configured hosts visible to the caller, and the local public port. |
 | `GET /api/v1/links` | Accepts the optional `after_id` cursor. Returns `items` and `next_after_id` with up to 100 records per page. |
 | `POST /api/v1/links` | Accepts `target` and optional `host`, `slug`, `title`, and `tags`. Returns `201` with the created link. A duplicate slug on the same host returns `409`. |
-| `PATCH /api/v1/links/{id}` | Accepts any of `target`, `title`, `enabled`, and `tags`. A supplied tag list replaces the previous list. The published host and slug remain fixed. |
+| `PATCH /api/v1/links/{id}` | Accepts any of `target`, `title`, `enabled`, `tags`, and `analytics_enabled`. A supplied tag list replaces the previous list. The published host and slug remain fixed. |
 | `DELETE /api/v1/links/{id}` | Deletes a link and returns `204`. |
 | `GET` and `POST /api/v1/keys` | Require a browser session. Listing returns key metadata. Creation accepts `name`, `scopes`, optional `host`, and optional `expires_at` in Unix seconds. The response contains `key` and the one-time `token`. |
 | `DELETE /api/v1/keys/{id}` | Revokes the key and returns `204`. |
@@ -24,9 +24,19 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `GET /api/v1/links/{id}/qr` | Returns an image containing the configured public short URL. Query options are `format=svg\|png` and `size=128..1024` (384 default). Requires a read scope or browser session. |
 | `GET` or `HEAD /{slug}` | Resolves the link's redirect policy. The default is `302` with the stored `Location` and `Cache-Control: no-store`. |
 
-Link objects contain `id`, `host`, `slug`, `target`, `created_at`, `title`, `enabled`, and `tags`. Slugs use case-sensitive ASCII letters, digits, hyphens, underscores, and segment separators. Their maximum is 200 bytes. Destinations are absolute HTTP or HTTPS URIs up to 4,096 bytes, with valid percent encoding and credentials excluded. A link can carry up to 20 tags. Titles and tags use limits of 160 and 40 Unicode characters respectively.
+Link objects contain `id`, `host`, `slug`, `target`, `created_at`, `title`, `enabled`, `analytics_enabled`, and `tags`. Slugs use case-sensitive ASCII letters, digits, hyphens, underscores, and segment separators. Their maximum is 200 bytes. Destinations are absolute HTTP or HTTPS URIs up to 4,096 bytes, with valid percent encoding and credentials excluded. A link can carry up to 20 tags. Titles and tags use limits of 160 and 40 Unicode characters respectively.
 
 An API key uses `Authorization: Bearer <token>`. A key can hold `read` for list operations, `write` for creation and edits, and `delete` for link deletion. An optional host restriction applies to both reads and changes. The browser supplies an exact `Origin` and `X-CSRF-Token` for session-authenticated changes. Errors use `application/problem+json` with `status`, `title`, and `code`. [Security design](SECURITY.md)
+
+### Analytics
+
+Analytics endpoints require a browser administrator session. Changes require the standard CSRF token and Origin header.
+
+| Operation | Request and response |
+|---|---|
+| `GET /api/v1/analytics/summary?days=30` | Accepts 1 to 365 UTC days. Returns successful redirects, blocked links, missing links, visitor classes for redirects, the preceding period's redirect count, a daily series, up to ten top links, and a process-local dropped-events count. |
+| `GET` and `PATCH /api/v1/analytics/settings` | Reads or replaces the settings `enabled`, `referrers`, `classify`, `honor_dnt`, `detail_days`, and `aggregate_days`. Retention is between 1 and 3650 days. The aggregate period must cover at least the detail period. |
+| `DELETE /api/v1/analytics/data` | Deletes details, every UTC-day rollup, and queued events from the previous generation. Returns `204`. |
 
 ### Public redirect behavior
 

@@ -2,6 +2,7 @@ mod access;
 mod assets;
 mod catalog;
 mod links;
+mod metrics;
 
 use std::sync::Arc;
 
@@ -20,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::{
+    analytics::Analytics,
     auth::{Auth, AuthError, IssuedSession, KeyMeta, Session},
     domains,
     http::response_headers,
@@ -40,6 +42,24 @@ struct AppState {
 }
 
 pub fn admin_router(pool: SqlitePool, hosts: PublicHosts, config: AdminConfig) -> Router {
+    build_admin_router(pool, hosts, config, None)
+}
+
+pub fn admin_router_with_analytics(
+    pool: SqlitePool,
+    hosts: PublicHosts,
+    config: AdminConfig,
+    analytics: Analytics,
+) -> Router {
+    build_admin_router(pool, hosts, config, Some(analytics))
+}
+
+fn build_admin_router(
+    pool: SqlitePool,
+    hosts: PublicHosts,
+    config: AdminConfig,
+    analytics: Option<Analytics>,
+) -> Router {
     let state = AppState {
         pool: pool.clone(),
         auth: Auth::new(pool.clone()),
@@ -72,6 +92,10 @@ pub fn admin_router(pool: SqlitePool, hosts: PublicHosts, config: AdminConfig) -
         catalog::routes(pool.clone(), state.hosts.clone(), state.config.local_port).route_layer(
             middleware::from_fn_with_state(state.clone(), access::browser_access),
         );
+    let analytics_routes = analytics.map_or_else(Router::new, |service| {
+        metrics::routes(pool.clone(), service)
+            .route_layer(middleware::from_fn_with_state(state.clone(), access::browser_access))
+    });
     let application = Router::new()
         .route("/api/v1/auth/session", get(session_status))
         .merge(sign_in)
@@ -79,6 +103,7 @@ pub fn admin_router(pool: SqlitePool, hosts: PublicHosts, config: AdminConfig) -
         .with_state(state.clone())
         .merge(link_routes)
         .merge(catalog_routes)
+        .merge(analytics_routes)
         .merge(assets::routes())
         .route_layer(middleware::from_fn_with_state(state, access::admin_host));
 
