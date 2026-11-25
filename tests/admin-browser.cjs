@@ -74,6 +74,13 @@ async function verify() {
     assert.equal((await cleared).status(), 204);
     await page.getByText('Analytics data cleared.', { exact: true }).waitFor();
 
+    await page.getByRole('button', { name: 'Links', exact: true }).click();
+    await page.getByRole('button', { name: 'Create link', exact: true }).click();
+    await dialog.getByLabel('Destination URL', { exact: true }).fill('https://example.test/backup-check');
+    await dialog.getByLabel('Slug (optional)', { exact: true }).fill('backup-check');
+    await dialog.getByRole('button', { name: 'Create link', exact: true }).click();
+    await dialog.waitFor({ state: 'hidden' });
+
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();

@@ -1,5 +1,27 @@
 # Backup and Restore Design
 
+## Current CLI
+
+Create a backup while the container is running.
+
+```sh
+docker compose exec -T shortcircuit shortcircuit backup
+```
+
+The command prints the backup path under `/data/backups`. The database-only format includes local settings, links, redirect rules, tags, analytics, the administrator account, and API credentials. The copied browser sessions and setup or recovery claims are removed. Keep external environment settings and proxy configuration with your operational backup. Store the snapshot securely because it includes confidential destinations and authentication material.
+
+To restore a snapshot from the same schema version during scheduled downtime, stop the service and use a one-off container with the same app-data volume. Use the path printed by the backup command.
+
+```sh
+docker compose stop shortcircuit
+docker compose run --rm --no-deps shortcircuit restore /data/backups/SHORTCIRCUIT-SNAPSHOT.sqlite --confirm
+docker compose up --detach --wait
+```
+
+The restore refuses a busy data directory, accepts standalone snapshots up to 8 GiB, and validates a private staging copy. It prints a restorable rollback snapshot when the previous database can be verified. If the previous database cannot be snapshotted, it preserves a private database file for manual recovery. Sign in again after restart. The snapshot restores API credential state at the time of capture. Revoke any previously revoked credentials that were active when the snapshot was created. Record an independent backup and exercise recovery in a disposable target before production use.
+
+Scheduled backups, browser downloads, and browser restore are planned.
+
 ## Consistent Snapshots
 
 Prefer the SQLite Online Backup API. Verify that the Rust backup bindings use the same SQLite version as SQLx. Consider `VACUUM INTO` as an alternative if it simplifies maintenance and measurements show acceptable locking and load. Create snapshots separately from the live WAL on suitable local storage. Abort if space runs low. Copy large databases in bounded steps with a deadline that prioritizes redirects. [SQLite Online Backup API](https://www.sqlite.org/backup.html) · [VACUUM INTO](https://www.sqlite.org/lang_vacuum.html)

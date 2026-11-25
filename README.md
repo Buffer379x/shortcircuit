@@ -2,7 +2,7 @@
 
 ShortCircuit is a self-hosted URL shortener and link manager. It uses Rust and SQLite and is designed to run in one Docker container. You can recreate an existing short URL by configuring its original host and creating a link with the same slug.
 
-**0.4.0 is in development.** ShortCircuit is licensed under the [MIT License](LICENSE). See the [project plan](docs/PROJECT_PLAN.md) and [verification status](docs/PROJECT_STATUS.md).
+**0.5.0 is in development.** ShortCircuit is licensed under the [MIT License](LICENSE). See the [project plan](docs/PROJECT_PLAN.md) and [verification status](docs/PROJECT_STATUS.md).
 
 ## Start the local container
 
