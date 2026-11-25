@@ -1,12 +1,13 @@
 [package]
 name = "shortcircuit"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.100"
 publish = false
 license = "MIT"
 
 [dependencies]
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "password-hash", "zeroize"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
 getrandom = "0.4.3"
 serde = { version = "1.0.229", features = ["derive"] }

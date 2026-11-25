@@ -1,6 +1,14 @@
 # Security Design
 
-The 0.1 source includes separate listeners and optional bearer authentication for the lab API. The controls below are proposed release requirements. Verification results and acceptance criteria are recorded in the project status and threat model. [Project Status](PROJECT_STATUS.md) · [Threat Model](THREAT_MODEL.md)
+The 0.2 implementation adds a CLI-issued setup token, Argon2id passwords, revocable sessions, a fixed admin origin, CSRF tokens, and scoped API keys. The remaining controls in this guide are release requirements. See the [project status](PROJECT_STATUS.md) and [threat model](THREAT_MODEL.md) for verification and acceptance criteria.
+
+## 0.2 deployment boundary
+
+- Set `ADMIN_ORIGIN` to the browser-visible origin. The default is `http://localhost:8081`. Plain HTTP origins are accepted only for loopback. A reverse proxy must preserve the configured Host and port, and only that proxy should connect to the cleartext admin backend.
+- Use a dedicated admin hostname for cookie isolation. A cookie applies to every port on its host. HTTPS sessions use a host-only `__Host-shortcircuit_session` cookie with `Secure`, `HttpOnly`, `SameSite=Strict` and `Path=/`. Loopback HTTP uses a separate cookie name.
+- Setup, sign-in, recovery, and password changes share a bounded attempt budget of eight requests per peer and 60 per process per minute. The budget uses the TCP peer. Hosts behind one reverse proxy share its peer budget.
+- Browser writes require the configured Origin and `X-CSRF-Token`. Authentication entry points require the configured Origin. The bearer API uses scoped keys without session cookies. Only active browser sessions can manage keys.
+- The local CLI prints a short-lived one-time setup or recovery token. Treat this terminal output as a secret. Password changes and recovery revoke existing sessions and establish a new session. Review API keys separately after recovery.
 
 ## Proposed Defaults
 

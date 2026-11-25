@@ -1,16 +1,28 @@
 # API Contract
 
-## 0.1 Foundation
+## 0.2 Secure Administration
 
-The admin listener exposes `GET /healthz` and `GET /readyz` with status-only responses. Setting `ADMIN_TOKEN_FILE` enables `POST /api/v1/links` and `GET /api/v1/links` on the admin listener. Both routes require `Authorization: Bearer …`. An operator supplies the lab token as exactly 64 hexadecimal characters. The process keeps a SHA-256 digest for authentication. User sign-in is planned.
+The admin listener exposes `GET /healthz` and `GET /readyz` with status-only responses. The admin interface and its API use the configured `ADMIN_ORIGIN`. The public listener resolves enabled short links.
 
 | Operation | Request and response |
 |---|---|
-| `POST /api/v1/links` | Accepts JSON with `target` and optional `host` and `slug`. Returns `201` with `id`, `host`, `slug`, `target`, and `created_at`. Returns `409` if the slug is already in use on that host. Omitting `host` selects the first configured host. Omitting `slug` generates a ten-character slug. |
-| `GET /api/v1/links` | Accepts the optional `after_id` cursor. Returns JSON with `items` and `next_after_id`, with up to 100 records per page across the configured hosts. |
-| `GET /{slug}` or `HEAD /{slug}` | Served on the public listener. Returns `302` with the stored `Location` and `Cache-Control: no-store`. The redirect preserves the stored query and fragment and ignores the incoming query string. Slugs are case-sensitive and may span multiple path segments. |
+| `GET /api/v1/auth/session` | Returns `setup_required` and `user`. An active session receives the username and CSRF token. |
+| `POST /api/v1/auth/setup` | Accepts `token`, `username`, and `password`. Consumes the CLI claim and returns `201`, the username, CSRF token, and a session cookie. |
+| `POST /api/v1/auth/login` | Accepts `username` and `password` and returns an active session. |
+| `POST /api/v1/auth/recover` | Accepts the CLI recovery `token` and a new `password`. Revokes existing sessions and returns a replacement session. |
+| `POST /api/v1/auth/password` and `POST /api/v1/auth/logout` | Require a browser session and CSRF token. Password change accepts `current_password` and `password`. Logout revokes the cookie and returns `204`. |
+| `GET /api/v1/domains` | Returns the configured `hosts` visible to the caller and the local public port. |
+| `GET /api/v1/links` | Accepts the optional `after_id` cursor. Returns `items` and `next_after_id` with up to 100 records per page. |
+| `POST /api/v1/links` | Accepts `target` and optional `host`, `slug`, `title`, and `tags`. Returns `201` with the created link. A duplicate slug on the same host returns `409`. |
+| `PATCH /api/v1/links/{id}` | Accepts any of `target`, `title`, `enabled`, and `tags`. A supplied tag list replaces the previous list. The published host and slug remain fixed. |
+| `DELETE /api/v1/links/{id}` | Deletes a link and returns `204`. |
+| `GET` and `POST /api/v1/keys` | Require a browser session. Listing returns key metadata. Creation accepts `name`, `scopes`, optional `host`, and optional `expires_at` in Unix seconds. The response contains `key` and the one-time `token`. |
+| `DELETE /api/v1/keys/{id}` | Revokes the key and returns `204`. |
+| `GET` or `HEAD /{slug}` | Returns `302` with the stored `Location` and `Cache-Control: no-store` for an enabled public link. The destination retains its stored query string and fragment. |
 
-Manual slugs use ASCII letters, digits, hyphens, and underscores. Separate segments with a single slash. Slugs can be up to 200 bytes long. The create endpoint caps request bodies at 32 KiB. The public listener caps the combined path and query at 8,192 bytes. Destinations must be absolute HTTP or HTTPS URIs up to 4,096 bytes long, with valid percent encoding and no embedded credentials. The API validates the format and preserves the supplied spelling. Link API errors use `application/problem+json` with `status`, `title`, and `code`. Request examples appear in the [README](../README.md).
+Link objects contain `id`, `host`, `slug`, `target`, `created_at`, `title`, `enabled`, and `tags`. Slugs use case-sensitive ASCII letters, digits, hyphens, underscores, and segment separators. Their maximum is 200 bytes. Destinations are absolute HTTP or HTTPS URIs up to 4,096 bytes, with valid percent encoding and credentials excluded. A link can carry up to 20 tags. Titles and tags use limits of 160 and 40 Unicode characters respectively.
+
+An API key uses `Authorization: Bearer <token>`. A key can hold `read` for list operations, `write` for creation and edits, and `delete` for link deletion. An optional host restriction applies to both reads and changes. The browser supplies an exact `Origin` and `X-CSRF-Token` for session-authenticated changes. Errors use `application/problem+json` with `status`, `title`, and `code`. [Security design](SECURITY.md)
 
 ## Planned API
 

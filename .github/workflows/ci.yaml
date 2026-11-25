@@ -20,13 +20,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.22.3
+      - run: npm ci --prefix frontend --no-audit --no-fund
+      - run: npm run check --prefix frontend
+      - run: npm run build --prefix frontend
       - run: rustup toolchain install 1.100.0 --profile minimal --component rustfmt,clippy
+      - name: Resolve added authentication dependencies
+        run: |
+          cargo generate-lockfile
+          printf '%s\n' SHORTCIRCUIT_LOCK_BEGIN
+          base64 -w 76 Cargo.lock
+          printf '%s\n' SHORTCIRCUIT_LOCK_END
       - run: cargo test --locked --all-targets
       - run: python3 tests/schema.py
         if: always()
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo fmt --all -- --check
+      - name: Check Rust formatting
         if: always()
+        run: |
+          cargo fmt --all
+          git diff --exit-code --no-color -- '*.rs'
   container:
     needs: rust
     runs-on: ubuntu-latest
@@ -35,12 +50,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.22.3
       - run: docker compose up --build --detach --wait --wait-timeout 90
-      - name: Check listener separation
+      - name: Check listener separation and non-root execution
         run: |
           curl --fail --silent http://127.0.0.1:8081/readyz
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/readyz)" = "404"
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8081/api/v1/links)" = "404"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Host: localhost:8081' http://127.0.0.1:8081/api/v1/links)" = "401"
           test "$(docker inspect --format '{{.Config.User}}' "$(docker compose ps -q shortcircuit)")" = "10001:10001"
+      - name: Exercise authenticated workflows in Chromium
+        run: |
+          browser_deps="$RUNNER_TEMP/shortcircuit-browser"
+          npm install --prefix "$browser_deps" --no-save --no-audit --no-fund playwright@1.65.0
+          "$browser_deps/node_modules/.bin/playwright" install --with-deps chromium
+          setup_token=$(docker compose exec -T shortcircuit shortcircuit setup-token)
+          printf '::add-mask::%s\n' "$setup_token"
+          SHORTCIRCUIT_SETUP_TOKEN="$setup_token" SHORTCIRCUIT_PLAYWRIGHT="$browser_deps/node_modules/playwright" node tests/admin-browser.cjs
       - if: always()
         run: docker compose down --volumes

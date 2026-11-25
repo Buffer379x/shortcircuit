@@ -1,6 +1,6 @@
 # Architecture
 
-The 0.1 foundation contains source for public redirects, SQLite storage, and separate HTTP listeners. The target architecture uses a single Rust process and one ShortCircuit container with a local persistent volume. An existing reverse proxy terminates TLS and routes public and administrative traffic to separate listeners.
+ShortCircuit provides public redirects, SQLite storage, authenticated link management, and separate HTTP listeners. The target architecture uses a single Rust process and one ShortCircuit container with a local persistent volume. An existing reverse proxy terminates TLS and routes public and administrative traffic to separate listeners.
 
 ```mermaid
 flowchart LR
@@ -37,7 +37,7 @@ Independent routers let the public listener resolve slugs such as `/api` or `/ad
 
 ## Technology Choices
 
-The technology review records the candidates evaluated on November 25, 2026. The 0.1 repository pins Rust 1.100.0. Dependency approval includes license, maintenance, advisories, minimum supported Rust version, transitive features, and build behavior. [Rust Releases](https://blog.rust-lang.org/releases/)
+The technology review records the candidates evaluated on November 25, 2026. The repository pins Rust 1.100.0. Dependency approval includes license, maintenance, advisories, minimum supported Rust version, transitive features, and build behavior. [Rust Releases](https://blog.rust-lang.org/releases/)
 
 | Area | Proposed stack | Alternatives evaluated |
 |---|---|---|
@@ -48,7 +48,7 @@ The technology review records the candidates evaluated on November 25, 2026. The
 | URLs and cryptography | Use `url` to parse and validate destinations, with a separate field for the exact value to send. Use RustCrypto Argon2id for passwords and OS-provided cryptographic randomness through `getrandom` or suitable standard libraries. [URL Standard](https://url.spec.whatwg.org/) · [RustCrypto Argon2](https://docs.rs/argon2/latest/argon2/) | Custom URL normalization and cryptographic primitives raise implementation risk. |
 | QR | Evaluate `qrcode` and `fast_qr`. Generate a matrix, encode PNG locally, and produce deterministic SVG from numeric values and colors. Test with an independent decoder. [qrcode](https://docs.rs/crate/qrcode/latest) · [fast_qr](https://docs.rs/fast_qr/latest/fast_qr/) | Browser-side export can serve previews. API and QR image endpoints still need server-side generation. |
 | Admin UI | Build Svelte 5 and TypeScript statically with Vite. Use shared CSS custom properties, selective Lucide imports, typed translations, and browser `Intl` with an explicit time zone. Use native SVG for basic charts and lazy-load a chart library where interaction requires it. [Svelte](https://svelte.dev/docs/svelte/overview) · [Vite](https://vite.dev/guide/) · [Lucide](https://lucide.dev/) | HTML templates suit basic CRUD. Charts, QR previews, and large editors would require additional interaction code. A SvelteKit server adds a separate runtime. Tailwind remains an option alongside CSS tokens and components. |
-| Container image | Use a multi-stage build for amd64 first, with the bundled SQLite toolchain and Node only during the static build. Evaluate a maintained glibc-compatible Distroless image pinned by digest, with a CA bundle, required time zone data, and a non-root user. Measure the same build on Debian Slim, which the 0.1 Dockerfile uses. [Distroless](https://github.com/GoogleContainerTools/distroless) | A statically linked `scratch` image may be smaller and makes CA certificates, time zones, and platform compatibility harder to manage. |
+| Container image | Use a multi-stage build for amd64 first, with the bundled SQLite toolchain and Node only during the static build. Evaluate a maintained glibc-compatible Distroless image pinned by digest, with a CA bundle, required time zone data, and a non-root user. Measure the same build on Debian Slim, which the Dockerfile uses. [Distroless](https://github.com/GoogleContainerTools/distroless) | A statically linked `scratch` image may be smaller and makes CA certificates, time zones, and platform compatibility harder to manage. |
 
 Build assets with content hashes and optionally embed them and their precompressed variants in the binary. Serve the HTML shell and secret-bearing API responses without caching. Lazy-load analytics, QR Studio, and import modules. Render public errors, confirmation pages, and link pages from small server-side views. Reject executable user content. The accessibility target is WCAG 2.2 AA. [WCAG 2.2](https://www.w3.org/TR/WCAG22/)
 

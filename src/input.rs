@@ -24,10 +24,6 @@ impl PublicHosts {
         Ok(Self(hosts.into()))
     }
 
-    pub(crate) fn primary(&self) -> &str {
-        &self.0[0]
-    }
-
     pub(crate) fn all(&self) -> &[String] {
         &self.0
     }
@@ -80,6 +76,10 @@ fn request_authority(value: &str) -> Option<(String, Option<u16>)> {
 }
 
 pub(crate) fn request_host(uri: &Uri, headers: &HeaderMap) -> Option<String> {
+    request_host_port(uri, headers).map(|(host, _)| host)
+}
+
+pub(crate) fn request_host_port(uri: &Uri, headers: &HeaderMap) -> Option<(String, Option<u16>)> {
     let mut values = headers.get_all(HOST).iter();
     let header = values.next();
     if values.next().is_some() {
@@ -94,9 +94,9 @@ pub(crate) fn request_host(uri: &Uri, headers: &HeaderMap) -> Option<String> {
         if header.is_some_and(|header| header != uri_host) {
             return None;
         }
-        return Some(uri_host.0);
+        return Some(uri_host);
     }
-    header.map(|(host, _)| host)
+    header
 }
 
 pub(crate) fn valid_slug(slug: &str) -> bool {

@@ -1,6 +1,6 @@
 # ShortCircuit feature matrix
 
-Coverage as of November 25, 2026. **Current** means the 0.1 implementation is present in source. **Planned** means work is scheduled in the roadmap. **Optional** identifies additions subject to demonstrated need. [Project status](PROJECT_STATUS.md) · [Roadmap](ROADMAP.md)
+Coverage as of November 25, 2026. **Current** means the current development implementation is present in source. **Planned** means work is scheduled in the roadmap. **Optional** identifies additions subject to demonstrated need. [Project status](PROJECT_STATUS.md) · [Roadmap](ROADMAP.md)
 
 Priority **P0** covers production readiness and safe operation. **P1** covers the core 1.0 feature set. **P2** covers follow-up work and enhancements. **P3** and **P4** cover longer-term options.
 
@@ -8,11 +8,11 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 
 | Capability | Status | Priority | Scope |
 |---|---|---|---|
-| Create and list links | Current | P0 | The optional development admin API accepts absolute HTTP or HTTPS destinations, preserves their stored URI spelling, and lists links with a cursor. |
+| Create and list links | Current | P0 | The authenticated admin API accepts absolute HTTP or HTTPS destinations, preserves their stored URI spelling, and lists links with a cursor. |
 | Custom and generated slugs | Current | P0 | Slugs are case-sensitive and can contain multiple segments. Custom segments use ASCII letters, digits, hyphens, and underscores. Generated slugs use 10 random characters. The database enforces uniqueness per host. |
 | Host-bound redirects | Current | P0 | Configured hosts can reuse the same slug independently. For a matching link, public GET and HEAD return `302` with the stored `Location` and `Cache-Control: no-store`. Matching uses the normalized host and exact path. |
 | Verify published addresses | Planned | P0 | Recreate required short URLs and check the configured host, exact slug, status, and destination through the intended proxy. Scan printed QR codes or compare their decoded URLs when applicable. |
-| Edit links and destinations | Planned | P0 | Update destinations, titles, tags, status, and limits. Warn about cache behavior for permanent redirects. |
+| Edit links and destinations | Current | P0 | Update destinations, titles, tags, and enabled status. Published hosts and slugs stay fixed. |
 | Activation windows and visit limits | Planned | P0 | Evaluate time windows in UTC. Reserve limited visits atomically using a dedicated ledger with separate analytics counting. |
 | Redirect status and forwarding options | Planned | P0 | Add per-link status and explicit query forwarding and extra-path policies. Keep temporary redirects and `no-store` for protected and limited links. Verify encoded paths, query keys, and fragments. |
 | Domain management and fallbacks | Planned | P0/P1 | Manage allowed public hosts from the admin UI and configure validated fallback targets per domain. Test route collisions, errors, and redirect loops. |
@@ -48,9 +48,9 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Capability | Status | Priority | Scope |
 |---|---|---|---|
 | Separate listeners and local storage | Current | P0 | The Rust source defines independent public and admin routers, loopback bind defaults, and a versioned local SQLite schema with WAL and full synchronization. |
-| Development API authorization and errors | Current | P0 | The link API is enabled by a configured bearer token file and returns structured problem responses. The public listener serves redirects independently. |
+| Admin API authorization and errors | Current | P0 | Browser sessions and scoped bearer keys authorize the link API. Errors use structured problem responses. The public listener serves redirects independently. |
 | Liveness and readiness | Current | P0 | The admin listener serves minimal status-only probes for process and database readiness. |
-| Interactive setup and authentication | Planned | P0 | Use a short-lived CLI setup token, secure sessions, CSRF protection, and documented recovery. Keep the administration interface behind LAN or VPN access. |
+| Interactive setup and authentication | Current | P0 | A short-lived CLI setup token, revocable sessions, CSRF protection, and documented recovery are available. Keep the administration interface behind LAN or VPN access. |
 | Scoped API credentials and contract | Planned | P0/P1 | Add scoped keys, optional domain restrictions, rotation, revocation, request IDs, and a versioned OpenAPI contract. |
 | Audit, diagnostics, and abuse controls | Planned | P0 | Audit sensitive operations, rate-limit protected endpoints, and make detailed diagnostics available to authorized administrators. |
 | Backup and restore | Planned | P0 | Create consistent snapshots and verify restore, crash recovery, and upgrade behavior on the target host. |
@@ -64,8 +64,8 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 
 | Capability | Status | Priority | Scope |
 |---|---|---|---|
-| Admin interface | Planned | P1 | Build a responsive dashboard, quick link creation, link details, domain and tag management, saved settings, and accessible search and filters. The static preview demonstrates selected workflows with sample data. [Design system](DESIGN_SYSTEM.md) |
-| Localization and themes | Planned | P1 | Support English and German interface text, dark, light, and system themes, and locale-aware date and number display. |
+| Admin interface | Current | P1 | Account setup, links, tags, and API key management are available in the responsive embedded interface. The design preview covers planned dashboard and monitoring screens. [Design system](DESIGN_SYSTEM.md) |
+| Localization and themes | Current | P1 | Support English and German interface text, dark, light, and system themes, and locale-aware date and number display. |
 | Local QR generation | Planned | P1 | Export basic SVG and PNG codes locally and test them with an independent decoder. |
 | QR Studio | Planned | P1 | Add error correction, quiet zone, colors, transparency, templates, and optional logos after validating scan reliability. |
 | Destination title lookup | Optional | P1 | Enable title fetching explicitly through the shared outbound HTTP client, with validated targets and response limits. |

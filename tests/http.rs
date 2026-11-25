@@ -5,10 +5,10 @@ use axum::{
     response::Response,
 };
 use serde_json::{Value, json};
-use shortcircuit::{AdminKey, PublicHosts, admin_router, open_database, public_router};
+use shortcircuit::{AdminConfig, Auth, BootstrapKind, PublicHosts, admin_router, open_database, public_router};
 use tower::ServiceExt;
 
-const TOKEN: &str = "512f19995ff89f5fb6f8a792773dd8ff2e81d67fe754fdc20378198589c87ac5";
+const ADMIN_HOST: &str = "admin.example";
 const TARGET: &str = "https://example.test/file?sig=XL%2f&key=A+B&key=C#original";
 
 struct App {
@@ -17,6 +17,7 @@ struct App {
     pool: sqlx::SqlitePool,
     public: Router,
     admin: Router,
+    key: String,
 }
 
 impl App {
@@ -26,21 +27,26 @@ impl App {
         let pool = open_database(&database).await.unwrap();
         let hosts = PublicHosts::parse("go.example,s.example").unwrap();
         let public = public_router(pool.clone(), hosts.clone());
-        let admin = admin_router(pool.clone(), hosts, Some(AdminKey::parse(TOKEN).unwrap()));
+        let auth=Auth::new(pool.clone());
+        let setup=auth.issue_bootstrap(BootstrapKind::Setup).await.unwrap();
+        auth.setup(&setup, "Owner", "synthetic-password-for-testing").await.unwrap();
+        let key=auth.create_key("test suite", vec!["read".into(), "write".into(), "delete".into()], None, None).await.unwrap().token;
+        let admin = admin_router(pool.clone(), hosts, AdminConfig::new("https://admin.example",8080).unwrap());
         Self {
             _temp: temp,
             database,
             pool,
             public,
             admin,
+            key,
         }
     }
 
     async fn create(&self, body: Value, authenticated: bool) -> Response {
         let mut request =
-            Request::post("/api/v1/links").header(header::CONTENT_TYPE, "application/json");
+            Request::post("/api/v1/links").header(header::HOST, ADMIN_HOST).header(header::CONTENT_TYPE, "application/json");
         if authenticated {
-            request = request.header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
+            request = request.header(header::AUTHORIZATION, format!("Bearer {}",self.key));
         }
         self.admin
             .clone()
@@ -89,15 +95,8 @@ async fn admin_creation_requires_a_key_and_public_cannot_create() {
     let response = redirect(&app.public, "POST", "/api/v1/links", "go.example").await;
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(response.headers()[header::ALLOW], "GET, HEAD");
-    let disabled_admin = admin_router(
-        app.pool.clone(),
-        PublicHosts::parse("go.example").unwrap(),
-        None,
-    );
     assert_eq!(
-        redirect(&disabled_admin, "GET", "/api/v1/links", "go.example")
-            .await
-            .status(),
+        redirect(&app.admin, "GET", "/api/v1/links", "go.example").await.status(),
         StatusCode::NOT_FOUND
     );
 }
@@ -213,7 +212,7 @@ async fn diagnostics_are_admin_only_and_readiness_checks_the_store() {
 async fn admin_list_is_authenticated_and_respects_configured_hosts() {
     let app = App::start().await;
     assert_eq!(
-        redirect(&app.admin, "GET", "/api/v1/links", "localhost")
+        redirect(&app.admin, "GET", "/api/v1/links", ADMIN_HOST)
             .await
             .status(),
         StatusCode::UNAUTHORIZED
@@ -235,7 +234,7 @@ async fn admin_list_is_authenticated_and_respects_configured_hosts() {
     .await
     .unwrap();
 
-    let list = authenticated_list(&app.admin, "/api/v1/links").await;
+    let list = authenticated_list(&app.admin, &app.key, "/api/v1/links").await;
     assert_eq!(list["items"][0]["slug"], "one");
     assert_eq!(list["items"][0]["target"], TARGET);
     let items = list["items"].as_array().unwrap();
@@ -243,15 +242,16 @@ async fn admin_list_is_authenticated_and_respects_configured_hosts() {
     assert!(items.iter().all(|item| item["host"] == "go.example"));
     let cursor = list["next_after_id"].as_i64().unwrap();
     let remainder =
-        authenticated_list(&app.admin, &format!("/api/v1/links?after_id={cursor}")).await;
+        authenticated_list(&app.admin, &app.key, &format!("/api/v1/links?after_id={cursor}")).await;
     assert_eq!(remainder["items"].as_array().unwrap().len(), 1);
     assert_eq!(remainder["items"][0]["slug"], "link-100");
     assert!(remainder["next_after_id"].is_null());
 }
 
-async fn authenticated_list(admin: &Router, path: &str) -> Value {
+async fn authenticated_list(admin: &Router, token: &str, path: &str) -> Value {
     let request = Request::get(path)
-        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .header(header::HOST, ADMIN_HOST)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .body(Body::empty())
         .unwrap();
     let response = admin.clone().oneshot(request).await.unwrap();
