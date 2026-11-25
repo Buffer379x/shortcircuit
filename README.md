@@ -25,7 +25,7 @@ curl --fail-with-body --header @admin-header --json '{"slug":"handbook","target"
 curl --head http://localhost:8080/handbook
 ```
 
-`docker compose up --build` runs the server with a persistent local Docker volume and publishes both ports on the host's loopback interface. The container runs as UID/GID 10001. The default Compose file leaves the link administration API disabled. To enable it, configure `ADMIN_TOKEN_FILE` and mount a token file readable only by the runtime user. Build and container verification are pending. [API reference](docs/API.md) · [Development status](docs/PROJECT_STATUS.md)
+`docker compose up --build` runs the server with a persistent local Docker volume and publishes both ports on the host's loopback interface. The container runs as UID/GID 10001. The default Compose file leaves the link administration API disabled. To enable it, configure `ADMIN_TOKEN_FILE` and mount a token file readable only by the runtime user. [API reference](docs/API.md) · [CI results](https://github.com/Buffer379x/shortcircuit/actions)
 
 ## Design preview
 

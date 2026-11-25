@@ -31,19 +31,32 @@ type LinkRow = (i64, String, String, String, String);
 
 impl From<LinkRow> for Link {
     fn from((id, host, slug, target, created_at): LinkRow) -> Self {
-        Self { id, host, slug, target, created_at }
+        Self {
+            id,
+            host,
+            slug,
+            target,
+            created_at,
+        }
     }
 }
 
 pub async fn open_database(path: &Path) -> Result<SqlitePool, Box<dyn Error + Send + Sync>> {
-    let mut probe = SqliteConnection::connect_with(&SqliteConnectOptions::new().in_memory(true)).await?;
+    let mut probe =
+        SqliteConnection::connect_with(&SqliteConnectOptions::new().in_memory(true)).await?;
     let version: String = sqlx::query_scalar("SELECT sqlite_version()")
         .fetch_one(&mut probe)
         .await?;
     probe.close().await?;
-    let parts = version.split('.').map(str::parse).collect::<Result<Vec<u32>, _>>()?;
+    let parts = version
+        .split('.')
+        .map(str::parse)
+        .collect::<Result<Vec<u32>, _>>()?;
     if parts.as_slice() < MIN_SQLITE.as_slice() {
-        return Err(io::Error::other(format!("SQLite {version} does not meet the minimum version 3.51.3")).into());
+        return Err(io::Error::other(format!(
+            "SQLite {version} does not meet the minimum version 3.51.3"
+        ))
+        .into());
     }
     prepare_file(path)?;
 
@@ -74,7 +87,10 @@ fn prepare_file(path: &Path) -> io::Result<()> {
         directories.mode(0o700);
         file.mode(0o600);
     }
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         directories.create(parent)?;
     }
     match file.open(path) {
@@ -121,9 +137,8 @@ pub(crate) async fn list(
     hosts: &[String],
     after_id: i64,
 ) -> Result<Vec<Link>, sqlx::Error> {
-    let mut query = sqlx::QueryBuilder::new(
-        "SELECT id, host, slug, target, created_at FROM links WHERE id > ",
-    );
+    let mut query =
+        sqlx::QueryBuilder::new("SELECT id, host, slug, target, created_at FROM links WHERE id > ");
     query.push_bind(after_id).push(" AND host IN (");
     {
         let mut placeholders = query.separated(", ");
@@ -131,7 +146,9 @@ pub(crate) async fn list(
             placeholders.push_bind(host);
         }
     }
-    query.push(") ORDER BY id LIMIT ").push_bind((PAGE_SIZE + 1) as i64);
+    query
+        .push(") ORDER BY id LIMIT ")
+        .push_bind((PAGE_SIZE + 1) as i64);
     query
         .build_query_as::<LinkRow>()
         .fetch_all(pool)

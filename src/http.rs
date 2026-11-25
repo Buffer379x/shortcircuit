@@ -23,7 +23,8 @@ const SHORTCODE_LEN: usize = 10;
 const MAX_CODE_ATTEMPTS: usize = 8;
 const MAX_REQUEST_URI: usize = 8192;
 const MAX_CREATE_BODY: usize = 32_768;
-const SHORTCODE_ALPHABET: &[u8; 64] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
+const SHORTCODE_ALPHABET: &[u8; 64] =
+    b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
 
 #[derive(Clone)]
 pub struct AdminKey([u8; 32]);
@@ -38,7 +39,11 @@ impl AdminKey {
 
     fn matches(&self, value: &str) -> bool {
         is_key_format(value)
-            && bool::from(self.0.as_slice().ct_eq(Sha256::digest(value.as_bytes()).as_slice()))
+            && bool::from(
+                self.0
+                    .as_slice()
+                    .ct_eq(Sha256::digest(value.as_bytes()).as_slice()),
+            )
     }
 }
 
@@ -81,8 +86,14 @@ async fn response_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
-    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     response
 }
 
@@ -95,10 +106,14 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
             .into_response();
     }
     let uri = request.uri();
-    if uri.path_and_query().is_some_and(|value| value.as_str().len() > MAX_REQUEST_URI) {
+    if uri
+        .path_and_query()
+        .is_some_and(|value| value.as_str().len() > MAX_REQUEST_URI)
+    {
         return StatusCode::URI_TOO_LONG.into_response();
     }
-    let Some(host) = request_host(uri, request.headers()).filter(|host| state.hosts.contains(host)) else {
+    let Some(host) = request_host(uri, request.headers()).filter(|host| state.hosts.contains(host))
+    else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let Some(slug) = uri.path().strip_prefix('/').filter(|slug| valid_slug(slug)) else {
@@ -266,6 +281,13 @@ async fn list_links(
         .map_err(|_| ApiError::unavailable())?;
     let has_more = items.len() > PAGE_SIZE;
     items.truncate(PAGE_SIZE);
-    let next_after_id = if has_more { items.last().map(|link| link.id) } else { None };
-    Ok(Json(LinkPage { items, next_after_id }))
+    let next_after_id = if has_more {
+        items.last().map(|link| link.id)
+    } else {
+        None
+    };
+    Ok(Json(LinkPage {
+        items,
+        next_after_id,
+    }))
 }

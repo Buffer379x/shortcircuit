@@ -1,7 +1,7 @@
 FROM rust:1.100.0-bookworm AS build
 WORKDIR /build
 COPY . .
-RUN cargo build --release
+RUN cargo build --locked --release
 
 FROM debian:bookworm-slim AS runtime
 LABEL org.opencontainers.image.title="ShortCircuit" \

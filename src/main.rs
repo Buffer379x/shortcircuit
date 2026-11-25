@@ -56,7 +56,8 @@ async fn wait_for_stop(mut receiver: watch::Receiver<bool>) {
 async fn signal_to_stop() -> io::Result<()> {
     #[cfg(unix)]
     {
-        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         tokio::select! {
             result = tokio::signal::ctrl_c() => result,
             _ = terminate.recv() => Ok(()),
@@ -103,7 +104,10 @@ async fn serve() -> Result<(), AppError> {
             Ok(())
         }
     };
-    if time::timeout(Duration::from_secs(2), pool.close()).await.is_err() {
+    if time::timeout(Duration::from_secs(2), pool.close())
+        .await
+        .is_err()
+    {
         tracing::warn!("database pool shutdown deadline reached");
     }
     result?;
@@ -142,8 +146,12 @@ fn main() -> Result<(), AppError> {
         }
         (None, None) => {
             let level = setting("LOG_LEVEL", "info")?;
-            let filter = EnvFilter::try_new(level).map_err(|_| io::Error::other("invalid LOG_LEVEL"))?;
-            tracing_subscriber::fmt().with_env_filter(filter).json().init();
+            let filter =
+                EnvFilter::try_new(level).map_err(|_| io::Error::other("invalid LOG_LEVEL"))?;
+            tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .json()
+                .init();
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()

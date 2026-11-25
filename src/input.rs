@@ -111,10 +111,9 @@ pub(crate) fn valid_slug(slug: &str) -> bool {
 
 pub(crate) fn valid_target(value: &str) -> bool {
     if value.len() > 4096
-        || !value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || b"-._~:/?#[]@!$&'()*+,;=%".contains(&byte)
-        })
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-._~:/?#[]@!$&'()*+,;=%".contains(&byte))
     {
         return false;
     }
