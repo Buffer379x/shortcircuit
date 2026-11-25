@@ -25,7 +25,10 @@ struct CatalogState {
 
 pub(super) fn routes(pool: SqlitePool, hosts: PublicHosts, local_port: u16) -> Router {
     Router::new()
-        .route("/api/v1/catalog/domains", get(list_domains).post(save_domain))
+        .route(
+            "/api/v1/catalog/domains",
+            get(list_domains).post(save_domain),
+        )
         .route(
             "/api/v1/catalog/tags",
             get(list_tags).patch(rename_tag).delete(remove_tag),
@@ -139,13 +142,12 @@ async fn rename_tag(
     let new_name = tag_name(&input.new_name).ok_or_else(|| Problem::invalid("invalid_tags"))?;
 
     if name == new_name {
-        let exists = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM link_tags WHERE tag = ?)",
-        )
-        .bind(name)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|_| Problem::unavailable())?;
+        let exists =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM link_tags WHERE tag = ?)")
+                .bind(name)
+                .fetch_one(&state.pool)
+                .await
+                .map_err(|_| Problem::unavailable())?;
         return tag_status(exists);
     }
 
@@ -247,7 +249,11 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let router = routes(pool.clone(), PublicHosts::parse("go.example").unwrap(), 8080);
+        let router = routes(
+            pool.clone(),
+            PublicHosts::parse("go.example").unwrap(),
+            8080,
+        );
         let path = "/api/v1/catalog/tags";
         let merged = request(
             &router,

@@ -27,12 +27,6 @@ jobs:
       - run: npm run check --prefix frontend
       - run: npm run build --prefix frontend
       - run: rustup toolchain install 1.100.0 --profile minimal --component rustfmt,clippy
-      - name: Generate and report the dependency lockfile
-        run: |
-          cargo generate-lockfile
-          echo SHORTCIRCUIT_LOCK_BEGIN
-          base64 -w 76 Cargo.lock
-          echo SHORTCIRCUIT_LOCK_END
       - run: cargo test --locked --all-targets
       - run: python3 tests/schema.py
         if: always()

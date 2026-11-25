@@ -242,8 +242,8 @@ pub(crate) async fn replace_policy(
     policy: Policy,
 ) -> Result<Option<PolicyDetails>, PolicyError> {
     validate_policy(&policy)?;
-    let rules =
-        serde_json::to_string(&policy.rules).map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
+    let rules = serde_json::to_string(&policy.rules)
+        .map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
     let mut query = QueryBuilder::new(
         "INSERT INTO link_redirect_policies
          (link_id, status, starts_at, expires_at, max_visits, forward_query, forward_path, rules)
@@ -275,10 +275,10 @@ pub(crate) async fn replace_policy(
         .fetch_all(&mut *transaction)
         .await?;
     transaction.commit().await?;
-    Ok(visits
-        .into_iter()
-        .next()
-        .map(|visits_used| PolicyDetails { policy, visits_used }))
+    Ok(visits.into_iter().next().map(|visits_used| PolicyDetails {
+        policy,
+        visits_used,
+    }))
 }
 
 fn validate_policy(policy: &Policy) -> Result<(), PolicyError> {
@@ -294,7 +294,9 @@ fn validate_policy(policy: &Policy) -> Result<(), PolicyError> {
         return Err(PolicyError::Invalid("invalid_visit_limit"));
     }
     if matches!(policy.status, 301 | 308)
-        && (policy.starts_at.is_some() || policy.expires_at.is_some() || policy.max_visits.is_some())
+        && (policy.starts_at.is_some()
+            || policy.expires_at.is_some()
+            || policy.max_visits.is_some())
     {
         return Err(PolicyError::Invalid(
             "permanent_redirect_requires_unrestricted_link",
@@ -553,7 +555,9 @@ fn forward(target: &str, suffix: &str, query: Option<&str>) -> String {
     if let Some(query) = query {
         match existing_query {
             None => location.push('?'),
-            Some(existing) if !existing.is_empty() && !existing.ends_with('&') => location.push('&'),
+            Some(existing) if !existing.is_empty() && !existing.ends_with('&') => {
+                location.push('&')
+            }
             _ => {}
         }
         // Preserve ordinary URI bytes, including existing escapes and parameter order.
@@ -698,8 +702,9 @@ mod tests {
         assert_eq!(
             resolve(&pool, request("Team/DocsOther")).await.unwrap(),
             Outcome::Redirect {
-                target: "https://target.example/base/DocsOther?Signature=XL%2f&key=A+B&key=C#original"
-                    .to_owned(),
+                target:
+                    "https://target.example/base/DocsOther?Signature=XL%2f&key=A+B&key=C#original"
+                        .to_owned(),
                 status: 302,
             }
         );
@@ -740,7 +745,10 @@ mod tests {
         )
         .await;
         for slug in ["Team/Disabled", "Team/Expired", "Team/Future"] {
-            assert_eq!(resolve(&pool, request(slug)).await.unwrap(), Outcome::Blocked);
+            assert_eq!(
+                resolve(&pool, request(slug)).await.unwrap(),
+                Outcome::Blocked
+            );
         }
     }
 
@@ -871,7 +879,12 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(read_policy(&pool, &unauthorized, link).await.unwrap().is_none());
+        assert!(
+            read_policy(&pool, &unauthorized, link)
+                .await
+                .unwrap()
+                .is_none()
+        );
         let hosts = [HOST.to_owned()];
         for policy in [
             Policy {

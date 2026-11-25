@@ -68,8 +68,10 @@ pub fn admin_router(pool: SqlitePool, hosts: PublicHosts, config: AdminConfig) -
     let link_routes = links::routes(pool.clone(), state.clone()).route_layer(
         middleware::from_fn_with_state(state.clone(), access::link_access),
     );
-    let catalog_routes = catalog::routes(pool.clone(), state.hosts.clone(), state.config.local_port)
-        .route_layer(middleware::from_fn_with_state(state.clone(), access::browser_access));
+    let catalog_routes =
+        catalog::routes(pool.clone(), state.hosts.clone(), state.config.local_port).route_layer(
+            middleware::from_fn_with_state(state.clone(), access::browser_access),
+        );
     let application = Router::new()
         .route("/api/v1/auth/session", get(session_status))
         .merge(sign_in)
@@ -249,7 +251,8 @@ async fn create_key(
     let host = if let Some(raw) = input.host {
         let host = normalize_host(&raw).ok_or_else(|| Problem::invalid("invalid_host"))?;
         let domain = domains::lookup(&state.pool, &state.hosts, &host, state.config.local_port)
-            .await.map_err(|_| Problem::unavailable())?;
+            .await
+            .map_err(|_| Problem::unavailable())?;
         if domain.is_none() {
             return Err(Problem::invalid("invalid_host"));
         }

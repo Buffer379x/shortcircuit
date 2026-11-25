@@ -39,7 +39,10 @@ pub(super) fn routes(pool: SqlitePool, app: AppState) -> Router {
         .route("/api/v1/domains", get(domains))
         .route("/api/v1/links", get(list_links).post(create_link))
         .route("/api/v1/links/{id}", patch(update_link).delete(remove_link))
-        .route("/api/v1/links/{id}/policy", get(read_policy).patch(replace_policy))
+        .route(
+            "/api/v1/links/{id}/policy",
+            get(read_policy).patch(replace_policy),
+        )
         .route("/api/v1/links/{id}/qr", get(link_qr))
         .with_state(LinkState { pool, app })
 }
@@ -52,8 +55,12 @@ impl LinkAccess {
             domains::list(&state.pool, &state.app.hosts, state.app.config.local_port)
                 .await
                 .map(|items| items.into_iter().map(|domain| domain.host).collect())
-        }.map_err(|_| Problem::unavailable())?;
-        Ok(hosts.into_iter().filter(|host| self.permits(host)).collect())
+        }
+        .map_err(|_| Problem::unavailable())?;
+        Ok(hosts
+            .into_iter()
+            .filter(|host| self.permits(host))
+            .collect())
     }
 
     fn permits(&self, host: &str) -> bool {
@@ -73,7 +80,8 @@ async fn domains(
     Extension(access): Extension<LinkAccess>,
 ) -> Result<Json<Domains>, Problem> {
     let items = domains::list(&state.pool, &state.app.hosts, state.app.config.local_port)
-        .await.map_err(|_| Problem::unavailable())?;
+        .await
+        .map_err(|_| Problem::unavailable())?;
     let mut response = Domains {
         hosts: Vec::new(),
         origins: BTreeMap::new(),
@@ -317,7 +325,13 @@ async fn replace_policy(
         .await
         .map_err(|error| match error {
             PolicyError::Invalid(code) => Problem::invalid(code),
-            PolicyError::Database(_) => Problem::unavailable(),
+            PolicyError::Database(error) => {
+                tracing::debug!(
+                    code = ?error.as_database_error().and_then(|error| error.code()),
+                    "redirect policy write failed"
+                );
+                Problem::unavailable()
+            }
         })?
         .map(Json)
         .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
@@ -344,23 +358,34 @@ async fn link_qr(
         "png" => (Format::Png, "image/png"),
         _ => return Err(Problem::invalid("invalid_qr_format")),
     };
-    let (host, slug) = sqlx::query_as::<_, (String, String)>("SELECT host, slug FROM links WHERE id = ?")
-        .bind(resource_id(id)?)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|_| Problem::unavailable())?
-        .filter(|(host, _)| access.permits(host))
-        .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
-    let domain = domains::lookup(&state.pool, &state.app.hosts, &host, state.app.config.local_port)
-        .await
-        .map_err(|_| Problem::unavailable())?
-        .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
+    let (host, slug) =
+        sqlx::query_as::<_, (String, String)>("SELECT host, slug FROM links WHERE id = ?")
+            .bind(resource_id(id)?)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|_| Problem::unavailable())?
+            .filter(|(host, _)| access.permits(host))
+            .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
+    let domain = domains::lookup(
+        &state.pool,
+        &state.app.hosts,
+        &host,
+        state.app.config.local_port,
+    )
+    .await
+    .map_err(|_| Problem::unavailable())?
+    .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
     let value = format!("{}/{}", domain.origin, slug);
-    let permit = QR_WORK.try_acquire().map_err(|_| Problem(StatusCode::TOO_MANY_REQUESTS, "try_again_later"))?;
+    let permit = QR_WORK
+        .try_acquire()
+        .map_err(|_| Problem(StatusCode::TOO_MANY_REQUESTS, "try_again_later"))?;
     let bytes = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         qr::generate(&value, format, options.size)
-    }).await.map_err(|_| Problem::unavailable())?.map_err(|error| match error {
+    })
+    .await
+    .map_err(|_| Problem::unavailable())?
+    .map_err(|error| match error {
         QrError::InvalidSize => Problem::invalid("invalid_qr_size"),
         QrError::DataTooLong => Problem::invalid("qr_data_too_long"),
         QrError::EncodingFailed => Problem::unavailable(),

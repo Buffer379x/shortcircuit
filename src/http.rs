@@ -44,21 +44,22 @@ pub(crate) async fn response_headers(request: Request, next: Next) -> Response {
 }
 
 async fn resolve(State(state): State<AppState>, request: Request) -> Response {
-    if !matches!(*request.method(), Method::GET | Method::HEAD) {
+    let (parts, _) = request.into_parts();
+    if !matches!(parts.method, Method::GET | Method::HEAD) {
         return (
             StatusCode::METHOD_NOT_ALLOWED,
             [(header::ALLOW, "GET, HEAD")],
         )
             .into_response();
     }
-    let uri = request.uri();
+    let uri = &parts.uri;
     if uri
         .path_and_query()
         .is_some_and(|value| value.as_str().len() > MAX_REQUEST_URI)
     {
         return StatusCode::URI_TOO_LONG.into_response();
     }
-    let Some(host) = request_host(uri, request.headers()) else {
+    let Some(host) = request_host(uri, &parts.headers) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let domain = match domains::lookup(&state.pool, &state.hosts, &host, 8080).await {
@@ -75,14 +76,19 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
     if !valid_slug(slug) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let value = |name| request.headers().get(name).and_then(|value| value.to_str().ok());
+    let value = |name| {
+        parts
+            .headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+    };
     let lookup = RedirectRequest {
         host: &host,
         slug,
         query: uri.query(),
         user_agent: value(header::USER_AGENT),
         language: value(header::ACCEPT_LANGUAGE),
-        head: request.method() == Method::HEAD,
+        head: parts.method == Method::HEAD,
     };
     match redirect::resolve(&state.pool, lookup).await {
         Ok(Outcome::Redirect { target, status }) => respond(&target, status),

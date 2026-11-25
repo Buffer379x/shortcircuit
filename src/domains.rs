@@ -48,13 +48,12 @@ pub(crate) async fn active_hosts(
     pool: &SqlitePool,
     hosts: &PublicHosts,
 ) -> Result<Vec<String>, sqlx::Error> {
-    let mut managed: BTreeMap<_, _> = sqlx::query_as::<_, (String, bool)>(
-        "SELECT host, enabled FROM domains",
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .collect();
+    let mut managed: BTreeMap<_, _> =
+        sqlx::query_as::<_, (String, bool)>("SELECT host, enabled FROM domains")
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .collect();
     let mut active: Vec<_> = hosts
         .all()
         .iter()
@@ -82,7 +81,11 @@ pub(crate) async fn lookup(
     .bind(host)
     .fetch_optional(pool)
     .await?;
-    Ok(domain.or_else(|| hosts.contains(host).then(|| default_domain(host, local_port))))
+    Ok(domain.or_else(|| {
+        hosts
+            .contains(host)
+            .then(|| default_domain(host, local_port))
+    }))
 }
 
 pub(crate) async fn save(pool: &SqlitePool, domain: &Domain) -> Result<bool, sqlx::Error> {
@@ -261,6 +264,9 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(stored, ("Docs".to_owned(), "https://example.test".to_owned()));
+        assert_eq!(
+            stored,
+            ("Docs".to_owned(), "https://example.test".to_owned())
+        );
     }
 }

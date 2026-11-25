@@ -46,7 +46,12 @@ pub(crate) fn generate(value: &str, format: Format, size: Option<u16>) -> Result
         .into_iter()
         .enumerate()
         .filter(|&(_, color)| color == Color::Dark)
-        .map(|(index, _)| (margin + index % width * scale, margin + index / width * scale));
+        .map(|(index, _)| {
+            (
+                margin + index % width * scale,
+                margin + index / width * scale,
+            )
+        });
 
     match format {
         Format::Svg => Ok(svg(size, scale, dark_modules)),
@@ -83,7 +88,9 @@ fn png(
     let mut encoder = png::Encoder::new(&mut output, size as u32, size as u32);
     encoder.set_color(png::ColorType::Grayscale);
     encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(|_| QrError::EncodingFailed)?;
+    let mut writer = encoder
+        .write_header()
+        .map_err(|_| QrError::EncodingFailed)?;
     writer
         .write_image_data(&pixels)
         .map_err(|_| QrError::EncodingFailed)?;
@@ -123,7 +130,13 @@ mod tests {
         assert!(svg.contains(r##"<rect width="330" height="330" fill="#fff"/>"##));
         assert!(svg.contains(r##"<path fill="#000""##));
 
-        let path = svg.split_once(" d=\"").unwrap().1.split_once('"').unwrap().0;
+        let path = svg
+            .split_once(" d=\"")
+            .unwrap()
+            .1
+            .split_once('"')
+            .unwrap()
+            .0;
         assert!(path.starts_with("M40 40h10v10h-10z"));
         let mut pixels = vec![255; 330 * 330];
         for square in path.trim_start_matches('M').split('M') {
