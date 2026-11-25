@@ -112,7 +112,11 @@ mod tests {
         let pool = crate::open_database(&directory.path().join("duplicates.sqlite"))
             .await
             .unwrap();
-        let router = routes(pool.clone(), PublicHosts::parse("go.example").unwrap(), 8080);
+        let router = routes(
+            pool.clone(),
+            PublicHosts::parse("go.example").unwrap(),
+            8080,
+        );
         (directory, pool, router)
     }
 

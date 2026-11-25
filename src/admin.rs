@@ -103,8 +103,10 @@ fn build_admin_router(
     let exchange_routes = exchange::routes(pool.clone(), state.hosts.clone()).route_layer(
         middleware::from_fn_with_state(state.clone(), access::browser_access),
     );
-    let duplicate_routes = duplicates::routes(pool.clone(), state.hosts.clone(), state.config.local_port)
-        .route_layer(middleware::from_fn_with_state(state.clone(), access::browser_access));
+    let duplicate_routes =
+        duplicates::routes(pool.clone(), state.hosts.clone(), state.config.local_port).route_layer(
+            middleware::from_fn_with_state(state.clone(), access::browser_access),
+        );
     let application = Router::new()
         .route("/api/v1/auth/session", get(session_status))
         .merge(sign_in)
