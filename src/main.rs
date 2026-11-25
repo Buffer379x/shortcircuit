@@ -3,14 +3,15 @@
 use std::{
     env,
     error::Error,
-    fs::File,
     io::{self, Read, Write},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream},
     path::PathBuf,
     time::Duration,
 };
 
-use shortcircuit::{AdminKey, PublicHosts, admin_router, open_database, public_router};
+use shortcircuit::{
+    AdminConfig, Auth, BootstrapKind, PublicHosts, admin_router, open_database, public_router,
+};
 use tokio::{net::TcpListener, sync::watch, time};
 use tracing_subscriber::EnvFilter;
 
@@ -33,20 +34,25 @@ fn setting(variable: &str, default: &str) -> Result<String, AppError> {
     }
 }
 
-fn admin_key() -> Result<Option<AdminKey>, AppError> {
-    let Some(path) = env::var_os("ADMIN_TOKEN_FILE") else {
-        return Ok(None);
-    };
-    let mut bytes = Vec::with_capacity(67);
-    File::open(path)?.take(67).read_to_end(&mut bytes)?;
-    let contents = std::str::from_utf8(&bytes)?;
-    let key = contents
-        .strip_suffix("\r\n")
-        .or_else(|| contents.strip_suffix('\n'))
-        .unwrap_or(contents);
-    AdminKey::parse(key)
-        .map(Some)
-        .map_err(|message| io::Error::other(message).into())
+fn database_path() -> PathBuf {
+    env::var_os("DATA_DIR")
+        .map_or_else(|| PathBuf::from("data"), PathBuf::from)
+        .join("shortcircuit.db")
+}
+
+async fn issue_bootstrap(kind: BootstrapKind) -> Result<(), AppError> {
+    let pool = open_database(&database_path()).await?;
+    let token = Auth::new(pool.clone()).issue_bootstrap(kind).await?;
+    pool.close().await;
+    println!("{token}");
+    Ok(())
+}
+
+fn runtime() -> io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
 }
 
 async fn wait_for_stop(mut receiver: watch::Receiver<bool>) {
@@ -72,9 +78,18 @@ async fn serve() -> Result<(), AppError> {
     let admin_addr = bind_address("ADMIN_BIND", "127.0.0.1:8081")?;
     let hosts = PublicHosts::parse(&setting("PUBLIC_HOSTS", "localhost,127.0.0.1,[::1]")?)
         .map_err(io::Error::other)?;
-    let key = admin_key()?;
-    let data_dir = env::var_os("DATA_DIR").map_or_else(|| PathBuf::from("data"), PathBuf::from);
-    let pool = open_database(&data_dir.join("shortcircuit.db")).await?;
+    let config = AdminConfig::new(
+        &setting("ADMIN_ORIGIN", "http://localhost:8081")?,
+        public_addr.port(),
+    )
+    .map_err(io::Error::other)?;
+    if env::var_os("ADMIN_TOKEN_FILE").is_some() {
+        return Err(io::Error::other(
+            "Remove ADMIN_TOKEN_FILE. Use setup-token and create scoped API keys.",
+        )
+        .into());
+    }
+    let pool = open_database(&database_path()).await?;
 
     let public_socket = TcpListener::bind(public_addr).await?;
     let admin_socket = TcpListener::bind(admin_addr).await?;
@@ -88,8 +103,12 @@ async fn serve() -> Result<(), AppError> {
     let (stop, receiver) = watch::channel(false);
     let public = axum::serve(public_socket, public_router(pool.clone(), hosts.clone()))
         .with_graceful_shutdown(wait_for_stop(receiver.clone()));
-    let admin = axum::serve(admin_socket, admin_router(pool.clone(), hosts, key))
-        .with_graceful_shutdown(wait_for_stop(receiver));
+    let admin = axum::serve(
+        admin_socket,
+        admin_router(pool.clone(), hosts, config)
+            .into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(wait_for_stop(receiver));
     let stop_deadline = async move {
         if signal_to_stop().await.is_err() {
             tracing::warn!("could not listen for shutdown signals");
@@ -140,6 +159,12 @@ fn main() -> Result<(), AppError> {
     let mut arguments = env::args_os().skip(1);
     match (arguments.next(), arguments.next()) {
         (Some(command), None) if command == "healthcheck" => healthcheck(),
+        (Some(command), None) if command == "setup-token" => {
+            runtime()?.block_on(issue_bootstrap(BootstrapKind::Setup))
+        }
+        (Some(command), None) if command == "recovery-token" => {
+            runtime()?.block_on(issue_bootstrap(BootstrapKind::Recovery))
+        }
         (Some(command), None) if command == "--version" => {
             println!("shortcircuit {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -152,12 +177,11 @@ fn main() -> Result<(), AppError> {
                 .with_env_filter(filter)
                 .json()
                 .init();
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()?
-                .block_on(serve())
+            runtime()?.block_on(serve())
         }
-        _ => Err(io::Error::other("usage: shortcircuit [healthcheck|--version]").into()),
+        _ => Err(io::Error::other(
+            "usage: shortcircuit [healthcheck|setup-token|recovery-token|--version]",
+        )
+        .into()),
     }
 }

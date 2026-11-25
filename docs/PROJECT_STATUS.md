@@ -1,17 +1,17 @@
 # Project status
 
-**November 25, 2026 · 0.1.0 in development.** Architecture and design are approved for implementation. Existing links are recreated manually.
+**November 25, 2026 · 0.2.0 in development.** Architecture and design are approved for implementation. Existing links are recreated manually.
 
 | Area | Status |
 |---|---|
-| Rust foundation | Source is present for host-bound redirects, separate public and admin listeners, SQLite WAL with full synchronization, versioned schema, health probes, and optional authenticated link creation and listing. |
-| Link creation | Supports custom case-sensitive slugs with optional segments and randomly generated 10-character slugs. The public listener reads destinations from stored links. |
-| Development security | Loopback defaults, a bearer token for the development admin API, and body and URI limits. Production hardening and interactive sign-in are pending. |
-| Database verification | Five schema tests passed with system SQLite and with SQLite 3.54.1 built from the bundled source package. |
-| Build and container verification | GitHub Actions runs the Rust integration tests, Clippy, Rustfmt, and the container smoke test. Dependency versions are recorded in `Cargo.lock`, and the Docker build uses it. Docker Compose accepted the local configuration. [CI results](https://github.com/Buffer379x/shortcircuit/actions) |
+| Public foundation | Host-bound redirects, a versioned SQLite database with WAL and full synchronization, and separate public and admin listeners. |
+| Link management | Create, list, edit, enable, disable, tag, and delete links. The admin interface can export the displayed links as JSON. |
+| Authentication | A CLI-issued account claim, Argon2id passwords, revocable sessions, account recovery, CSRF protection, and scoped API keys. |
+| Database verification | The schema tests cover compatibility, the redirect index, and exact stored destinations. The authentication and lifecycle migrations have additional transactional regression tests. |
+| Build and container verification | GitHub Actions checks the Rust integration tests, Clippy, Rustfmt, frontend types and assets, and a non-root container with a Chromium smoke test. [CI results](https://github.com/Buffer379x/shortcircuit/actions) |
 | GitHub | [The repository](https://github.com/Buffer379x/shortcircuit) exists. The owner approved public source development in this repository. The owner set the MIT license in the initial commit. Release artifacts still require approval. |
-| UI and branding | Nine preview routes, including sign-in, with English and German UI text, dark and light themes, and four static design renders. The production admin interface is planned for a later milestone. |
-| Browser verification | Chromium failed to start in the development sandbox. The [capture instructions](../README.md) describe how to record screenshots and exercise the responsive layouts in a local browser. |
+| UI and branding | The embedded Svelte admin interface includes account setup, authentication, links, and API keys with English and German UI text and dark, light, or system appearance. The separate design preview covers additional planned screens. |
+| Browser verification | CI exercises the integrated administration workflow in Chromium. The [capture instructions](../README.md) cover the separate design preview. |
 | Performance and release | The benchmark method and resource estimates are documented. Production measurements and operating approval are pending. |
 
 [Core implementation plan](superpowers/plans/2026-11-25-core-foundation.md) · [Roadmap](ROADMAP.md) · [Decisions](DECISIONS.md)

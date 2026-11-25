@@ -1,0 +1,53 @@
+import { ApiError } from './api';
+import type { Language, Messages } from './i18n';
+
+type Message = keyof Messages;
+
+const problemMessages = new Map<string, Message>([
+  ['invalid_credentials', 'invalidCredentials'],
+  ['invalid_token', 'invalidToken'],
+  ['invalid_password', 'invalidPassword'],
+  ['invalid_username', 'invalidUsername'],
+  ['invalid_target', 'invalidTarget'],
+  ['invalid_slug', 'invalidSlug'],
+  ['slug_in_use', 'slugInUse'],
+  ['invalid_host', 'invalidHost'],
+  ['invalid_title', 'invalidTitle'],
+  ['invalid_tags', 'invalidTags'],
+  ['invalid_scopes', 'invalidScopes'],
+  ['invalid_expiration', 'invalidExpiration'],
+  ['not_found', 'resourceMissing'],
+]);
+
+export function problemMessage(error: unknown, unauthorized: Message = 'sessionExpired'): Message {
+  if (!(error instanceof ApiError)) return 'requestFailed';
+  if (error.status === 401) return unauthorized;
+  const message = problemMessages.get(error.code);
+  if (message) return message;
+  if (error.status === 403) return 'accessDenied';
+  if (error.status === 429) return 'tooManyRequests';
+  if (error.status >= 500) return 'serviceUnavailable';
+  return 'requestRejected';
+}
+
+export function passwordAllowed(value: string): boolean {
+  return [...value].length >= 12 && new TextEncoder().encode(value).length <= 1024;
+}
+
+export function labelAllowed(value: string): boolean {
+  return value.length > 0 && [...value].length <= 64 && !/\p{Cc}/u.test(value);
+}
+
+export function formatDate(date: string, language: Language, withTime = false): string {
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime())) return date;
+  return new Intl.DateTimeFormat(language, {
+    dateStyle: 'medium',
+    ...(withTime ? { timeStyle: 'short' } : {}),
+  }).format(parsed);
+}
+
+export function fromUnixSeconds(seconds: number): string | null {
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}

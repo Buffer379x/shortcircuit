@@ -2,30 +2,32 @@
 
 ShortCircuit is a self-hosted URL shortener and link manager. It uses Rust and SQLite and is designed to run in one Docker container. You can recreate an existing short URL by configuring its original host and creating a link with the same slug.
 
-**0.1.0 is in development.** ShortCircuit is licensed under the [MIT License](LICENSE). See the [project plan](docs/PROJECT_PLAN.md) and [verification status](docs/PROJECT_STATUS.md).
+**0.2.0 is in development.** ShortCircuit is licensed under the [MIT License](LICENSE). See the [project plan](docs/PROJECT_PLAN.md) and [verification status](docs/PROJECT_STATUS.md).
 
-## Local development
-
-The development server binds both listeners to loopback by default. Enable link creation and listing on the admin listener with a locally generated token file. The full admin sign-in flow is planned for 0.2.
-
-Keep this build on loopback or an isolated test network. Production use requires the network and HTTP hardening listed in the [security guide](docs/SECURITY.md).
+## Start the local container
 
 ```sh
-umask 077
-openssl rand -hex 32 > admin-token
-ADMIN_TOKEN_FILE=admin-token cargo run
+docker compose up --build --wait
+docker compose exec -T shortcircuit shortcircuit setup-token
 ```
 
-Create a sample link and inspect the redirect from a second shell in the repository.
+Open `http://localhost:8081` and enter the one-time token, a username, and a password. The token expires after 15 minutes. Use the admin interface to create short links, edit their destinations and tags, and provision scoped API keys. Local short links are served on port 8080.
+
+The Compose profile publishes both ports on loopback and runs as UID/GID 10001. The application uses one persistent Docker volume. For a reverse proxy, set `ADMIN_ORIGIN` to the external HTTPS origin and keep the cleartext admin backend reachable only by the proxy. Use a dedicated admin hostname. [Network setup](docs/REVERSE_PROXY.md) · [Unraid](docs/UNRAID_INSTALLATION.md)
+
+Upgrading an existing development instance applies the schema updates and preserves its link IDs, hosts, slugs, and destinations. Remove `ADMIN_TOKEN_FILE` and use `setup-token` to create the first administrator. Issue new scoped keys from the admin interface. For account recovery, use `docker compose exec -T shortcircuit shortcircuit recovery-token` and choose **Recover account** on the sign-in screen.
+
+## Build from source
+
+Use Rust 1.100.0 and Node 24.22.3. Build the admin assets before starting the Rust process.
 
 ```sh
-umask 077
-printf 'Authorization: Bearer %s\n' "$(cat admin-token)" > admin-header
-curl --fail-with-body --header @admin-header --json '{"slug":"handbook","target":"https://example.org/handbook"}' http://localhost:8081/api/v1/links
-curl --head http://localhost:8080/handbook
+npm ci --prefix frontend
+npm run build --prefix frontend
+cargo run --locked
 ```
 
-`docker compose up --build` runs the server with a persistent local Docker volume and publishes both ports on the host's loopback interface. The container runs as UID/GID 10001. The default Compose file leaves the link administration API disabled. To enable it, configure `ADMIN_TOKEN_FILE` and mount a token file readable only by the runtime user. [API reference](docs/API.md) · [CI results](https://github.com/Buffer379x/shortcircuit/actions)
+Run `cargo run --locked -- setup-token` in a second shell, using the same `DATA_DIR` if configured. The Docker image embeds the frontend in the Rust binary. [API reference](docs/API.md) · [CI results](https://github.com/Buffer379x/shortcircuit/actions)
 
 ## Design preview
 
