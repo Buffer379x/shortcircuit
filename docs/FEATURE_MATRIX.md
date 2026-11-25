@@ -51,7 +51,8 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Admin API authorization and errors | Current | P0 | Browser sessions and scoped bearer keys authorize the link API. Errors use structured problem responses. The public listener serves redirects independently. |
 | Liveness and readiness | Current | P0 | The admin listener serves minimal status-only probes for process and database readiness. |
 | Interactive setup and authentication | Current | P0 | A short-lived CLI setup token, revocable sessions, CSRF protection, and documented recovery are available. Keep the administration interface behind LAN or VPN access. |
-| Scoped API credentials and contract | Planned | P0/P1 | Add scoped keys, optional domain restrictions, rotation, revocation, request IDs, and a versioned OpenAPI contract. |
+| Scoped API credentials | Current | P0 | Issue keys with named scopes, optional domain restrictions and expiry, and revocation. The API reveals the secret only at creation. |
+| OpenAPI and API diagnostics | Planned | P1 | Add a versioned schema, request IDs, and dedicated credential rotation. |
 | Audit, diagnostics, and abuse controls | Planned | P0 | Audit sensitive operations, rate-limit protected endpoints, and make detailed diagnostics available to authorized administrators. |
 | Backup and restore | Planned | P0 | Create consistent snapshots and verify restore, crash recovery, and upgrade behavior on the target host. |
 | Native CSV and JSON exchange | Planned | P1 | Preview field mapping and conflicts on import. Scope exports, omit secrets, and neutralize spreadsheet formulas in CSV. |
