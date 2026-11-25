@@ -362,7 +362,9 @@ async fn write_batch(
 
     let current: Vec<_> = batch
         .iter()
-        .filter(|event: &&Event| snapshot.settings.enabled && event.generation == snapshot.generation)
+        .filter(|event: &&Event| {
+            snapshot.settings.enabled && event.generation == snapshot.generation
+        })
         .collect();
     if current.is_empty() {
         return transaction.commit().await;

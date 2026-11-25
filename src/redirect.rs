@@ -678,10 +678,12 @@ mod tests {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
         insert(&pool, "Team/Docs", true).await;
-        sqlx::raw_sql(include_str!("../migrations/0004_redirect_policies.sql"))
-            .execute(&pool)
-            .await
-            .unwrap();
+        for migration in [
+            include_str!("../migrations/0004_redirect_policies.sql"),
+            include_str!("../migrations/0006_analytics.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
 
         let mut req = request("Team/Docs");
         req.query = Some("target=https://other.example");

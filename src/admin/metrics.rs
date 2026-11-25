@@ -238,7 +238,10 @@ async fn list_events(
     } else {
         None
     };
-    Ok(Json(EventPage { items, next_before_id }))
+    Ok(Json(EventPage {
+        items,
+        next_before_id,
+    }))
 }
 
 #[derive(sqlx::FromRow)]
