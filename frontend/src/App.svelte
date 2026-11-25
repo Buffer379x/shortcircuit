@@ -7,6 +7,7 @@
   import Catalog from './Catalog.svelte';
   import Auth from './Auth.svelte';
   import { problemMessage } from './format';
+  import Exchange from './Exchange.svelte';
   import Icon from './Icon.svelte';
   import { messages } from './i18n';
   import type { Language, Messages, Theme } from './i18n';
@@ -14,12 +15,13 @@
   import Links from './Links.svelte';
   import Preferences from './Preferences.svelte';
 
-  type Page = 'links' | 'analytics' | 'domains' | 'tags' | 'apiKeys' | 'account';
+  type Page = 'links' | 'exchange' | 'analytics' | 'domains' | 'tags' | 'apiKeys' | 'account';
   const pages = [
     { id: 'links', icon: 'link' },
     { id: 'analytics', icon: 'analytics' },
     { id: 'domains', icon: 'globe' },
     { id: 'tags', icon: 'tag' },
+    { id: 'exchange', icon: 'exchange' },
     { id: 'apiKeys', icon: 'key' },
     { id: 'account', icon: 'account' },
   ] as const;
@@ -190,6 +192,8 @@
         {#if signOutError}<p class="notice error page-notice" role="alert">{t[signOutError]}</p>{/if}
         {#if page === 'account'}
           <Account {t} {user} {api} onPasswordChanged={passwordChanged} />
+        {:else if page === 'exchange'}
+          <Exchange {t} {api} {language} />
         {:else if page === 'analytics'}
           <Analytics {t} {api} {language} />
         {:else if page === 'domains' || page === 'tags'}

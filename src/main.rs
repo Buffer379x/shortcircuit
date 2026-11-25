@@ -156,7 +156,9 @@ async fn backup() -> Result<(), AppError> {
     if !database.is_file() {
         return Err(io::Error::other("no ShortCircuit database exists").into());
     }
-    let directory = database.parent().ok_or_else(|| io::Error::other("data path has no parent"))?;
+    let directory = database
+        .parent()
+        .ok_or_else(|| io::Error::other("data path has no parent"))?;
     let pool = open_database(&database).await?;
     let result = create_snapshot(&pool, &directory.join("backups")).await;
     pool.close().await;
@@ -166,7 +168,10 @@ async fn backup() -> Result<(), AppError> {
 
 async fn restore(source: PathBuf) -> Result<(), AppError> {
     let result = restore_snapshot(&database_path(), &source).await?;
-    println!("Restored database schema {} from snapshot created at UTC Unix timestamp {}", result.schema_version, result.created_at);
+    println!(
+        "Restored database schema {} from snapshot created at UTC Unix timestamp {}",
+        result.schema_version, result.created_at
+    );
     if let Some(path) = result.rollback {
         if result.rollback_is_snapshot {
             println!("Rollback snapshot: {}", path.display());

@@ -139,7 +139,9 @@ impl Stage {
         let mut source_file = open_regular(source)?;
         let metadata = source_file.metadata()?;
         if !(100..=MAX_SNAPSHOT_BYTES).contains(&metadata.len()) {
-            return Err(invalid_data("snapshot size is outside the supported bounds"));
+            return Err(invalid_data(
+                "snapshot size is outside the supported bounds",
+            ));
         }
         let mut header = [0; 100];
         source_file.read_exact(&mut header)?;
@@ -161,7 +163,9 @@ impl Stage {
         };
         copy_private(&mut source_file, &metadata, &stage.incoming)?;
         if sidecars_present(source)? {
-            return Err(invalid_data("snapshot acquired journal files during restore"));
+            return Err(invalid_data(
+                "snapshot acquired journal files during restore",
+            ));
         }
         Ok(stage)
     }
@@ -280,11 +284,10 @@ async fn canonical_schema(
 async fn read_canonical(
     pool: &SqlitePool,
 ) -> Result<(Vec<SchemaRow>, Vec<MigrationRow>), sqlx::Error> {
-    let schema = sqlx::query_as(
-        "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name",
-    )
-    .fetch_all(pool)
-    .await?;
+    let schema =
+        sqlx::query_as("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
+            .fetch_all(pool)
+            .await?;
     let migrations = sqlx::query_as(
         "SELECT version, description, CASE WHEN success = 1 THEN 1 ELSE 0 END, checksum
          FROM _sqlx_migrations ORDER BY version",
@@ -326,7 +329,9 @@ async fn validate_snapshot(
         .ok_or_else(|| invalid_data("snapshot format marker is missing or invalid"))?;
     actual_schema.remove(marker);
     if actual_schema.as_slice() != schema {
-        return Err(invalid_data("snapshot schema does not match this ShortCircuit version").into());
+        return Err(
+            invalid_data("snapshot schema does not match this ShortCircuit version").into(),
+        );
     }
 
     let actual_migrations = sqlx::query_as::<_, MigrationRow>(
@@ -463,7 +468,9 @@ fn sidecars_present(path: &Path) -> io::Result<bool> {
 fn regular_metadata(path: &Path) -> io::Result<Option<Metadata>> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() => Ok(Some(metadata)),
-        Ok(_) => Err(invalid_input("database and journal paths must be regular files")),
+        Ok(_) => Err(invalid_input(
+            "database and journal paths must be regular files",
+        )),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
     }
@@ -554,10 +561,7 @@ mod tests {
         database(&live, "live").await.close().await;
         let original = fs::read(&live).unwrap();
         let lock = data_lock(&live, false).unwrap();
-        assert_eq!(
-            lock.metadata().unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        assert_eq!(lock.metadata().unwrap().permissions().mode() & 0o777, 0o600);
         let likewise = data_lock(&live, false).unwrap();
 
         let error = restore_snapshot(&live, &directory.path().join("absent.sqlite"))
@@ -586,15 +590,15 @@ mod tests {
         .unwrap();
         old.close().await;
         let source_pool = database(&directory.path().join("source.sqlite"), "restored").await;
-        let snapshot = crate::backup::create_snapshot(&source_pool, &directory.path().join("backups"))
-            .await
-            .unwrap();
+        let snapshot =
+            crate::backup::create_snapshot(&source_pool, &directory.path().join("backups"))
+                .await
+                .unwrap();
         source_pool.close().await;
-        let mut source = SqliteConnection::connect_with(
-            &SqliteConnectOptions::new().filename(&snapshot),
-        )
-        .await
-        .unwrap();
+        let mut source =
+            SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&snapshot))
+                .await
+                .unwrap();
         sqlx::raw_sql(
             "INSERT INTO admin_accounts (username, password_hash) VALUES ('owner', '$argon2id$test-hash');
              INSERT INTO admin_sessions (token_hash, account_id, created_at, last_seen_at)
@@ -612,7 +616,10 @@ mod tests {
         assert!(outcome.created_at > 0);
         assert!(outcome.rollback_is_snapshot);
         let rollback = outcome.rollback.unwrap();
-        assert_eq!(fs::metadata(&rollback).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&rollback).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         let rollback_check = directory.path().join("rollback-check.sqlite");
         let checked = restore_snapshot(&rollback_check, &rollback).await.unwrap();
         assert!(checked.rollback.is_none());
@@ -638,9 +645,10 @@ mod tests {
         let original = b"damaged database fixture";
         fs::write(&live, original).unwrap();
         let source_pool = database(&directory.path().join("source.sqlite"), "restored").await;
-        let snapshot = crate::backup::create_snapshot(&source_pool, &directory.path().join("backups"))
-            .await
-            .unwrap();
+        let snapshot =
+            crate::backup::create_snapshot(&source_pool, &directory.path().join("backups"))
+                .await
+                .unwrap();
 
         let outcome = restore_snapshot(&live, &snapshot).await.unwrap();
         assert!(!outcome.rollback_is_snapshot);
@@ -655,14 +663,14 @@ mod tests {
         database(&live, "live").await.close().await;
         let original = fs::read(&live).unwrap();
         let source_pool = database(&directory.path().join("source.sqlite"), "candidate").await;
-        let snapshot = crate::backup::create_snapshot(&source_pool, &directory.path().join("backups"))
-            .await
-            .unwrap();
-        let mut source = SqliteConnection::connect_with(
-            &SqliteConnectOptions::new().filename(&snapshot),
-        )
-        .await
-        .unwrap();
+        let snapshot =
+            crate::backup::create_snapshot(&source_pool, &directory.path().join("backups"))
+                .await
+                .unwrap();
+        let mut source =
+            SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&snapshot))
+                .await
+                .unwrap();
         sqlx::query("CREATE TABLE unexpected (id INTEGER PRIMARY KEY)")
             .execute(&mut source)
             .await

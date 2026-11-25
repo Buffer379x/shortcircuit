@@ -10,6 +10,7 @@
 | QR and tags | Local PNG and SVG export for the configured public short URL. The admin catalog shows tag counts and supports rename, merge and delete. |
 | Analytics | UTC trends, period comparison, top links, DNT, referrer hostname controls, per-link opt-out, retention, and clear-all. Browser, OS, device, and geolocation breakdowns are pending. |
 | Backup and restore | The CLI creates consistent, verified SQLite backups and supports an offline restore with a rollback copy. Scheduled backups and admin downloads are planned. |
+| Data exchange | Bounded native JSON import and export, preview, exact collision checks, and atomic apply. CSV and bulk mappings are planned. |
 | Authentication | A CLI-issued account claim, Argon2id passwords, revocable sessions, account recovery, CSRF protection, and scoped API keys. |
 | Database verification | The schema tests cover compatibility, the redirect index, and exact stored destinations. The authentication and lifecycle migrations have additional transactional regression tests. |
 | Build and container verification | GitHub Actions checks the Rust integration tests, Clippy, Rustfmt, frontend types and assets, and a non-root container with a Chromium smoke test. [CI results](https://github.com/Buffer379x/shortcircuit/actions) |

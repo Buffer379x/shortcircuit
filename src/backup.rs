@@ -21,9 +21,13 @@ pub async fn create_snapshot(
     backups_dir: &Path,
 ) -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
     let backups_dir = backups_dir.to_owned();
-    let staged = tokio::task::spawn_blocking(move || StagedSnapshot::reserve(&backups_dir)).await??;
+    let staged =
+        tokio::task::spawn_blocking(move || StagedSnapshot::reserve(&backups_dir)).await??;
     let filename = staged.database.to_str().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "backup path is not valid UTF-8")
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "backup path is not valid UTF-8",
+        )
     })?;
     sqlx::query("VACUUM main INTO ?")
         .bind(filename)
@@ -60,7 +64,12 @@ async fn annotate_snapshot(
     )
     .fetch_optional(&mut *transaction)
     .await?
-    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "snapshot lacks a schema version"))?;
+    .ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "snapshot lacks a schema version",
+        )
+    })?;
 
     sqlx::raw_sql(
         "DELETE FROM admin_sessions;
@@ -107,9 +116,11 @@ async fn verify_snapshot(
         .await?
         .is_some()
     {
-        return Err(
-            io::Error::new(io::ErrorKind::InvalidData, "snapshot failed foreign_key_check").into(),
-        );
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "snapshot failed foreign_key_check",
+        )
+        .into());
     }
     Ok(())
 }
@@ -319,7 +330,10 @@ mod tests {
         .fetch_one(&mut snapshot)
         .await
         .unwrap();
-        assert_eq!(retained_auth, ("owner".to_owned(), "synthetic key".to_owned()));
+        assert_eq!(
+            retained_auth,
+            ("owner".to_owned(), "synthetic key".to_owned())
+        );
         let live_auth: (i64, i64) = sqlx::query_as(
             "SELECT (SELECT COUNT(*) FROM admin_sessions), (SELECT COUNT(*) FROM admin_bootstrap)",
         )

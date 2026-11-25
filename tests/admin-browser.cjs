@@ -74,12 +74,25 @@ async function verify() {
     assert.equal((await cleared).status(), 204);
     await page.getByText('Analytics data cleared.', { exact: true }).waitFor();
 
-    await page.getByRole('button', { name: 'Links', exact: true }).click();
-    await page.getByRole('button', { name: 'Create link', exact: true }).click();
-    await dialog.getByLabel('Destination URL', { exact: true }).fill('https://example.test/backup-check');
-    await dialog.getByLabel('Slug (optional)', { exact: true }).fill('backup-check');
-    await dialog.getByRole('button', { name: 'Create link', exact: true }).click();
-    await dialog.waitFor({ state: 'hidden' });
+    await page.getByRole('button', { name: 'Data exchange', exact: true }).click();
+    await page.getByLabel('JSON link file', { exact: true }).setInputFiles({
+      name: 'links.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify({ version: 1, items: [{
+        host: 'localhost',
+        slug: 'backup-check',
+        target: 'https://example.test/backup-check',
+        title: 'Backup check',
+        tags: [],
+        enabled: true,
+        analytics_enabled: true,
+      }] })),
+    });
+    await page.getByRole('button', { name: 'Preview import', exact: true }).click();
+    await page.getByText('Will create', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Apply import', exact: true }).click();
+    await page.getByText('Import applied.', { exact: true }).waitFor();
+    assert.equal((await page.request.get(publicOrigin + '/backup-check', { maxRedirects: 0 })).status(), 302);
 
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -87,7 +100,7 @@ async function verify() {
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);
     assert.deepEqual(errors, []);
-    console.log('Browser smoke passed: setup, create link, QR, visit limits, analytics controls, mobile layout and sign-out.');
+    console.log('Browser smoke passed: setup, create link, QR, visit limits, analytics controls, native import, mobile layout and sign-out.');
   } finally {
     await browser.close();
   }
