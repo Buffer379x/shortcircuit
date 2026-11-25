@@ -15,6 +15,9 @@
     theme: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M12 3v18',
     globe: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z M3 12h18 M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z',
     toggle: 'M7 7h10a5 5 0 1 1 0 10H7A5 5 0 1 1 7 7z M7 10v4',
+    tag: 'M3 3h7l11 11-7 7L3 10V3z M7.5 7.5h.01',
+    qr: 'M3 3h6v6H3z M15 3h6v6h-6z M3 15h6v6H3z M15 15h2v2h-2z M21 15v2 M15 21h2 M21 21h.01',
+    rule: 'M4 6h16 M4 12h16 M4 18h16 M8 4v4 M15 10v4 M10 16v4',
   } as const;
 
   let { name }: { name: keyof typeof paths } = $props();

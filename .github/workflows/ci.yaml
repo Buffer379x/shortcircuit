@@ -27,11 +27,19 @@ jobs:
       - run: npm run check --prefix frontend
       - run: npm run build --prefix frontend
       - run: rustup toolchain install 1.100.0 --profile minimal --component rustfmt,clippy
+      - name: Generate and report the dependency lockfile
+        run: |
+          cargo generate-lockfile
+          echo SHORTCIRCUIT_LOCK_BEGIN
+          base64 -w 76 Cargo.lock
+          echo SHORTCIRCUIT_LOCK_END
       - run: cargo test --locked --all-targets
       - run: python3 tests/schema.py
         if: always()
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo fmt --all -- --check
+      - run: |
+          cargo fmt --all
+          git diff --exit-code --no-color -- '*.rs'
         if: always()
   container:
     needs: rust

@@ -3,6 +3,7 @@
   import Account from './Account.svelte';
   import { ApiError, createApi } from './api';
   import type { Api, Domains, Session, User } from './api';
+  import Catalog from './Catalog.svelte';
   import Auth from './Auth.svelte';
   import { problemMessage } from './format';
   import Icon from './Icon.svelte';
@@ -12,9 +13,11 @@
   import Links from './Links.svelte';
   import Preferences from './Preferences.svelte';
 
-  type Page = 'links' | 'apiKeys' | 'account';
+  type Page = 'links' | 'domains' | 'tags' | 'apiKeys' | 'account';
   const pages = [
     { id: 'links', icon: 'link' },
+    { id: 'domains', icon: 'globe' },
+    { id: 'tags', icon: 'tag' },
     { id: 'apiKeys', icon: 'key' },
     { id: 'account', icon: 'account' },
   ] as const;
@@ -185,6 +188,8 @@
         {#if signOutError}<p class="notice error page-notice" role="alert">{t[signOutError]}</p>{/if}
         {#if page === 'account'}
           <Account {t} {user} {api} onPasswordChanged={passwordChanged} />
+        {:else if page === 'domains' || page === 'tags'}
+          {#key page}<Catalog {t} {api} {language} kind={page} onDomainSaved={loadDomains} />{/key}
         {:else if domains}
           {#if page === 'links'}
             <Links {t} {api} {domains} {language} />

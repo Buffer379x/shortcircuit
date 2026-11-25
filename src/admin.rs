@@ -1,5 +1,6 @@
 mod access;
 mod assets;
+mod catalog;
 mod links;
 
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use sqlx::SqlitePool;
 
 use crate::{
     auth::{Auth, AuthError, IssuedSession, KeyMeta, Session},
+    domains,
     http::response_headers,
     input::{PublicHosts, normalize_host},
 };
@@ -30,6 +32,7 @@ const BODY_LIMIT: usize = 32_768;
 
 #[derive(Clone)]
 struct AppState {
+    pool: SqlitePool,
     auth: Auth,
     hosts: PublicHosts,
     config: Arc<AdminConfig>,
@@ -38,6 +41,7 @@ struct AppState {
 
 pub fn admin_router(pool: SqlitePool, hosts: PublicHosts, config: AdminConfig) -> Router {
     let state = AppState {
+        pool: pool.clone(),
         auth: Auth::new(pool.clone()),
         hosts,
         config: Arc::new(config),
@@ -64,12 +68,15 @@ pub fn admin_router(pool: SqlitePool, hosts: PublicHosts, config: AdminConfig) -
     let link_routes = links::routes(pool.clone(), state.clone()).route_layer(
         middleware::from_fn_with_state(state.clone(), access::link_access),
     );
+    let catalog_routes = catalog::routes(pool.clone(), state.hosts.clone(), state.config.local_port)
+        .route_layer(middleware::from_fn_with_state(state.clone(), access::browser_access));
     let application = Router::new()
         .route("/api/v1/auth/session", get(session_status))
         .merge(sign_in)
         .merge(session_routes)
         .with_state(state.clone())
         .merge(link_routes)
+        .merge(catalog_routes)
         .merge(assets::routes())
         .route_layer(middleware::from_fn_with_state(state, access::admin_host));
 
@@ -239,15 +246,17 @@ async fn create_key(
     body: Result<Json<KeyInput>, JsonRejection>,
 ) -> Result<(StatusCode, Json<KeyCreated>), Problem> {
     let input = json_payload(body)?;
-    let host = input
-        .host
-        .as_deref()
-        .map(|raw| {
-            normalize_host(raw)
-                .filter(|host| state.hosts.contains(host))
-                .ok_or_else(|| Problem::invalid("invalid_host"))
-        })
-        .transpose()?;
+    let host = if let Some(raw) = input.host {
+        let host = normalize_host(&raw).ok_or_else(|| Problem::invalid("invalid_host"))?;
+        let domain = domains::lookup(&state.pool, &state.hosts, &host, state.config.local_port)
+            .await.map_err(|_| Problem::unavailable())?;
+        if domain.is_none() {
+            return Err(Problem::invalid("invalid_host"));
+        }
+        Some(host)
+    } else {
+        None
+    };
     let issued = state
         .auth
         .create_key(&input.name, input.scopes, host, input.expires_at)
