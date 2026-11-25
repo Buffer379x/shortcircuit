@@ -5,7 +5,9 @@ use axum::{
     response::Response,
 };
 use serde_json::{Value, json};
-use shortcircuit::{AdminConfig, Auth, BootstrapKind, PublicHosts, admin_router, open_database, public_router};
+use shortcircuit::{
+    AdminConfig, Auth, BootstrapKind, PublicHosts, admin_router, open_database, public_router,
+};
 use tower::ServiceExt;
 
 const ADMIN_HOST: &str = "admin.example";
@@ -27,11 +29,26 @@ impl App {
         let pool = open_database(&database).await.unwrap();
         let hosts = PublicHosts::parse("go.example,s.example").unwrap();
         let public = public_router(pool.clone(), hosts.clone());
-        let auth=Auth::new(pool.clone());
-        let setup=auth.issue_bootstrap(BootstrapKind::Setup).await.unwrap();
-        auth.setup(&setup, "Owner", "synthetic-password-for-testing").await.unwrap();
-        let key=auth.create_key("test suite", vec!["read".into(), "write".into(), "delete".into()], None, None).await.unwrap().token;
-        let admin = admin_router(pool.clone(), hosts, AdminConfig::new("https://admin.example",8080).unwrap());
+        let auth = Auth::new(pool.clone());
+        let setup = auth.issue_bootstrap(BootstrapKind::Setup).await.unwrap();
+        auth.setup(&setup, "Owner", "synthetic-password-for-testing")
+            .await
+            .unwrap();
+        let key = auth
+            .create_key(
+                "test suite",
+                vec!["read".into(), "write".into(), "delete".into()],
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+            .token;
+        let admin = admin_router(
+            pool.clone(),
+            hosts,
+            AdminConfig::new("https://admin.example", 8080).unwrap(),
+        );
         Self {
             _temp: temp,
             database,
@@ -43,10 +60,11 @@ impl App {
     }
 
     async fn create(&self, body: Value, authenticated: bool) -> Response {
-        let mut request =
-            Request::post("/api/v1/links").header(header::HOST, ADMIN_HOST).header(header::CONTENT_TYPE, "application/json");
+        let mut request = Request::post("/api/v1/links")
+            .header(header::HOST, ADMIN_HOST)
+            .header(header::CONTENT_TYPE, "application/json");
         if authenticated {
-            request = request.header(header::AUTHORIZATION, format!("Bearer {}",self.key));
+            request = request.header(header::AUTHORIZATION, format!("Bearer {}", self.key));
         }
         self.admin
             .clone()
@@ -96,7 +114,9 @@ async fn admin_creation_requires_a_key_and_public_cannot_create() {
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(response.headers()[header::ALLOW], "GET, HEAD");
     assert_eq!(
-        redirect(&app.admin, "GET", "/api/v1/links", "go.example").await.status(),
+        redirect(&app.admin, "GET", "/api/v1/links", "go.example")
+            .await
+            .status(),
         StatusCode::NOT_FOUND
     );
 }
@@ -241,8 +261,12 @@ async fn admin_list_is_authenticated_and_respects_configured_hosts() {
     assert_eq!(items.len(), 100);
     assert!(items.iter().all(|item| item["host"] == "go.example"));
     let cursor = list["next_after_id"].as_i64().unwrap();
-    let remainder =
-        authenticated_list(&app.admin, &app.key, &format!("/api/v1/links?after_id={cursor}")).await;
+    let remainder = authenticated_list(
+        &app.admin,
+        &app.key,
+        &format!("/api/v1/links?after_id={cursor}"),
+    )
+    .await;
     assert_eq!(remainder["items"].as_array().unwrap().len(), 1);
     assert_eq!(remainder["items"][0]["slug"], "link-100");
     assert!(remainder["next_after_id"].is_null());

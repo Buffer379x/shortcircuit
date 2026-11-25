@@ -37,8 +37,11 @@ pub struct AdminConfig {
 impl AdminConfig {
     pub fn new(origin: &str, local_port: u16) -> Result<Self, &'static str> {
         let url = Url::parse(origin).map_err(|_| "invalid ADMIN_ORIGIN")?;
-        if url.path() != "/" || url.query().is_some() || url.fragment().is_some()
-            || !url.username().is_empty() || url.password().is_some()
+        if url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || !url.username().is_empty()
+            || url.password().is_some()
         {
             return Err("ADMIN_ORIGIN must be a bare HTTP or HTTPS origin");
         }
@@ -47,7 +50,10 @@ impl AdminConfig {
             "http" if is_loopback(&url) => false,
             _ => return Err("ADMIN_ORIGIN requires HTTPS outside loopback"),
         };
-        let host = url.host_str().and_then(normalize_host).ok_or("invalid admin host")?;
+        let host = url
+            .host_str()
+            .and_then(normalize_host)
+            .ok_or("invalid admin host")?;
         let default_port = if secure { 443 } else { 80 };
         Ok(Self {
             origin: url.origin().ascii_serialization(),
@@ -60,7 +66,11 @@ impl AdminConfig {
     }
 
     fn cookie_name(&self) -> &'static str {
-        if self.secure { HTTPS_SESSION_COOKIE } else { HTTP_SESSION_COOKIE }
+        if self.secure {
+            HTTPS_SESSION_COOKIE
+        } else {
+            HTTP_SESSION_COOKIE
+        }
     }
 
     pub(super) fn cookie(&self, token: &str, ttl: u32) -> HeaderValue {
@@ -68,7 +78,8 @@ impl AdminConfig {
         HeaderValue::from_str(&format!(
             "{}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ttl}{secure}",
             self.cookie_name()
-        )).expect("session tokens contain ASCII hexadecimal characters")
+        ))
+        .expect("session tokens contain ASCII hexadecimal characters")
     }
 }
 
@@ -94,9 +105,10 @@ pub(super) async fn admin_host(
     request: Request,
     next: Next,
 ) -> Result<Response, Problem> {
-    let matches = request_host_port(request.uri(), request.headers())
-        .is_some_and(|(host,port)| {
-            host == state.config.host && port.unwrap_or(state.config.default_port) == state.config.port
+    let matches =
+        request_host_port(request.uri(), request.headers()).is_some_and(|(host, port)| {
+            host == state.config.host
+                && port.unwrap_or(state.config.default_port) == state.config.port
         });
     if !matches {
         return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
@@ -122,7 +134,8 @@ pub(super) async fn browser_access(
     if request.headers().contains_key(header::AUTHORIZATION) {
         return Err(Problem::unauthorized());
     }
-    let token = session_token(request.headers(), &state.config)?.ok_or_else(Problem::unauthorized)?;
+    let token =
+        session_token(request.headers(), &state.config)?.ok_or_else(Problem::unauthorized)?;
     let session = state.auth.session(&token).await?;
     require_csrf(&request, &state.config, &session.csrf)?;
     if request.uri().path() == "/api/v1/auth/password" {
@@ -138,7 +151,8 @@ pub(super) async fn link_access(
     next: Next,
 ) -> Result<Response, Problem> {
     let cookie = session_token(request.headers(), &state.config)?;
-    let bearer = single_header(request.headers(), header::AUTHORIZATION.as_str())?.map(str::to_owned);
+    let bearer =
+        single_header(request.headers(), header::AUTHORIZATION.as_str())?.map(str::to_owned);
     let host = match (cookie, bearer) {
         (Some(token), None) => {
             let session = state.auth.session(&token).await?;
@@ -146,7 +160,7 @@ pub(super) async fn link_access(
             None
         }
         (None, Some(value)) => {
-            let Some((scheme,token)) = value.split_once(' ') else {
+            let Some((scheme, token)) = value.split_once(' ') else {
                 return Err(Problem::unauthorized());
             };
             if !scheme.eq_ignore_ascii_case("bearer") {
@@ -157,7 +171,12 @@ pub(super) async fn link_access(
                 Method::GET | Method::HEAD => "read",
                 Method::POST | Method::PATCH => "write",
                 Method::DELETE => "delete",
-                _ => return Err(Problem(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")),
+                _ => {
+                    return Err(Problem(
+                        StatusCode::METHOD_NOT_ALLOWED,
+                        "method_not_allowed",
+                    ));
+                }
             };
             if !key.allows(scope) {
                 return Err(Problem(StatusCode::FORBIDDEN, "insufficient_scope"));
@@ -171,7 +190,11 @@ pub(super) async fn link_access(
 }
 
 fn require_origin(headers: &HeaderMap, config: &AdminConfig) -> Result<(), Problem> {
-    if single_header(headers, header::ORIGIN.as_str()).ok().flatten() != Some(config.origin.as_str()) {
+    if single_header(headers, header::ORIGIN.as_str())
+        .ok()
+        .flatten()
+        != Some(config.origin.as_str())
+    {
         return Err(Problem(StatusCode::FORBIDDEN, "invalid_origin"));
     }
     Ok(())
@@ -182,7 +205,9 @@ fn require_csrf(request: &Request, config: &AdminConfig, csrf: &str) -> Result<(
         return Ok(());
     }
     require_origin(request.headers(), config)?;
-    let valid = single_header(request.headers(), CSRF_HEADER).ok().flatten()
+    let valid = single_header(request.headers(), CSRF_HEADER)
+        .ok()
+        .flatten()
         .is_some_and(|header| bool::from(header.as_bytes().ct_eq(csrf.as_bytes())));
     if !valid {
         return Err(Problem(StatusCode::FORBIDDEN, "invalid_csrf"));
@@ -197,19 +222,29 @@ fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a st
     if fields.next().is_some() {
         return Err(Problem::unauthorized());
     }
-    first.map(|value| value.to_str().map_err(|_| Problem::unauthorized())).transpose()
+    first
+        .map(|value| value.to_str().map_err(|_| Problem::unauthorized()))
+        .transpose()
 }
 
-pub(super) fn session_token(headers: &HeaderMap, config: &AdminConfig) -> Result<Option<String>, Problem> {
+pub(super) fn session_token(
+    headers: &HeaderMap,
+    config: &AdminConfig,
+) -> Result<Option<String>, Problem> {
     let mut token = None;
     for field in headers.get_all(header::COOKIE) {
         let value = field.to_str().map_err(|_| Problem::unauthorized())?;
         for item in value.split(';') {
-            let Some((name,secret)) = item.trim().split_once('=') else { continue };
+            let Some((name, secret)) = item.trim().split_once('=') else {
+                continue;
+            };
             if name != config.cookie_name() {
                 continue;
             }
-            if token.is_some() || secret.len() != 64 || !secret.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            if token.is_some()
+                || secret.len() != 64
+                || !secret.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
                 return Err(Problem::unauthorized());
             }
             token = Some(secret.to_owned());
@@ -219,7 +254,9 @@ pub(super) fn session_token(headers: &HeaderMap, config: &AdminConfig) -> Result
 }
 
 fn peer(request: &Request) -> IpAddr {
-    request.extensions().get::<ConnectInfo<SocketAddr>>()
+    request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
         .map_or(IpAddr::V4(Ipv4Addr::LOCALHOST), |info| info.0.ip())
 }
 
@@ -227,7 +264,7 @@ pub(super) struct AttemptLimiter(Mutex<Attempts>);
 
 struct Attempts {
     since: Instant,
-    per_peer: HashMap<IpAddr,u8>,
+    per_peer: HashMap<IpAddr, u8>,
     total: u8,
 }
 
@@ -240,7 +277,7 @@ impl AttemptLimiter {
         }))
     }
 
-    fn allow(&self, peer: IpAddr) -> Result<(),Problem> {
+    fn allow(&self, peer: IpAddr) -> Result<(), Problem> {
         let mut window = self.0.lock().map_err(|_| Problem::unavailable())?;
         if window.since.elapsed() >= WINDOW {
             window.since = Instant::now();

@@ -1,6 +1,9 @@
 use axum::{
     Extension, Json, Router,
-    extract::{Path, Query, State, rejection::{JsonRejection, PathRejection, QueryRejection}},
+    extract::{
+        Path, Query, State,
+        rejection::{JsonRejection, PathRejection, QueryRejection},
+    },
     http::StatusCode,
     routing::{get, patch},
 };
@@ -14,7 +17,8 @@ use crate::{
 
 use super::{AppState, Problem, access::LinkAccess, json_payload, resource_id};
 
-const SHORTCODE_ALPHABET: &[u8; 64] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
+const SHORTCODE_ALPHABET: &[u8; 64] =
+    b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
 const SHORTCODE_LEN: usize = 10;
 const MAX_CODE_ATTEMPTS: usize = 8;
 
@@ -100,14 +104,16 @@ async fn create_link(
         }
         draft.slug = slug;
         let link = store::insert_link(&state.pool, &draft)
-            .await.map_err(|_| Problem::unavailable())?
-            .ok_or(Problem(StatusCode::CONFLICT,"slug_in_use"))?;
+            .await
+            .map_err(|_| Problem::unavailable())?
+            .ok_or(Problem(StatusCode::CONFLICT, "slug_in_use"))?;
         return Ok((StatusCode::CREATED, Json(link)));
     }
     for _ in 0..MAX_CODE_ATTEMPTS {
         draft.slug = random_slug()?;
         if let Some(link) = store::insert_link(&state.pool, &draft)
-            .await.map_err(|_| Problem::unavailable())?
+            .await
+            .map_err(|_| Problem::unavailable())?
         {
             return Ok((StatusCode::CREATED, Json(link)));
         }
@@ -119,7 +125,7 @@ fn forbidden() -> Problem {
     Problem(StatusCode::FORBIDDEN, "insufficient_scope")
 }
 
-fn title(value: String) -> Result<String,Problem> {
+fn title(value: String) -> Result<String, Problem> {
     let value = value.trim();
     if value.chars().count() > 160 || value.chars().any(char::is_control) {
         return Err(Problem::invalid("invalid_title"));
@@ -127,14 +133,18 @@ fn title(value: String) -> Result<String,Problem> {
     Ok(value.to_owned())
 }
 
-fn tags(values: Vec<String>) -> Result<Vec<String>,Problem> {
+fn tags(values: Vec<String>) -> Result<Vec<String>, Problem> {
     if values.len() > 20 {
         return Err(Problem::invalid("invalid_tags"));
     }
     let mut checked = Vec::with_capacity(values.len());
     for tag in values {
         let tag = tag.trim();
-        if tag.is_empty() || tag.chars().count() > 40 || tag.contains(',') || tag.chars().any(char::is_control) {
+        if tag.is_empty()
+            || tag.chars().count() > 40
+            || tag.contains(',')
+            || tag.chars().any(char::is_control)
+        {
             return Err(Problem::invalid("invalid_tags"));
         }
         checked.push(tag.to_owned());
@@ -144,10 +154,13 @@ fn tags(values: Vec<String>) -> Result<Vec<String>,Problem> {
     Ok(checked)
 }
 
-fn random_slug() -> Result<String,Problem> {
+fn random_slug() -> Result<String, Problem> {
     let mut bytes = [0; SHORTCODE_LEN];
     getrandom::fill(&mut bytes).map_err(|_| Problem::unavailable())?;
-    Ok(bytes.iter().map(|byte| char::from(SHORTCODE_ALPHABET[usize::from(*byte & 63)])).collect())
+    Ok(bytes
+        .iter()
+        .map(|byte| char::from(SHORTCODE_ALPHABET[usize::from(*byte & 63)]))
+        .collect())
 }
 
 #[derive(Deserialize)]
@@ -172,12 +185,24 @@ async fn list_links(
     if after_id < 0 {
         return Err(Problem::invalid("invalid_after_id"));
     }
-    let mut items = store::list(&state.pool, access.allowed_hosts(&state.app.hosts), after_id)
-        .await.map_err(|_| Problem::unavailable())?;
+    let mut items = store::list(
+        &state.pool,
+        access.allowed_hosts(&state.app.hosts),
+        after_id,
+    )
+    .await
+    .map_err(|_| Problem::unavailable())?;
     let has_more = items.len() > PAGE_SIZE;
     items.truncate(PAGE_SIZE);
-    let next_after_id = if has_more { items.last().map(|link| link.id) } else { None };
-    Ok(Json(LinkPage { items, next_after_id }))
+    let next_after_id = if has_more {
+        items.last().map(|link| link.id)
+    } else {
+        None
+    };
+    Ok(Json(LinkPage {
+        items,
+        next_after_id,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -192,14 +217,22 @@ struct PatchLink {
 async fn update_link(
     State(state): State<LinkState>,
     Extension(access): Extension<LinkAccess>,
-    id: Result<Path<i64>,PathRejection>,
-    body: Result<Json<PatchLink>,JsonRejection>,
-) -> Result<Json<Link>,Problem> {
+    id: Result<Path<i64>, PathRejection>,
+    body: Result<Json<PatchLink>, JsonRejection>,
+) -> Result<Json<Link>, Problem> {
     let input = json_payload(body)?;
-    if input.target.is_none() && input.title.is_none() && input.enabled.is_none() && input.tags.is_none() {
+    if input.target.is_none()
+        && input.title.is_none()
+        && input.enabled.is_none()
+        && input.tags.is_none()
+    {
         return Err(Problem::invalid("empty_update"));
     }
-    if input.target.as_deref().is_some_and(|target| !valid_target(target)) {
+    if input
+        .target
+        .as_deref()
+        .is_some_and(|target| !valid_target(target))
+    {
         return Err(Problem::invalid("invalid_target"));
     }
     let update = LinkUpdate {
@@ -209,22 +242,32 @@ async fn update_link(
         tags: input.tags.map(tags).transpose()?,
     };
     let id = resource_id(id)?;
-    store::update_link(&state.pool, access.allowed_hosts(&state.app.hosts), id, update)
-        .await
-        .map_err(|_| Problem::unavailable())?
-        .map(Json)
-        .ok_or(Problem(StatusCode::NOT_FOUND,"not_found"))
+    store::update_link(
+        &state.pool,
+        access.allowed_hosts(&state.app.hosts),
+        id,
+        update,
+    )
+    .await
+    .map_err(|_| Problem::unavailable())?
+    .map(Json)
+    .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
 }
 
 async fn remove_link(
     State(state): State<LinkState>,
     Extension(access): Extension<LinkAccess>,
-    id: Result<Path<i64>,PathRejection>,
-) -> Result<StatusCode,Problem> {
-    let removed = store::remove_link(&state.pool, access.allowed_hosts(&state.app.hosts), resource_id(id)?)
-        .await.map_err(|_| Problem::unavailable())?;
+    id: Result<Path<i64>, PathRejection>,
+) -> Result<StatusCode, Problem> {
+    let removed = store::remove_link(
+        &state.pool,
+        access.allowed_hosts(&state.app.hosts),
+        resource_id(id)?,
+    )
+    .await
+    .map_err(|_| Problem::unavailable())?;
     if !removed {
-        return Err(Problem(StatusCode::NOT_FOUND,"not_found"));
+        return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
     }
     Ok(StatusCode::NO_CONTENT)
 }

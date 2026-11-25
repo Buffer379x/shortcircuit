@@ -15,15 +15,31 @@ const ICON: &[u8] = include_bytes!("../../assets/branding/favicon.svg");
 
 pub(super) fn routes() -> Router {
     Router::new()
-        .route("/", get(|| async { asset("text/html; charset=utf-8", INDEX) }))
-        .route("/assets/admin.js", get(|| async { asset("text/javascript; charset=utf-8", JS) }))
-        .route("/assets/admin.css", get(|| async { asset("text/css; charset=utf-8", CSS) }))
-        .route("/favicon.svg", get(|| async { asset("image/svg+xml", ICON) }))
+        .route(
+            "/",
+            get(|| async { asset("text/html; charset=utf-8", INDEX) }),
+        )
+        .route(
+            "/assets/admin.js",
+            get(|| async { asset("text/javascript; charset=utf-8", JS) }),
+        )
+        .route(
+            "/assets/admin.css",
+            get(|| async { asset("text/css; charset=utf-8", CSS) }),
+        )
+        .route(
+            "/favicon.svg",
+            get(|| async { asset("image/svg+xml", ICON) }),
+        )
 }
 
 fn asset(kind: &'static str, bytes: &'static [u8]) -> Response {
     if bytes.is_empty() {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin assets are unavailable. Build the frontend and rebuild ShortCircuit.").into_response();
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Admin assets are unavailable. Build the frontend and rebuild ShortCircuit.",
+        )
+            .into_response();
     }
     ([(header::CONTENT_TYPE, kind)], Bytes::from_static(bytes)).into_response()
 }

@@ -9,7 +9,9 @@ use std::{
     time::Duration,
 };
 
-use shortcircuit::{AdminConfig, Auth, BootstrapKind, PublicHosts, admin_router, open_database, public_router};
+use shortcircuit::{
+    AdminConfig, Auth, BootstrapKind, PublicHosts, admin_router, open_database, public_router,
+};
 use tokio::{net::TcpListener, sync::watch, time};
 use tracing_subscriber::EnvFilter;
 
@@ -79,9 +81,13 @@ async fn serve() -> Result<(), AppError> {
     let config = AdminConfig::new(
         &setting("ADMIN_ORIGIN", "http://localhost:8081")?,
         public_addr.port(),
-    ).map_err(io::Error::other)?;
+    )
+    .map_err(io::Error::other)?;
     if env::var_os("ADMIN_TOKEN_FILE").is_some() {
-        return Err(io::Error::other("Remove ADMIN_TOKEN_FILE. Use setup-token and create scoped API keys.").into());
+        return Err(io::Error::other(
+            "Remove ADMIN_TOKEN_FILE. Use setup-token and create scoped API keys.",
+        )
+        .into());
     }
     let pool = open_database(&database_path()).await?;
 
@@ -97,8 +103,12 @@ async fn serve() -> Result<(), AppError> {
     let (stop, receiver) = watch::channel(false);
     let public = axum::serve(public_socket, public_router(pool.clone(), hosts.clone()))
         .with_graceful_shutdown(wait_for_stop(receiver.clone()));
-    let admin = axum::serve(admin_socket, admin_router(pool.clone(), hosts, config).into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(wait_for_stop(receiver));
+    let admin = axum::serve(
+        admin_socket,
+        admin_router(pool.clone(), hosts, config)
+            .into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(wait_for_stop(receiver));
     let stop_deadline = async move {
         if signal_to_stop().await.is_err() {
             tracing::warn!("could not listen for shutdown signals");
@@ -149,8 +159,12 @@ fn main() -> Result<(), AppError> {
     let mut arguments = env::args_os().skip(1);
     match (arguments.next(), arguments.next()) {
         (Some(command), None) if command == "healthcheck" => healthcheck(),
-        (Some(command), None) if command == "setup-token" => runtime()?.block_on(issue_bootstrap(BootstrapKind::Setup)),
-        (Some(command), None) if command == "recovery-token" => runtime()?.block_on(issue_bootstrap(BootstrapKind::Recovery)),
+        (Some(command), None) if command == "setup-token" => {
+            runtime()?.block_on(issue_bootstrap(BootstrapKind::Setup))
+        }
+        (Some(command), None) if command == "recovery-token" => {
+            runtime()?.block_on(issue_bootstrap(BootstrapKind::Recovery))
+        }
         (Some(command), None) if command == "--version" => {
             println!("shortcircuit {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -165,6 +179,9 @@ fn main() -> Result<(), AppError> {
                 .init();
             runtime()?.block_on(serve())
         }
-        _ => Err(io::Error::other("usage: shortcircuit [healthcheck|setup-token|recovery-token|--version]").into()),
+        _ => Err(io::Error::other(
+            "usage: shortcircuit [healthcheck|setup-token|recovery-token|--version]",
+        )
+        .into()),
     }
 }

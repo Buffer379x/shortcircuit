@@ -6,7 +6,10 @@ use std::sync::Arc;
 
 use axum::{
     Extension, Json, Router,
-    extract::{DefaultBodyLimit, Path, State, rejection::{JsonRejection, PathRejection}},
+    extract::{
+        DefaultBodyLimit, Path, State,
+        rejection::{JsonRejection, PathRejection},
+    },
     http::{HeaderValue, StatusCode, header},
     middleware,
     response::{IntoResponse, Response},
@@ -45,15 +48,22 @@ pub fn admin_router(pool: SqlitePool, hosts: PublicHosts, config: AdminConfig) -
         .route("/api/v1/auth/setup", post(setup))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/recover", post(recover))
-        .route_layer(middleware::from_fn_with_state(state.clone(), access::entry_access));
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            access::entry_access,
+        ));
     let session_routes = Router::new()
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/password", post(change_password))
         .route("/api/v1/keys", get(list_keys).post(create_key))
         .route("/api/v1/keys/{id}", delete(revoke_key))
-        .route_layer(middleware::from_fn_with_state(state.clone(), access::browser_access));
-    let link_routes = links::routes(pool.clone(), state.clone())
-        .route_layer(middleware::from_fn_with_state(state.clone(), access::link_access));
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            access::browser_access,
+        ));
+    let link_routes = links::routes(pool.clone(), state.clone()).route_layer(
+        middleware::from_fn_with_state(state.clone(), access::link_access),
+    );
     let application = Router::new()
         .route("/api/v1/auth/session", get(session_status))
         .merge(sign_in)
@@ -74,7 +84,10 @@ pub fn admin_router(pool: SqlitePool, hosts: PublicHosts, config: AdminConfig) -
 }
 
 async fn readiness(pool: SqlitePool) -> StatusCode {
-    match sqlx::query_scalar::<_, i64>("SELECT 1 FROM links LIMIT 1").fetch_optional(&pool).await {
+    match sqlx::query_scalar::<_, i64>("SELECT 1 FROM links LIMIT 1")
+        .fetch_optional(&pool)
+        .await
+    {
         Ok(_) => StatusCode::OK,
         Err(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
@@ -100,7 +113,10 @@ async fn session_status(
     } else {
         None
     };
-    Ok(Json(SessionStatus { setup_required, user }))
+    Ok(Json(SessionStatus {
+        setup_required,
+        user,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -116,7 +132,10 @@ async fn setup(
     body: Result<Json<Setup>, JsonRejection>,
 ) -> Result<Response, Problem> {
     let input = json_payload(body)?;
-    let issued = state.auth.setup(&input.token, &input.username, &input.password).await?;
+    let issued = state
+        .auth
+        .setup(&input.token, &input.username, &input.password)
+        .await?;
     Ok(session_response(&state.config, issued, StatusCode::CREATED))
 }
 
@@ -157,7 +176,11 @@ async fn logout(
     Extension(token): Extension<access::BrowserToken>,
 ) -> Result<Response, Problem> {
     state.auth.logout(&token.0).await?;
-    Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, state.config.cookie("", 0))]).into_response())
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, state.config.cookie("", 0))],
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
@@ -173,7 +196,10 @@ async fn change_password(
     body: Result<Json<PasswordChange>, JsonRejection>,
 ) -> Result<Response, Problem> {
     let input = json_payload(body)?;
-    let updated = state.auth.change_password(&token.0, &input.current_password, &input.password).await?;
+    let updated = state
+        .auth
+        .change_password(&token.0, &input.current_password, &input.password)
+        .await?;
     Ok(session_response(&state.config, updated, StatusCode::OK))
 }
 
@@ -188,7 +214,9 @@ struct KeyList {
 }
 
 async fn list_keys(State(state): State<AppState>) -> Result<Json<KeyList>, Problem> {
-    Ok(Json(KeyList { items: state.auth.list_keys().await? }))
+    Ok(Json(KeyList {
+        items: state.auth.list_keys().await?,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -211,13 +239,26 @@ async fn create_key(
     body: Result<Json<KeyInput>, JsonRejection>,
 ) -> Result<(StatusCode, Json<KeyCreated>), Problem> {
     let input = json_payload(body)?;
-    let host = input.host.as_deref().map(|raw| {
-        normalize_host(raw)
-            .filter(|host| state.hosts.contains(host))
-            .ok_or_else(|| Problem::invalid("invalid_host"))
-    }).transpose()?;
-    let issued = state.auth.create_key(&input.name, input.scopes, host, input.expires_at).await?;
-    Ok((StatusCode::CREATED, Json(KeyCreated { key: issued.key, token: issued.token })))
+    let host = input
+        .host
+        .as_deref()
+        .map(|raw| {
+            normalize_host(raw)
+                .filter(|host| state.hosts.contains(host))
+                .ok_or_else(|| Problem::invalid("invalid_host"))
+        })
+        .transpose()?;
+    let issued = state
+        .auth
+        .create_key(&input.name, input.scopes, host, input.expires_at)
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(KeyCreated {
+            key: issued.key,
+            token: issued.token,
+        }),
+    ))
 }
 
 async fn revoke_key(
@@ -229,12 +270,14 @@ async fn revoke_key(
 }
 
 fn json_payload<T>(value: Result<Json<T>, JsonRejection>) -> Result<T, Problem> {
-    value.map(|Json(body)| body)
+    value
+        .map(|Json(body)| body)
         .map_err(|error| Problem(error.status(), "invalid_request"))
 }
 
 fn resource_id(value: Result<Path<i64>, PathRejection>) -> Result<i64, Problem> {
-    value.ok()
+    value
+        .ok()
         .map(|Path(id)| id)
         .filter(|id| *id > 0)
         .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
@@ -285,16 +328,21 @@ impl IntoResponse for Problem {
                 title: self.0.canonical_reason().unwrap_or("Request failed"),
                 code: self.1,
             }),
-        ).into_response();
+        )
+            .into_response();
         response.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/problem+json"),
         );
         if self.0 == StatusCode::UNAUTHORIZED {
-            response.headers_mut().insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+            response
+                .headers_mut()
+                .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
         }
         if self.0 == StatusCode::TOO_MANY_REQUESTS {
-            response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
         }
         response
     }

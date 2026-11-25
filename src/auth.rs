@@ -151,11 +151,11 @@ impl Auth {
     }
 
     pub async fn has_account(&self) -> Result<bool, AuthError> {
-        Ok(sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM admin_accounts WHERE id = 1)",
+        Ok(
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM admin_accounts WHERE id = 1)")
+                .fetch_one(&self.pool)
+                .await?,
         )
-        .fetch_one(&self.pool)
-        .await?)
     }
 
     pub async fn issue_bootstrap(&self, kind: BootstrapKind) -> Result<String, AuthError> {
@@ -281,7 +281,10 @@ impl Auth {
         .bind(SESSION_ABSOLUTE_SECONDS)
         .fetch_all(&self.pool)
         .await?;
-        let username = usernames.into_iter().next().ok_or(AuthError::Unauthorized)?;
+        let username = usernames
+            .into_iter()
+            .next()
+            .ok_or(AuthError::Unauthorized)?;
         Ok(session_credentials(username, token))
     }
 
@@ -535,7 +538,10 @@ async fn insert_session(
     .bind(expected_password_hash)
     .fetch_all(connection)
     .await?;
-    let username = usernames.into_iter().next().ok_or(AuthError::Unauthorized)?;
+    let username = usernames
+        .into_iter()
+        .next()
+        .ok_or(AuthError::Unauthorized)?;
     let session = session_credentials(username, &token);
     Ok(IssuedSession { token, session })
 }
@@ -590,7 +596,9 @@ fn new_token() -> Result<String, AuthError> {
 
 fn credential_hash(domain: &[u8], token: &str) -> Result<[u8; TOKEN_BYTES], AuthError> {
     if token.len() != 2 * TOKEN_BYTES
-        || !token.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        || !token
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
     {
         return Err(AuthError::Unauthorized);
     }
@@ -726,7 +734,8 @@ mod tests {
         let parallel = auth.login("operator", PASSWORD).await.unwrap();
         let recovery = auth.issue_bootstrap(BootstrapKind::Recovery).await.unwrap();
         assert!(matches!(
-            auth.change_password(&old.token, NEW_PASSWORD, PASSWORD).await,
+            auth.change_password(&old.token, NEW_PASSWORD, PASSWORD)
+                .await,
             Err(AuthError::Unauthorized)
         ));
         let changed = auth
