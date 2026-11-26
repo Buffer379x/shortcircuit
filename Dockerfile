@@ -16,7 +16,8 @@ COPY migrations/ ./migrations/
 COPY docs/openapi.json ./docs/openapi.json
 COPY assets/branding/favicon.svg assets/branding/favicon.png ./assets/branding/
 COPY --from=frontend /web/dist ./frontend/dist
-RUN cargo build --locked --release
+ARG SHORTCIRCUIT_BUILD_REVISION=""
+RUN SHORTCIRCUIT_BUILD_REVISION="$SHORTCIRCUIT_BUILD_REVISION" cargo build --locked --release
 RUN mkdir -p /notices/rust && cd /usr/local/cargo/registry/src && \
     find . -type f \( -iname 'license*' -o -iname 'copying*' -o -iname 'notice*' -o -iname 'copyright*' \) \
     -exec cp --parents --target-directory=/notices/rust {} +

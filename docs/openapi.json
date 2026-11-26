@@ -6024,6 +6024,80 @@
                       "type": "integer",
                       "format": "int64",
                       "minimum": 1
+                    },
+                    "build_revision": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[0-9a-fA-F]{7,64}$"
+                    },
+                    "started_at": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int64",
+                      "minimum": 0,
+                      "description": "UTC Unix seconds"
+                    },
+                    "uptime_seconds": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    },
+                    "process_rss_bytes": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int64",
+                      "minimum": 0,
+                      "description": "Linux process resident bytes when available."
+                    },
+                    "link_count": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    },
+                    "raw_event_count": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    },
+                    "analytics_enabled": {
+                      "type": "boolean"
+                    },
+                    "last_backup_status": {
+                      "enum": [
+                        "verified",
+                        "failed",
+                        null
+                      ]
+                    },
+                    "last_verified_backup_at": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int64",
+                      "minimum": 0,
+                      "description": "UTC Unix seconds"
+                    },
+                    "monitoring_enabled": {
+                      "type": "boolean"
+                    },
+                    "last_monitor_check_at": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int64",
+                      "minimum": 0,
+                      "description": "UTC Unix seconds"
+                    },
+                    "system_operation_in_progress": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -6033,7 +6107,19 @@
                     "database_bytes",
                     "scheduled_backups",
                     "restore_status",
-                    "max_snapshot_bytes"
+                    "max_snapshot_bytes",
+                    "build_revision",
+                    "started_at",
+                    "uptime_seconds",
+                    "process_rss_bytes",
+                    "link_count",
+                    "raw_event_count",
+                    "analytics_enabled",
+                    "last_backup_status",
+                    "last_verified_backup_at",
+                    "monitoring_enabled",
+                    "last_monitor_check_at",
+                    "system_operation_in_progress"
                   ],
                   "additionalProperties": false
                 }

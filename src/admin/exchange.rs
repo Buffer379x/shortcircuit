@@ -641,8 +641,7 @@ mod tests {
         let (_directory, pool, router) = app().await;
         let file = "Code,Address,Notes,Site\n\
             Case/One,https://example.test/A%2fB,\"A comma, and\r\na second line\",GO.example.\n";
-        let (status, columns) =
-            post_csv(&router, "/api/v1/exchange/links.csv/columns", file).await;
+        let (status, columns) = post_csv(&router, "/api/v1/exchange/links.csv/columns", file).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
             columns,

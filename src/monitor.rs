@@ -371,6 +371,39 @@ mod tests {
         })
     }
 
+    #[tokio::test]
+    async fn scheduled_enrollment_checks_obey_the_outbound_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = crate::open_database(&directory.path().join("monitor.db"))
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO links (host, slug, target) VALUES
+                ('go.example', 'sample', 'http://127.0.0.1/private'),
+                ('go.example', 'future', 'http://127.0.0.1/private');
+             INSERT INTO link_monitor (link_id, priority) VALUES (1, 0), (2, 0);
+             INSERT INTO link_redirect_policies
+                (link_id, status, starts_at, forward_query, forward_path, rules)
+             VALUES (2, 302, unixepoch() + 3600, 0, 0, '[]');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let disabled = Monitor::new(false, None, 24, 6).unwrap();
+        assert!(matches!(
+            disabled.check(&pool, 1).await,
+            Err(CheckError::Disabled)
+        ));
+
+        let active = Monitor::new(true, None, 24, 6).unwrap();
+        active.run_due(&pool).await.unwrap();
+        let items = active.list(&pool, 0, 2).await.unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].status, "unknown");
+        assert_eq!(items[0].failure.as_deref(), Some("blocked"));
+        assert_eq!(items[1].status, "not_checked");
+    }
+
     #[test]
     fn distinguishes_transient_failures_and_blocked_probes() {
         assert_eq!(classify(&response(404, 0), 0).0, "warning");

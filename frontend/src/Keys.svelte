@@ -6,6 +6,9 @@
   import { formatDate, fromUnixSeconds, labelAllowed, problemMessage } from './format';
   import Icon from './Icon.svelte';
   import type { Language, Messages } from './i18n';
+  import { useTimeZone } from './timezone';
+
+  const readTimeZone = useTimeZone();
 
   let { t, language, api, domains }: { t: Messages; language: Language; api: Api; domains: Domains } = $props();
   const scopeLabels: Record<Scope, keyof Messages> = { read: 'read', write: 'write', delete: 'deleteScope' };
@@ -184,7 +187,7 @@
                 {#if key.expires_at !== null}
                   {@const expirationTime = fromUnixSeconds(key.expires_at)}
                   {#if expirationTime}
-                    <time datetime={expirationTime}>{formatDate(expirationTime, language, true)}</time>
+                    <time datetime={expirationTime}>{formatDate(expirationTime, language, true, readTimeZone())}</time>
                   {:else}
                     {t.dateOutOfRange}
                   {/if}
@@ -193,7 +196,7 @@
               </td>
               <td role="cell">
                 <span class="cell-label" aria-hidden="true">{t.created}</span>
-                {#if createdTime}<time datetime={createdTime}>{formatDate(createdTime, language)}</time>{:else}{t.dateOutOfRange}{/if}
+                {#if createdTime}<time datetime={createdTime}>{formatDate(createdTime, language, false, readTimeZone())}</time>{:else}{t.dateOutOfRange}{/if}
               </td>
               <td role="cell" class="align-right">
                 <div class="row row-actions key-actions">

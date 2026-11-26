@@ -59,7 +59,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | OpenAPI and API diagnostics | Current | P1 | The implemented API has an OpenAPI 3.1 document served through the admin interface. A browser-accessible system endpoint reports database and restore state. |
 | Audit, diagnostics, and abuse controls | Current | P0 | The administrative audit log records sensitive account, credential, and recovery actions. Separate configurable budgets limit login, admin API, and protected-link requests. The default client address is the transport peer. |
 | Backup and restore | Current | P0 | The CLI creates and restores verified SQLite snapshots. An opt-in scheduler retains verified copies. The browser can download a snapshot and stage a restore for the next controlled restart. |
-| Native data exchange | Current | P1 | Import and export bounded versioned JSON and CSV pages, preview conflicts, and apply transactionally. Field mapping is planned. |
+| Native data exchange | Current | P1 | Import and export bounded versioned JSON and CSV pages, map generic CSV columns in the browser, preview conflicts, and apply transactionally. |
 | Maintenance CLI and installation | Current | P1 | CLI commands handle setup, recovery, backups, restore, and readiness. The Unraid preview template uses the versioned amd64 non-root image. Production validation on the intended storage and proxy remains open. |
 | Cross-origin admin API access | Optional | P2 | Consider explicit origins for integrations that need browser access. |
 | Additional authentication methods and roles | Optional | P3 | Consider TOTP, recovery codes, OIDC, and roles as operational requirements emerge. |

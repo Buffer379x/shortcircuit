@@ -70,6 +70,16 @@ struct TaggedLink {
 }
 
 pub async fn open_database(path: &Path) -> Result<SqlitePool, Box<dyn Error + Send + Sync>> {
+    open_database_with_timeout(path, DATABASE_TIMEOUT).await
+}
+
+pub async fn open_database_with_timeout(
+    path: &Path,
+    busy_timeout: Duration,
+) -> Result<SqlitePool, Box<dyn Error + Send + Sync>> {
+    if !(Duration::from_millis(1)..=Duration::from_secs(10)).contains(&busy_timeout) {
+        return Err(io::Error::other("SQLite busy timeout must be 1 to 10000 milliseconds").into());
+    }
     let mut probe =
         SqliteConnection::connect_with(&SqliteConnectOptions::new().in_memory(true)).await?;
     let version: String = sqlx::query_scalar("SELECT sqlite_version()")
@@ -93,7 +103,7 @@ pub async fn open_database(path: &Path) -> Result<SqlitePool, Box<dyn Error + Se
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
-        .busy_timeout(DATABASE_TIMEOUT);
+        .busy_timeout(busy_timeout);
     let pool = SqlitePoolOptions::new()
         .min_connections(1)
         .max_connections(4)

@@ -17,6 +17,7 @@
   import Monitoring from './Monitoring.svelte';
   import Operations from './Operations.svelte';
   import Overview from './Overview.svelte';
+  import { isTimeZone, provideTimeZone } from './timezone';
   import Audit from './Audit.svelte';
 
   type Page = 'overview' | 'links' | 'exchange' | 'analytics' | 'domains' | 'tags' | 'apiKeys' | 'account' | 'operations' | 'monitoring' | 'auditLog';
@@ -36,6 +37,8 @@
 
   let language = $state<Language>('en');
   let theme = $state<Theme>('dark');
+  let timeZone = $state<string>();
+  provideTimeZone(() => timeZone);
   let systemDark = $state(false);
   const t = $derived(messages[language]);
   let user = $state<User | null>(null);
@@ -69,6 +72,8 @@
     try {
       const savedLanguage = localStorage.getItem('shortcircuit-language');
       const savedTheme = localStorage.getItem('shortcircuit-theme');
+      const savedZone = localStorage.getItem('shortcircuit-timezone');
+      if (savedZone && isTimeZone(savedZone)) timeZone = savedZone;
       if (savedLanguage === 'en' || savedLanguage === 'de') language = savedLanguage;
       if (savedTheme === 'dark' || savedTheme === 'light' || savedTheme === 'system') theme = savedTheme;
     } catch {
@@ -88,6 +93,8 @@
     try {
       localStorage.setItem('shortcircuit-language', language);
       localStorage.setItem('shortcircuit-theme', theme);
+      if (timeZone) localStorage.setItem('shortcircuit-timezone', timeZone);
+      else localStorage.removeItem('shortcircuit-timezone');
     } catch {
       // Allow the controls to work when storage is unavailable.
     }
@@ -208,7 +215,7 @@
         {#if page === 'overview'}
           <Overview {t} {language} {api} oncreate={createFromOverview} onnavigate={navigate} />
         {:else if page === 'account'}
-          <Account {t} {user} {api} onPasswordChanged={passwordChanged} />
+          <Account {t} {user} {api} bind:timeZone onPasswordChanged={passwordChanged} />
         {:else if page === 'operations'}
           <Operations {language} {api} />
         {:else if page === 'auditLog'}

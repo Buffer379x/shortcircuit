@@ -34,4 +34,4 @@ pub use input::PublicHosts;
 pub use monitor::Monitor;
 pub use rate_limit::{RateLimit, TrustedProxies};
 pub use restore::{apply_pending_restore, data_lock, restore_snapshot};
-pub use store::open_database;
+pub use store::{open_database, open_database_with_timeout};

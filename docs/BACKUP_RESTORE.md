@@ -56,9 +56,9 @@ Measure snapshot consistency, recovery point objective, and recovery time object
 
 ## Browser administration
 
-Open **System and backups** and confirm the current administrator password for each download, upload, or discard action. A successful confirmation authorizes one action for that session. A browser download streams a newly verified snapshot. Store it alongside other confidential operational backups.
+Open **System and backups** and confirm the current administrator password for each download, upload, or discard action. A successful confirmation authorizes one action for that session for two minutes. A browser download streams a newly verified snapshot. Store it alongside other confidential operational backups.
 
-The restore screen accepts the same standalone SQLite snapshot format as the CLI. The application limits the upload to 8 GiB and validates the snapshot before staging it privately in the app-data directory. Check reverse proxy limits for file size and read duration when using large databases.
+The restore screen accepts the same standalone SQLite snapshot format as the CLI. The application limits the upload to 8 GiB and 30 minutes and validates the snapshot before staging it privately in the app-data directory. Check reverse proxy limits for file size and read duration when using large databases.
 
 A staged restore appears as **Pending restart** while the current database continues serving requests. Discard it before the restart if you selected the wrong file. Restart ShortCircuit during the maintenance window to activate the staged restore. Startup acquires the data-directory lock before changing the active database and retains a rollback copy. Review the status and sign in again after activation. Follow the CLI recovery procedure above if startup or validation fails.
 

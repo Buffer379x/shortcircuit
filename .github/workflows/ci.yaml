@@ -11,6 +11,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: never
+  SHORTCIRCUIT_BUILD_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   rust:
@@ -130,7 +131,7 @@ jobs:
         run: |
           image=$(docker compose config --images)
           printf 'ref=%s\n' "$image" >> "$GITHUB_OUTPUT"
-          docker image inspect "$image" --format 'Image bytes {{.Size}}' 
+          docker image inspect "$image" --format 'Image bytes {{.Size}}'
       - name: Scan the candidate container
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

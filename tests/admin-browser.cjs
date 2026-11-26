@@ -54,6 +54,7 @@ async function verify() {
     await page.getByLabel('Password', { exact: true }).fill('ci-browser-password-example');
     await page.getByRole('button', { name: 'Create administrator', exact: true }).click();
 
+    await page.getByRole('heading', { name: 'Overview', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Create link', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Create link', exact: true });
     const target = 'https://example.test/guide?chapter=intro#start';
@@ -563,6 +564,26 @@ async function verify() {
     assert.equal(await robots.text(), 'User-agent: *\nDisallow: /\n');
 
     {
+      await page.getByRole('button', { name: 'Data exchange', exact: true }).click();
+      await page.getByLabel('Link data file', { exact: true }).setInputFiles({
+        name: 'mapped.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from('Address,Short code,Status\nhttps://example.test/mapped-check,mapped-check,1\n'),
+      });
+      const mapping = page.getByRole('group', { name: 'Map CSV columns', exact: true });
+      await mapping.getByRole('combobox', { name: 'Destination URL', exact: true }).selectOption('0');
+      await mapping.getByRole('combobox', { name: 'Slug', exact: true }).selectOption('1');
+      await mapping.getByRole('combobox', { name: 'Enabled', exact: true }).selectOption('2');
+      await mapping.getByRole('combobox', { name: 'Domain for all rows', exact: true }).selectOption('localhost');
+      await page.getByRole('button', { name: 'Preview import', exact: true }).click();
+      await page.getByText('localhost/mapped-check', { exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Apply import', exact: true }).click();
+      await page.getByText('Import applied.', { exact: true }).waitFor();
+      const mapped = await page.request.get(publicOrigin + '/mapped-check', { maxRedirects: 0 });
+      assert.equal(mapped.headers().location, 'https://example.test/mapped-check');
+    }
+
+    {
       await page.getByRole('button', { name: 'Link monitor', exact: true }).click();
       await page.getByText('Monitoring is off.', { exact: false }).waitFor();
       const monitor = await page.request.get(admin + '/api/v1/monitoring');
@@ -606,6 +627,9 @@ async function verify() {
       await page.setViewportSize({ width: 1360, height: 900 });
     }
 
+    await page.getByRole('button', { name: 'Account', exact: true }).click();
+    await page.getByLabel('Display timezone', { exact: true }).selectOption('UTC');
+    assert.equal(await page.evaluate(() => localStorage.getItem('shortcircuit-timezone')), 'UTC');
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);

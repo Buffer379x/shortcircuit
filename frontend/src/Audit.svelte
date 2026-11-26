@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { useTimeZone } from './timezone';
   import { onMount } from 'svelte';
   import type { Api } from './api';
   import { problemMessage } from './format';
@@ -28,7 +29,8 @@
   let cursor = $state<number | null>(null);
   let loading = $state(false);
   let error = $state<keyof Messages | null>(null);
-  const time = $derived(new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'short' }));
+  const readTimeZone = useTimeZone();
+  const time = $derived(new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeZone: readTimeZone(), timeStyle: 'short' }));
   const actors = $derived({ admin: t.auditAdmin, system: t.auditSystem, api_key: t.apiKeys });
   const outcomes = $derived({ success: t.auditSuccess, rejected: t.auditRejected, failed: t.auditFailed });
 
@@ -50,7 +52,7 @@
   }
 </script>
 
-<header class="page-header">
+<header class="page-head">
   <div><h1>{t.auditLog}</h1><p>{t.auditIntro}</p></div>
   <button class="button" type="button" disabled={loading} onclick={() => load()}>{t.monitorRefresh}</button>
 </header>

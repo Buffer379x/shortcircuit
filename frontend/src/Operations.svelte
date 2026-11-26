@@ -6,46 +6,56 @@
   import { problemMessage } from './format';
   import { messages } from './i18n';
   import type { Language } from './i18n';
-  import { operationsMessages } from './operations-i18n';
 
   const statusLabels = {
-    none: 'restoreNone',
-    pending_restart: 'restorePending',
-    applied: 'restoreApplied',
-    failed: 'restoreFailed',
-    interrupted: 'restoreInterrupted',
-    unavailable: 'restoreUnavailable',
+    none: 'systemRestoreNone',
+    pending_restart: 'systemRestorePending',
+    applied: 'systemRestoreApplied',
+    failed: 'systemRestoreFailed',
+    interrupted: 'systemRestoreInterrupted',
+    unavailable: 'systemRestoreUnavailable',
   } as const;
 
   const problemLabels = {
-    invalid_current_password: 'incorrectPassword',
-    operation_authorization_required: 'authorizationRequired',
-    restore_already_pending: 'restoreAlreadyPending',
-    invalid_snapshot: 'invalidSnapshot',
-    no_pending_restore: 'noPendingRestore',
-    snapshot_too_large: 'snapshotTooLarge',
-    system_operation_in_progress: 'systemBusy',
-    invalid_snapshot_upload: 'snapshotUploadFailed',
-    snapshot_upload_timed_out: 'snapshotUploadFailed',
-    unsupported_snapshot_media_type: 'snapshotUploadFailed',
+    invalid_current_password: 'systemIncorrectPassword',
+    operation_authorization_required: 'systemAuthorizationRequired',
+    restore_already_pending: 'systemRestoreAlreadyPending',
+    invalid_snapshot: 'systemInvalidSnapshot',
+    no_pending_restore: 'systemNoPendingRestore',
+    snapshot_too_large: 'systemSnapshotTooLarge',
+    system_operation_in_progress: 'systemSystemBusy',
+    invalid_snapshot_upload: 'systemSnapshotUploadFailed',
+    snapshot_upload_timed_out: 'systemSnapshotUploadFailed',
+    unsupported_snapshot_media_type: 'systemSnapshotUploadFailed',
   } as const;
 
   interface Diagnostics {
     version: string;
+    build_revision: string | null;
+    started_at: number | null;
+    uptime_seconds: number;
+    process_rss_bytes: number | null;
     sqlite_version: string;
     schema_version: number;
     database_bytes: number;
+    link_count: number;
+    raw_event_count: number;
+    analytics_enabled: boolean;
     scheduled_backups: boolean;
+    last_backup_status: 'verified' | 'failed' | null;
+    last_verified_backup_at: number | null;
+    monitoring_enabled: boolean;
+    last_monitor_check_at: number | null;
+    system_operation_in_progress: boolean;
     restore_status: keyof typeof statusLabels;
     max_snapshot_bytes: number;
   }
 
-  const actionLabels = { backup: 'download', upload: 'stage', discard: 'discard' } as const;
+  const actionLabels = { backup: 'systemDownload', upload: 'systemStage', discard: 'systemDiscard' } as const;
   type Action = keyof typeof actionLabels;
 
   let { api, language }: { api: Api; language: Language } = $props();
   const t = $derived(messages[language]);
-  const text = $derived(operationsMessages[language]);
   const ids = $props.id();
   const request = new AbortController();
   let diagnostics = $state.raw<Diagnostics | null>(null);
@@ -58,7 +68,7 @@
   let selected = $state.raw<File | null>(null);
   let input = $state<HTMLInputElement>();
   let operationError = $state.raw<unknown>(null);
-  let notice = $state<'downloadRequested' | 'stageReady' | 'discarded' | null>(null);
+  let notice = $state<'systemDownloadRequested' | 'systemStageReady' | 'systemDiscarded' | null>(null);
   const pending = $derived(diagnostics?.restore_status === 'pending_restart');
   const tooLarge = $derived(!!selected && !!diagnostics && selected.size > diagnostics.max_snapshot_bytes);
 
@@ -86,9 +96,25 @@
     return `${new Intl.NumberFormat(language, { maximumFractionDigits: 2 }).format(value / scale)} ${unit}`;
   }
 
+  function dateTime(value: number | null) {
+    if (value === null) return t.systemUnknown;
+    const time = new Date(value * 1000);
+    if (!Number.isFinite(time.getTime())) return t.systemUnknown;
+    return new Intl.DateTimeFormat(language, {
+      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      second: '2-digit', timeZone: 'UTC', timeZoneName: 'short',
+    }).format(time);
+  }
+
+  function uptime(seconds: number) {
+    const [value, unit] = seconds >= 3600 ? [seconds / 3600, 'hour']
+      : seconds >= 60 ? [seconds / 60, 'minute'] : [seconds, 'second'];
+    return new Intl.NumberFormat(language, { style: 'unit', unit, maximumFractionDigits: 1 }).format(value);
+  }
+
   function errorMessage(error: unknown) {
     if (error instanceof ApiError && Object.hasOwn(problemLabels, error.code)) {
-      return text[problemLabels[error.code as keyof typeof problemLabels]];
+      return t[problemLabels[error.code as keyof typeof problemLabels]];
     }
     return t[problemMessage(error)];
   }
@@ -133,17 +159,17 @@
       busy = 'transfer';
       if (current === 'backup') {
         downloadBackup();
-        notice = 'downloadRequested';
+        notice = 'systemDownloadRequested';
       } else if (current === 'upload' && file) {
         const snapshot = new Blob([file], { type: 'application/octet-stream' });
         await api('/system/restore', 'POST', snapshot, 'json', request.signal);
         selected = null;
         if (input) input.value = '';
-        notice = 'stageReady';
+        notice = 'systemStageReady';
         if (diagnostics) diagnostics = { ...diagnostics, restore_status: 'pending_restart' };
       } else {
         await api('/system/restore', 'DELETE', undefined, 'json', request.signal);
-        notice = 'discarded';
+        notice = 'systemDiscarded';
       }
       if (current !== 'backup') void load();
       action = null;
@@ -159,23 +185,40 @@
 
 <div class="page-head">
   <h1>{t.operations}</h1>
-  <button class="button" type="button" onclick={load} disabled={refreshing || !!busy}>{text.refresh}</button>
+  <button class="button" type="button" onclick={load} disabled={refreshing || !!busy}>{t.systemRefresh}</button>
 </div>
 
-{#if notice}<p class="notice operations-notice" role="status">{text[notice]}</p>{/if}
+{#if notice}<p class="notice operations-notice" role="status">{t[notice]}</p>{/if}
 
 <div class="operations-grid">
-  <section class="panel panel-pad stack" aria-labelledby={ids + '-diagnostics'} aria-busy={refreshing}>
-    <h2 id={ids + '-diagnostics'}>{text.diagnostics}</h2>
+  <section class="panel panel-pad stack diagnostics-panel" aria-labelledby={ids + '-diagnostics'} aria-busy={refreshing}>
+    <h2 id={ids + '-diagnostics'}>{t.systemDiagnostics}</h2>
     {#if diagnosticsError}<p class="notice error" role="alert">{errorMessage(diagnosticsError)}</p>{/if}
     {#if diagnostics}
+      {#snippet metric(label: string, value: string | number)}
+        <div><dt>{label}</dt><dd>{value}</dd></div>
+      {/snippet}
       <dl class="diagnostics">
-        <div><dt>{text.version}</dt><dd>{diagnostics.version}</dd></div>
-        <div><dt>{text.sqlite}</dt><dd>{diagnostics.sqlite_version}</dd></div>
-        <div><dt>{text.schema}</dt><dd>{diagnostics.schema_version}</dd></div>
-        <div><dt>{text.databaseSize}</dt><dd>{bytes(diagnostics.database_bytes)}</dd></div>
-        <div><dt>{text.schedule}</dt><dd>{diagnostics.scheduled_backups ? t.enabled : t.disabled}</dd></div>
-        <div><dt>{text.restoreStatus}</dt><dd>{text[statusLabels[diagnostics.restore_status]]}</dd></div>
+        {@render metric(t.systemVersion, diagnostics.version)}
+        {@render metric(t.systemBuildRevision, diagnostics.build_revision ?? t.systemUnknown)}
+        {@render metric(t.systemStartedAt, dateTime(diagnostics.started_at))}
+        {@render metric(t.systemUptime, uptime(diagnostics.uptime_seconds))}
+        {@render metric(t.systemResidentMemory, diagnostics.process_rss_bytes === null ? t.systemUnknown : bytes(diagnostics.process_rss_bytes))}
+        {@render metric(t.systemSqlite, diagnostics.sqlite_version)}
+        {@render metric(t.systemSchema, diagnostics.schema_version)}
+        {@render metric(t.systemDatabaseSize, bytes(diagnostics.database_bytes))}
+        {@render metric(t.systemLinkCount, diagnostics.link_count.toLocaleString(language))}
+        {@render metric(t.systemRawEventCount, diagnostics.raw_event_count.toLocaleString(language))}
+        {@render metric(t.systemAnalyticsEnabled, diagnostics.analytics_enabled ? t.enabled : t.disabled)}
+        {@render metric(t.systemSchedule, diagnostics.scheduled_backups ? t.enabled : t.disabled)}
+        {@render metric(t.systemBackupStatus,
+          diagnostics.last_backup_status === 'verified' ? t.systemBackupVerified
+            : diagnostics.last_backup_status === 'failed' ? t.systemBackupFailed : t.systemUnknown)}
+        {@render metric(t.systemLastVerifiedBackup, dateTime(diagnostics.last_verified_backup_at))}
+        {@render metric(t.systemMonitoringEnabled, diagnostics.monitoring_enabled ? t.enabled : t.disabled)}
+        {@render metric(t.systemLastMonitorCheck, dateTime(diagnostics.last_monitor_check_at))}
+        {@render metric(t.systemOperationStatus, diagnostics.system_operation_in_progress ? t.systemOperationActive : t.systemOperationIdle)}
+        {@render metric(t.systemRestoreStatus, t[statusLabels[diagnostics.restore_status]])}
       </dl>
     {:else if refreshing}
       <p role="status">{t.loading}</p>
@@ -183,37 +226,37 @@
   </section>
 
   <section class="panel panel-pad stack" aria-labelledby={ids + '-backup'}>
-    <h2 id={ids + '-backup'}>{text.backup}</h2>
-    <p>{text.backupHint}</p>
-    <div><button class="button" type="button" onclick={() => choose('backup')}>{text.download}</button></div>
+    <h2 id={ids + '-backup'}>{t.systemBackup}</h2>
+    <p>{t.systemBackupHint}</p>
+    <div><button class="button" type="button" onclick={() => choose('backup')}>{t.systemDownload}</button></div>
   </section>
 
   <section class="panel panel-pad stack" aria-labelledby={ids + '-restore'}>
-    <h2 id={ids + '-restore'}>{text.restore}</h2>
+    <h2 id={ids + '-restore'}>{t.systemRestore}</h2>
     {#if pending}
-      <p class="notice">{text.restartHint}</p>
-      <div><button class="button" type="button" onclick={() => choose('discard')}>{text.discard}</button></div>
+      <p class="notice">{t.systemRestartHint}</p>
+      <div><button class="button" type="button" onclick={() => choose('discard')}>{t.systemDiscard}</button></div>
     {:else}
-      <p>{text.restoreHint}</p>
+      <p>{t.systemRestoreHint}</p>
       <label class="field">
-        <span>{text.file}</span>
+        <span>{t.systemFile}</span>
         <input type="file" accept=".sqlite,.db,.sqlite3,application/octet-stream,application/vnd.sqlite3" bind:this={input}
           onchange={(event) => selected = event.currentTarget.files?.[0] ?? null}
           aria-describedby={diagnostics ? ids + '-size' : undefined} aria-invalid={tooLarge} />
-        {#if diagnostics}<small id={ids + '-size'}>{text.maxSize} {bytes(diagnostics.max_snapshot_bytes)}</small>{/if}
+        {#if diagnostics}<small id={ids + '-size'}>{t.systemMaxSize} {bytes(diagnostics.max_snapshot_bytes)}</small>{/if}
       </label>
-      {#if tooLarge}<p class="notice error" role="alert">{text.snapshotTooLarge}</p>{/if}
-      <div><button class="button" type="button" disabled={!diagnostics || !selected || tooLarge || diagnostics.restore_status === 'unavailable'} onclick={() => choose('upload')}>{text.stage}</button></div>
+      {#if tooLarge}<p class="notice error" role="alert">{t.systemSnapshotTooLarge}</p>{/if}
+      <div><button class="button" type="button" disabled={!diagnostics || !selected || tooLarge || diagnostics.restore_status === 'unavailable'} onclick={() => choose('upload')}>{t.systemStage}</button></div>
     {/if}
   </section>
 </div>
 
-<Dialog {t} open={action !== null} title={action ? text[actionLabels[action]] : text.restore} busy={busy !== null} onclose={close}>
+<Dialog {t} open={action !== null} title={action ? t[actionLabels[action]] : t.systemRestore} busy={busy !== null} onclose={close}>
   <form class="dialog-body stack" onsubmit={submit} aria-busy={busy !== null}>
     {#if action === 'upload'}
-      <label class="confirmation"><input type="checkbox" required bind:checked={confirmed} disabled={!!busy} /> <span>{text.stageConfirm}</span></label>
+      <label class="confirmation"><input type="checkbox" required bind:checked={confirmed} disabled={!!busy} /> <span>{t.systemStageConfirm}</span></label>
     {:else if action === 'discard'}
-      <p>{text.discardHint}</p>
+      <p>{t.systemDiscardHint}</p>
     {/if}
     <label class="field">
       <span>{t.currentPassword}</span>
@@ -224,7 +267,7 @@
     <div class="row operation-actions">
       <button class="button" type="button" disabled={!!busy} onclick={close}>{t.cancel}</button>
       <button class="button primary" type="submit" disabled={!action || !!busy || (action === 'upload' && !confirmed)}>
-        {busy === 'auth' ? text.authorizing : busy ? text.processing : action ? text[actionLabels[action]] : t.save}
+        {busy === 'auth' ? t.systemAuthorizing : busy ? t.systemProcessing : action ? t[actionLabels[action]] : t.save}
       </button>
     </div>
   </form>
@@ -232,8 +275,9 @@
 
 <style>
   .operations-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); align-items: start; gap: 16px; }
+  .diagnostics-panel { grid-column: 1 / -1; }
   .operations-notice { margin-bottom: 16px; }
-  .diagnostics { display: grid; gap: 10px; margin: 0; }
+  .diagnostics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 10px 28px; margin: 0; }
   .diagnostics div { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .diagnostics dt { color: var(--muted); }
   .diagnostics dd { margin: 0; min-width: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }

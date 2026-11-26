@@ -12,7 +12,7 @@ use std::{
 use shortcircuit::{
     AdminConfig, Analytics, Auth, BackupSchedule, BootstrapKind, Monitor, Operations,
     PublicControls, PublicHosts, RateLimit, TrustedProxies, admin_router_with_services,
-    apply_pending_restore, create_snapshot, data_lock, open_database, public_router_with_controls,
+    apply_pending_restore, create_snapshot, data_lock, open_database_with_timeout, public_router_with_controls,
     restore_snapshot,
 };
 use tokio::{net::TcpListener, sync::watch, time};
@@ -43,10 +43,17 @@ fn database_path() -> PathBuf {
         .join("shortcircuit.db")
 }
 
+fn busy_timeout() -> Result<Duration, AppError> {
+    let ms = setting("SQLITE_BUSY_TIMEOUT_MS", "2000")?.parse::<u64>()
+        .ok().filter(|ms| (1..=10_000).contains(ms))
+        .ok_or_else(|| io::Error::other("SQLITE_BUSY_TIMEOUT_MS must be 1 to 10000"))?;
+    Ok(Duration::from_millis(ms))
+}
+
 async fn issue_bootstrap(kind: BootstrapKind) -> Result<(), AppError> {
     let database = database_path();
     let _lock = data_lock(&database, false)?;
-    let pool = open_database(&database).await?;
+    let pool = open_database_with_timeout(&database, busy_timeout()?).await?;
     let token = Auth::new(pool.clone()).issue_bootstrap(kind).await?;
     pool.close().await;
     println!("{token}");
@@ -132,7 +139,9 @@ fn monitor_settings() -> Result<Monitor, AppError> {
         let source = std::fs::File::open(file)
             .map_err(|_| io::Error::other("could not open MONITOR_WEBHOOK_URL_FILE"))?;
         let mut value = String::new();
-        source.take(4098).read_to_string(&mut value)
+        source
+            .take(4098)
+            .read_to_string(&mut value)
             .map_err(|_| io::Error::other("could not read MONITOR_WEBHOOK_URL_FILE"))?;
         if value.len() > 4097 || value.trim_end_matches(['\r', '\n']).is_empty() {
             return Err(io::Error::other("invalid MONITOR_WEBHOOK_URL_FILE").into());
@@ -146,6 +155,7 @@ fn monitor_settings() -> Result<Monitor, AppError> {
 }
 
 async fn serve() -> Result<(), AppError> {
+    let database_busy_timeout = busy_timeout()?;
     let backup_schedule = backup_schedule()?;
     let monitor = monitor_settings()?;
     let proxies =
@@ -191,8 +201,10 @@ async fn serve() -> Result<(), AppError> {
         .into());
     }
     let database = database_path();
+    let operations = Operations::new(database.clone(), backup_schedule.is_some())
+        .with_monitoring(monitor.enabled());
     let (_lock, restore_applied) = apply_pending_restore(&database).await?;
-    let pool = open_database(&database).await?;
+    let pool = open_database_with_timeout(&database, database_busy_timeout).await?;
     if let Some(applied) = restore_applied {
         Operations::record_startup_restore(&pool, applied).await;
     }
@@ -207,7 +219,6 @@ async fn serve() -> Result<(), AppError> {
 
     let (analytics, mut writer) = Analytics::start(pool.clone()).await?;
     let (stop, receiver) = watch::channel(false);
-    let operations = Operations::new(database.clone(), backup_schedule.is_some());
     let monitoring = monitor.enabled().then(|| {
         let monitor = monitor.clone();
         let pool = pool.clone();
@@ -291,8 +302,9 @@ async fn backup() -> Result<(), AppError> {
     if !database.is_file() {
         return Err(io::Error::other("no ShortCircuit database exists").into());
     }
-    let pool = open_database(&database).await?;
+    let pool = open_database_with_timeout(&database, busy_timeout()?).await?;
     let result = create_snapshot(&pool, &database.with_file_name("backups")).await;
+    Operations::record_backup_result(&database, result.is_ok()).await;
     pool.close().await;
     println!("{}", result?.display());
     Ok(())

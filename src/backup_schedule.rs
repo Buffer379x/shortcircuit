@@ -50,7 +50,9 @@ impl BackupSchedule {
                 _ = shutdown.wait_for(|stopped| *stopped) => return,
                 _ = timer.tick() => {}
             }
-            let completed = match crate::backup::create_snapshot(&pool, &scheduled).await {
+            let result = crate::backup::create_snapshot(&pool, &scheduled).await;
+            crate::backup::record_backup_result(&backup_dir, result.is_ok()).await;
+            let completed = match result {
                 Ok(path) => {
                     tracing::info!("scheduled backup verified");
                     path

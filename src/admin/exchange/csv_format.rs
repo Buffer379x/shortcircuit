@@ -110,8 +110,12 @@ pub(super) fn parse_mapped(
         used[column] = true;
     }
     read_records(&mut reader, |record| {
-        let value = |column: Option<usize>| column.and_then(|index| record.get(index)).unwrap_or("");
-        let host = mapping.host.as_deref().unwrap_or_else(|| value(mapping.host_column));
+        let value =
+            |column: Option<usize>| column.and_then(|index| record.get(index)).unwrap_or("");
+        let host = mapping
+            .host
+            .as_deref()
+            .unwrap_or_else(|| value(mapping.host_column));
         let description = value(mapping.description_column).replace("\r\n", "\n");
         Ok(LinkMetadata {
             host: host.to_owned(),
@@ -141,7 +145,8 @@ fn open(input: &[u8]) -> Result<(csv::Reader<&[u8]>, csv::StringRecord), CsvErro
 fn is_native(header: &csv::StringRecord) -> bool {
     header.iter().take(HEADER.len()).eq(HEADER)
         && (header.len() == HEADER.len()
-            || (header.len() == HEADER.len() + 1 && header.get(HEADER.len()) == Some("description")))
+            || (header.len() == HEADER.len() + 1
+                && header.get(HEADER.len()) == Some("description")))
 }
 
 fn read_records<T>(

@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { Api } from './api';
-  import { formatDate, problemMessage } from './format';
+  import { formatDate, fromUnixSeconds, problemMessage } from './format';
   import type { Language, Messages } from './i18n';
   import Icon from './Icon.svelte';
+  import { useTimeZone } from './timezone';
 
   type Destination = 'links' | 'analytics' | 'monitoring';
   const statusLabels = {
@@ -34,6 +35,7 @@
   } = $props();
 
   const pageId = $props.id();
+  const readTimeZone = useTimeZone();
   const dayMillis = 86_400_000;
   const periods = [7, 30, 90] as const;
   const monitorLabels = [
@@ -215,9 +217,12 @@
             {/each}
           </dl>
           {#if dashboard.monitoring.last_checked !== null}
-            <p class="muted">
-              {t.overviewLastCheck} · {formatDate(new Date(dashboard.monitoring.last_checked * 1000).toISOString(), language, true)}
-            </p>
+            {@const stamp = fromUnixSeconds(dashboard.monitoring.last_checked)}
+            {#if stamp}
+              <p class="muted">
+                {t.overviewLastCheck} · <time datetime={stamp}>{formatDate(stamp, language, true, readTimeZone())}</time>
+              </p>
+            {/if}
           {/if}
         {/if}
         <div><button class="button" type="button" onclick={() => onnavigate('monitoring')}>{t.overviewViewMonitor}</button></div>
@@ -241,8 +246,8 @@
                   {#each dashboard.recent_links as link (link.id)}
                     <tr>
                       <td>{@render linkName(link)}</td>
-                      <td><span class:active={link.state === 'active'} class="link-status">{t[statusLabels[link.state]]}</span></td>
-                      <td><time datetime={link.created_at}>{formatDate(link.created_at, language, false, 'UTC')}</time></td>
+                      <td><span class={'status ' + link.state}>{t[statusLabels[link.state]]}</span></td>
+                      <td><time datetime={link.created_at}>{formatDate(link.created_at, language, false, readTimeZone())}</time></td>
                     </tr>
                   {/each}
                 </tbody>
@@ -297,7 +302,7 @@
   .bar { min-height: 1px; border-radius: 2px 2px 0 0; background: var(--accent-text); }
   .chart-dates { gap: 4px; margin-top: 4px; font-size: 12px; }
   details > summary { cursor: pointer; color: var(--sub); }
-  .daily-counts { max-block-size: 250px; margin-top: 8px; }
+  .daily-counts { max-block-size: 250px; overflow: auto; margin-top: 8px; }
   .health-bar { display: flex; height: 8px; border-radius: 8px; overflow: hidden; background: var(--line); }
   .health-bar .healthy { background: var(--positive); }
   .health-bar .attention { background: var(--danger); }
@@ -305,8 +310,6 @@
   .health-list { margin: 0; }
   .health-list dt { color: var(--sub); }
   .link-name { display: grid; min-width: 0; overflow-wrap: anywhere; }
-  .link-status { white-space: nowrap; }
-  .link-status.active { color: var(--positive); }
 
   @media (max-width: 960px) { .board { grid-template-columns: 1fr; } }
 </style>

@@ -1,9 +1,12 @@
 use std::{
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(target_os = "linux")]
+use std::io::Read;
 
 use axum::{
     Extension, Json, Router,
@@ -26,7 +29,7 @@ use tokio::{
 
 use crate::{
     auth::AuthError,
-    backup::{MAX_SNAPSHOT_BYTES, StagedSnapshot, verified_snapshot},
+    backup::{BackupStatus, MAX_SNAPSHOT_BYTES, StagedSnapshot, backup_health, verified_snapshot},
     restore::{PendingUpload, RestoreStatus, cancel_pending_restore, restore_status},
 };
 
@@ -42,11 +45,16 @@ const TRANSFER_TIMEOUT: Duration = Duration::from_secs(1800);
 const SNAPSHOT_MEDIA_TYPE: &str = "application/octet-stream";
 
 #[derive(Clone)]
-pub struct Operations(Arc<OperationsState>);
+pub struct Operations {
+    shared: Arc<OperationsState>,
+    monitoring_enabled: bool,
+}
 
 struct OperationsState {
     database: PathBuf,
     scheduled_backups: bool,
+    started_at: Option<u64>,
+    started: Instant,
     grants: Mutex<[Option<Grant>; 2]>,
     transfer: Arc<Semaphore>,
 }
@@ -64,12 +72,29 @@ enum Action {
 
 impl Operations {
     pub fn new(database: PathBuf, scheduled_backups: bool) -> Self {
-        Self(Arc::new(OperationsState {
-            database,
-            scheduled_backups,
-            grants: Mutex::new([None, None]),
-            transfer: Arc::new(Semaphore::new(1)),
-        }))
+        Self {
+            shared: Arc::new(OperationsState {
+                database,
+                scheduled_backups,
+                started_at: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .map(|duration| duration.as_secs()),
+                started: Instant::now(),
+                grants: Mutex::new([None, None]),
+                transfer: Arc::new(Semaphore::new(1)),
+            }),
+            monitoring_enabled: false,
+        }
+    }
+
+    pub fn with_monitoring(mut self, enabled: bool) -> Self {
+        self.monitoring_enabled = enabled;
+        self
+    }
+
+    pub async fn record_backup_result(database: &Path, succeeded: bool) {
+        crate::backup::record_backup_result(&database.with_file_name("backups"), succeeded).await;
     }
 
     pub async fn record_startup_restore(pool: &sqlx::SqlitePool, applied: bool) {
@@ -93,7 +118,7 @@ impl Operations {
     }
 
     fn grant(&self, action: Action, token: &str) -> Result<(), Problem> {
-        let mut grants = self.0.grants.lock().map_err(|_| Problem::unavailable())?;
+        let mut grants = self.shared.grants.lock().map_err(|_| Problem::unavailable())?;
         grants[action as usize] = Some(Grant {
             session: Sha256::digest(token.as_bytes()).into(),
             expires_at: Instant::now() + AUTHORIZATION_TTL,
@@ -102,7 +127,7 @@ impl Operations {
     }
 
     fn consume(&self, action: Action, token: &str) -> Result<(), Problem> {
-        let mut grants = self.0.grants.lock().map_err(|_| Problem::unavailable())?;
+        let mut grants = self.shared.grants.lock().map_err(|_| Problem::unavailable())?;
         let session: [u8; 32] = Sha256::digest(token.as_bytes()).into();
         grants[action as usize]
             .take_if(|grant| {
@@ -116,7 +141,7 @@ impl Operations {
     }
 
     fn start_transfer(&self) -> Result<OwnedSemaphorePermit, Problem> {
-        self.0
+        self.shared
             .transfer
             .clone()
             .try_acquire_owned()
@@ -137,35 +162,121 @@ pub(super) fn routes(operations: Operations) -> Router<AppState> {
 #[derive(Serialize)]
 struct Diagnostics {
     version: &'static str,
+    build_revision: Option<&'static str>,
+    started_at: Option<u64>,
+    uptime_seconds: u64,
+    process_rss_bytes: Option<u64>,
     sqlite_version: String,
     schema_version: i64,
     database_bytes: i64,
+    link_count: i64,
+    raw_event_count: i64,
+    analytics_enabled: bool,
     scheduled_backups: bool,
+    last_backup_status: Option<BackupStatus>,
+    last_verified_backup_at: Option<u64>,
+    monitoring_enabled: bool,
+    last_monitor_check_at: Option<i64>,
+    system_operation_in_progress: bool,
     restore_status: RestoreStatus,
     max_snapshot_bytes: u64,
+}
+
+#[derive(sqlx::FromRow)]
+struct DatabaseDiagnostics {
+    sqlite_version: String,
+    schema_version: i64,
+    database_bytes: i64,
+    link_count: i64,
+    raw_event_count: i64,
+    analytics_enabled: bool,
+    last_monitor_check_at: Option<i64>,
 }
 
 async fn diagnostics(
     State(state): State<AppState>,
     Extension(operations): Extension<Operations>,
 ) -> Result<Json<Diagnostics>, Problem> {
-    let (sqlite_version, schema_version, database_bytes): (String, i64, i64) = sqlx::query_as(
-        "SELECT sqlite_version(),
-             (SELECT max(version) FROM _sqlx_migrations WHERE success = 1),
-             (SELECT page_count FROM pragma_page_count()) * (SELECT page_size FROM pragma_page_size())",
+    let metrics: DatabaseDiagnostics = sqlx::query_as(
+        "SELECT sqlite_version() AS sqlite_version,
+             (SELECT max(version) FROM _sqlx_migrations WHERE success = 1) AS schema_version,
+             (SELECT page_count FROM pragma_page_count()) *
+                 (SELECT page_size FROM pragma_page_size()) AS database_bytes,
+             (SELECT count(*) FROM links) AS link_count,
+             (SELECT count(*) FROM analytics_events) AS raw_event_count,
+             (SELECT enabled FROM analytics_settings WHERE id = 1) AS analytics_enabled,
+             (SELECT max(last_checked) FROM link_monitor WHERE last_checked >= 0)
+                 AS last_monitor_check_at",
     )
     .fetch_one(&state.pool)
     .await
     .map_err(|_| Problem::unavailable())?;
+    let database = operations.shared.database.clone();
+    let (backup, restore_status, process_rss_bytes) = tokio::task::spawn_blocking(move || {
+        (
+            backup_health(&database.with_file_name("backups")),
+            restore_status(&database),
+            read_process_rss(),
+        )
+    })
+    .await
+    .map_err(|_| Problem::unavailable())?;
     Ok(Json(Diagnostics {
         version: env!("CARGO_PKG_VERSION"),
-        sqlite_version,
-        schema_version,
-        database_bytes,
-        scheduled_backups: operations.0.scheduled_backups,
-        restore_status: restore_status(&operations.0.database),
+        build_revision: [option_env!("SHORTCIRCUIT_BUILD_REVISION"), option_env!("GITHUB_SHA")]
+            .into_iter()
+            .flatten()
+            .find(|revision| {
+                (7..=64).contains(&revision.len())
+                    && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }),
+        started_at: operations.shared.started_at,
+        uptime_seconds: operations.shared.started.elapsed().as_secs(),
+        process_rss_bytes,
+        sqlite_version: metrics.sqlite_version,
+        schema_version: metrics.schema_version,
+        database_bytes: metrics.database_bytes,
+        link_count: metrics.link_count,
+        raw_event_count: metrics.raw_event_count,
+        analytics_enabled: metrics.analytics_enabled,
+        scheduled_backups: operations.shared.scheduled_backups,
+        last_backup_status: backup.status,
+        last_verified_backup_at: backup.verified_at,
+        monitoring_enabled: operations.monitoring_enabled,
+        last_monitor_check_at: metrics.last_monitor_check_at,
+        system_operation_in_progress: operations.shared.transfer.available_permits() == 0,
+        restore_status,
         max_snapshot_bytes: MAX_SNAPSHOT_BYTES,
     }))
+}
+
+#[cfg(target_os = "linux")]
+fn read_process_rss() -> Option<u64> {
+    let mut status = String::new();
+    std::fs::File::open("/proc/self/status")
+        .ok()?
+        .take(16 * 1024)
+        .read_to_string(&mut status)
+        .ok()?;
+    parse_rss(&status)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_process_rss() -> Option<u64> {
+    None
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn parse_rss(status: &str) -> Option<u64> {
+    let mut value = status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmRSS:"))?
+        .split_ascii_whitespace();
+    let kilobytes: u64 = value.next()?.parse().ok()?;
+    if value.next()? != "kB" || value.next().is_some() {
+        return None;
+    }
+    kilobytes.checked_mul(1024)
 }
 
 #[derive(Deserialize)]
@@ -261,15 +372,19 @@ async fn download(
     }
     let permit = operations.start_transfer()?;
     operations.consume(Action::Backup, &token.0)?;
-    let directory = operations.0.database.with_file_name("backups");
-    let snapshot = match verified_snapshot(&state.pool, &directory).await {
-        Ok(snapshot) => snapshot,
+    let directory = operations.shared.database.with_file_name("backups");
+    let result = verified_snapshot(&state.pool, &directory).await.and_then(|snapshot| {
+        let (file, length) = snapshot.open()?;
+        Ok((snapshot, file, length))
+    });
+    crate::backup::record_backup_result(&directory, result.is_ok()).await;
+    let (snapshot, file, length) = match result {
+        Ok(transfer) => transfer,
         Err(_) => {
             audit(&state, AuditAction::BackupDownload, AuditOutcome::Failed).await;
             return Err(Problem(StatusCode::SERVICE_UNAVAILABLE, "backup_failed"));
         }
     };
-    let (file, length) = snapshot.open().map_err(|_| Problem::unavailable())?;
     audit_event(
         &state.pool,
         AuditAction::BackupDownload,
@@ -402,7 +517,7 @@ async fn receive_snapshot(
     {
         return Err(snapshot_too_large());
     }
-    let database = operations.0.database.clone();
+    let database = operations.shared.database.clone();
     let pending = tokio::task::spawn_blocking(move || PendingUpload::reserve(&database))
         .await
         .map_err(|_| Problem::unavailable())?
@@ -422,7 +537,8 @@ async fn write_snapshot(file: &mut File, body: Body) -> Result<(), Problem> {
     let mut size = 0_u64;
     let mut stream = body.into_data_stream();
     while let Some(item) = stream.next().await {
-        let bytes = item.map_err(|_| Problem(StatusCode::BAD_REQUEST, "invalid_snapshot_upload"))?;
+        let bytes =
+            item.map_err(|_| Problem(StatusCode::BAD_REQUEST, "invalid_snapshot_upload"))?;
         size = size.saturating_add(bytes.len() as u64);
         if size > MAX_SNAPSHOT_BYTES {
             return Err(snapshot_too_large());
@@ -441,7 +557,7 @@ async fn cancel(
 ) -> Result<StatusCode, Problem> {
     let permit = operations.start_transfer()?;
     operations.consume(Action::Restore, &token.0)?;
-    let database = operations.0.database.clone();
+    let database = operations.shared.database.clone();
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         cancel_pending_restore(&database)
@@ -503,21 +619,58 @@ mod tests {
     #[test]
     fn authorization_is_one_use_and_bound_to_the_browser_session_and_action() {
         let operations = Operations::new(PathBuf::from("unused.sqlite"), false);
-        assert!(operations.grant(Action::Backup, "synthetic-session-a").is_ok());
-        assert!(operations.consume(Action::Backup, "synthetic-session-b").is_err());
-        assert!(operations.consume(Action::Restore, "synthetic-session-a").is_err());
-        assert!(operations.consume(Action::Backup, "synthetic-session-a").is_ok());
-        assert!(operations.consume(Action::Backup, "synthetic-session-a").is_err());
+        assert!(
+            operations
+                .grant(Action::Backup, "synthetic-session-a")
+                .is_ok()
+        );
+        assert!(
+            operations
+                .consume(Action::Backup, "synthetic-session-b")
+                .is_err()
+        );
+        assert!(
+            operations
+                .consume(Action::Restore, "synthetic-session-a")
+                .is_err()
+        );
+        assert!(
+            operations
+                .consume(Action::Backup, "synthetic-session-a")
+                .is_ok()
+        );
+        assert!(
+            operations
+                .consume(Action::Backup, "synthetic-session-a")
+                .is_err()
+        );
     }
 
     #[test]
     fn expired_grants_cannot_be_consumed() {
         let operations = Operations::new(PathBuf::from("unused.sqlite"), false);
-        operations.0.grants.lock().unwrap()[Action::Backup as usize] = Some(Grant {
+        operations.shared.grants.lock().unwrap()[Action::Backup as usize] = Some(Grant {
             session: Sha256::digest("synthetic-session").into(),
             expires_at: Instant::now(),
         });
-        assert!(operations.consume(Action::Backup, "synthetic-session").is_err());
+        assert!(
+            operations
+                .consume(Action::Backup, "synthetic-session")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn reads_only_a_valid_linux_resident_memory_value() {
+        assert_eq!(parse_rss("Name:\tshortcircuit\nVmRSS:\t1042 kB\n"), Some(1_067_008));
+        for invalid in [
+            "VmHWM: 1042 kB",
+            "VmRSS: two kB",
+            "VmRSS: 1042 MB",
+            "VmRSS: 18446744073709551615 kB",
+        ] {
+            assert_eq!(parse_rss(invalid), None, "{invalid}");
+        }
     }
 
     #[tokio::test]
@@ -558,9 +711,13 @@ mod tests {
 
         let backup_path = "/api/v1/system/backup";
         let restore_path = "/api/v1/system/restore";
-        let before = send(request(Method::GET, backup_path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let before = send(
+            request(Method::GET, backup_path)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(before.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             send(authorizing("/api/v1/system/backup/authorize"))
@@ -569,13 +726,21 @@ mod tests {
                 .status(),
             StatusCode::NO_CONTENT
         );
-        let head = send(request(Method::HEAD, backup_path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let head = send(
+            request(Method::HEAD, backup_path)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(head.status(), StatusCode::METHOD_NOT_ALLOWED);
-        let response = send(request(Method::GET, backup_path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let response = send(
+            request(Method::GET, backup_path)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         assert!(
@@ -586,7 +751,15 @@ mod tests {
         );
         let snapshot = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         assert!(snapshot.starts_with(b"SQLite format 3\0"));
-        assert_eq!(fs_entries(&database.with_file_name("backups")), 0);
+        assert!(
+            std::fs::read_dir(database.with_file_name("backups"))
+                .unwrap()
+                .all(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".backup-status"))
+        );
 
         assert_eq!(
             send(authorizing("/api/v1/system/restore/authorize"))
@@ -605,13 +778,24 @@ mod tests {
         .unwrap();
         assert_eq!(uploaded.status(), StatusCode::CREATED);
         assert_eq!(restore_status(&database), RestoreStatus::PendingRestart);
-        let diagnostics = send(request(Method::GET, "/api/v1/system").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let diagnostics = send(
+            request(Method::GET, "/api/v1/system")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(diagnostics.status(), StatusCode::OK);
         let contents = to_bytes(diagnostics.into_body(), 4096).await.unwrap();
         let report: Value = serde_json::from_slice(&contents).unwrap();
         assert_eq!(report["restore_status"], "pending_restart");
+        assert_eq!(report["link_count"], 0);
+        assert_eq!(report["raw_event_count"], 0);
+        assert_eq!(report["last_backup_status"], "verified");
+        assert!(report["last_verified_backup_at"].as_u64().unwrap() > 0);
+        assert!(report["started_at"].as_u64().unwrap() > 0);
+        assert_eq!(report["monitoring_enabled"], false);
+        assert_eq!(report["last_monitor_check_at"], Value::Null);
         assert!(!String::from_utf8_lossy(&contents).contains("live.sqlite"));
 
         assert_eq!(
@@ -621,14 +805,14 @@ mod tests {
                 .status(),
             StatusCode::NO_CONTENT
         );
-        let discarded = send(request(Method::DELETE, restore_path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let discarded = send(
+            request(Method::DELETE, restore_path)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(discarded.status(), StatusCode::NO_CONTENT);
         assert_eq!(restore_status(&database), RestoreStatus::None);
-    }
-
-    fn fs_entries(path: &std::path::Path) -> usize {
-        std::fs::read_dir(path).unwrap().count()
     }
 }

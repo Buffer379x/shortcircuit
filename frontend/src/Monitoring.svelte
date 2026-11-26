@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { useTimeZone } from './timezone';
   import { onMount } from 'svelte';
   import type { Api, Domains, LinkSearchPage } from './api';
   import { ApiError } from './api';
@@ -41,7 +42,8 @@
     blocked: t.monitorBlocked, busy: t.monitorBusy, dns: t.monitorDns, timeout: t.monitorTimeout,
     connection: t.monitorConnection, protocol: t.monitorProtocol,
   });
-  const dateTime = $derived(new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'short' }));
+  const readTimeZone = useTimeZone();
+  const dateTime = $derived(new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeZone: readTimeZone(), timeStyle: 'short' }));
 
   onMount(() => { void load(); });
 
@@ -98,7 +100,7 @@
   }
 </script>
 
-<header class="page-header">
+<header class="page-head">
   <div><h1>{t.monitoring}</h1><p>{t.monitorIntro}</p></div>
   <button class="button" type="button" disabled={working} onclick={() => load()}>{t.monitorRefresh}</button>
 </header>

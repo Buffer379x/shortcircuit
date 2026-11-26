@@ -1,7 +1,10 @@
 services:
   shortcircuit:
     image: shortcircuit:0.6.0-preview.2
-    build: .
+    build:
+      context: .
+      args:
+        SHORTCIRCUIT_BUILD_REVISION: ${SHORTCIRCUIT_BUILD_REVISION:-}
     pull_policy: build
     ports:
       - "127.0.0.1:8080:8080"

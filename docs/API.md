@@ -174,3 +174,5 @@ The authenticated analytics summary accepts `days` or a paired `start` and `end`
 Key rotation requires the administrator password and returns a replacement token once. A single SQLite transaction inserts the replacement, revokes the previous key, and records the operation in the audit log.
 
 System diagnostics, audit records, enrollment, domain probes, and backup actions require a browser session. Backup and restore each start with a password-confirmed, single-use grant. A restore upload is a raw SQLite snapshot. After validation the snapshot is staged and takes effect on a controlled restart. See the native [OpenAPI specification](openapi.json) for path, media type, and status details. [Backup and restore](BACKUP_RESTORE.md)
+
+To map a generic CSV, POST the UTF-8 body as `text/csv` to `/api/v1/exchange/links.csv/columns`. Apply the selected zero-based column positions to both preview and import. A configured fixed host can supply the domain for all rows. Duplicate labels remain distinguishable by position. Request parameter details and import limits are in [OpenAPI](openapi.json).

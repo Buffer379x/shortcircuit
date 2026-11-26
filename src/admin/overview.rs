@@ -6,16 +6,49 @@ use crate::{domains, input::PublicHosts};
 
 use super::{AppState, Problem};
 
-const LIFECYCLE: &str = "CASE
-    WHEN l.archived = 1 THEN 'archived'
-    WHEN l.enabled = 0 OR l.host NOT IN (SELECT value FROM json_each(?2)) THEN 'disabled'
-    WHEN p.starts_at > ?1 THEN 'scheduled'
-    WHEN p.expires_at <= ?1 THEN 'expired'
-    WHEN protection.consumed = 1 OR p.visits_used >= p.max_visits THEN 'exhausted'
-    ELSE 'active'
-END";
-const LINK_POLICIES: &str = "LEFT JOIN link_redirect_policies p ON p.link_id = l.id
-    LEFT JOIN link_protection protection ON protection.link_id = l.id";
+macro_rules! lifecycle_sql {
+    ($columns:literal, $source:literal, $output:literal) => {
+        concat!(
+            $columns,
+            "CASE
+                WHEN l.archived = 1 THEN 'archived'
+                WHEN l.enabled = 0 OR l.host NOT IN (SELECT value FROM json_each(?2)) THEN 'disabled'
+                WHEN p.starts_at > ?1 THEN 'scheduled'
+                WHEN p.expires_at <= ?1 THEN 'expired'
+                WHEN protection.consumed = 1 OR p.visits_used >= p.max_visits THEN 'exhausted'
+                ELSE 'active'
+             END AS state ",
+            $source,
+            " LEFT JOIN link_redirect_policies p ON p.link_id = l.id
+              LEFT JOIN link_protection protection ON protection.link_id = l.id ",
+            $output
+        )
+    };
+}
+
+const LINK_COUNTS: &str = lifecycle_sql!(
+    "WITH classified AS (SELECT p.expires_at, ",
+    "FROM links l",
+    ")
+     SELECT count(*) AS total,
+            count(*) FILTER (WHERE state = 'active') AS active,
+            count(*) FILTER (WHERE state = 'scheduled') AS scheduled,
+            count(*) FILTER (WHERE state = 'expired') AS expired,
+            count(*) FILTER (WHERE state = 'disabled') AS disabled,
+            count(*) FILTER (WHERE state = 'archived') AS archived,
+            count(*) FILTER (WHERE state = 'exhausted') AS exhausted,
+            count(*) FILTER (WHERE state = 'active' AND expires_at <= ?1 + 7 * 86400) AS expiring_soon
+     FROM classified"
+);
+
+const RECENT_LINKS: &str = lifecycle_sql!(
+    "WITH recent AS (
+        SELECT id, host, slug, title, created_at, enabled, archived FROM links ORDER BY id DESC LIMIT 5
+     )
+     SELECT l.id, l.host, l.slug, l.title, l.created_at, ",
+    "FROM recent l",
+    "ORDER BY l.id DESC"
+);
 
 #[derive(Clone)]
 struct MonitoringEnabled(bool);
@@ -89,36 +122,17 @@ async fn read_overview(
     let active_domains = hosts.len();
     let hosts_json = serde_json::json!(hosts).to_string();
 
-    let links = sqlx::query_as(&format!(
-        "WITH classified AS (
-            SELECT {LIFECYCLE} AS state, p.expires_at FROM links l {LINK_POLICIES}
-        )
-        SELECT count(*) AS total,
-               count(*) FILTER (WHERE state = 'active') AS active,
-               count(*) FILTER (WHERE state = 'scheduled') AS scheduled,
-               count(*) FILTER (WHERE state = 'expired') AS expired,
-               count(*) FILTER (WHERE state = 'disabled') AS disabled,
-               count(*) FILTER (WHERE state = 'archived') AS archived,
-               count(*) FILTER (WHERE state = 'exhausted') AS exhausted,
-               count(*) FILTER (WHERE state = 'active' AND expires_at <= ?1 + 7 * 86400) AS expiring_soon
-        FROM classified"
-    ))
-    .bind(now)
-    .bind(&hosts_json)
-    .fetch_one(&mut *transaction)
-    .await?;
+    let links = sqlx::query_as(LINK_COUNTS)
+        .bind(now)
+        .bind(&hosts_json)
+        .fetch_one(&mut *transaction)
+        .await?;
 
-    let recent_links = sqlx::query_as(&format!(
-        "WITH recent AS (
-            SELECT id, host, slug, title, created_at, enabled, archived FROM links ORDER BY id DESC LIMIT 5
-        )
-        SELECT l.id, l.host, l.slug, l.title, l.created_at, {LIFECYCLE} AS state
-        FROM recent l {LINK_POLICIES} ORDER BY l.id DESC"
-    ))
-    .bind(now)
-    .bind(&hosts_json)
-    .fetch_all(&mut *transaction)
-    .await?;
+    let recent_links = sqlx::query_as(RECENT_LINKS)
+        .bind(now)
+        .bind(&hosts_json)
+        .fetch_all(&mut *transaction)
+        .await?;
 
     let monitoring = sqlx::query_as(
         "SELECT ? AS enabled, count(*) AS total,
@@ -182,13 +196,25 @@ mod tests {
         assert_eq!((links.disabled, links.exhausted), (2, 2));
         assert_eq!(summary.active_domains, 1);
         assert_eq!(
-            summary.recent_links.iter().map(|link| link.id).collect::<Vec<_>>(),
+            summary
+                .recent_links
+                .iter()
+                .map(|link| link.id)
+                .collect::<Vec<_>>(),
             [8, 7, 6, 5, 4],
         );
         assert_eq!(summary.recent_links[0].state, "disabled");
         let monitor = summary.monitoring;
         assert!(monitor.enabled);
-        assert_eq!((monitor.total, monitor.healthy, monitor.attention, monitor.pending), (3, 1, 1, 1));
+        assert_eq!(
+            (
+                monitor.total,
+                monitor.healthy,
+                monitor.attention,
+                monitor.pending
+            ),
+            (3, 1, 1, 1)
+        );
         assert_eq!(monitor.last_checked, Some(2000));
     }
 }
