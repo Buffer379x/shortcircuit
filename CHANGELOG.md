@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add QR Studio color, transparency, error correction, and quiet-zone controls with contrast validation and optional PNG clipboard copy.
 - Add link history with comparison, category-specific restoration, JSON export, and per-link deletion.
 - Add password-protected links and confirmed, atomically consumed one-time links. Native link exports keep protected entries disabled when imported.
 

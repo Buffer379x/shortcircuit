@@ -68,8 +68,8 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 |---|---|---|---|
 | Admin interface | Current | P1 | Account setup, links, domains, tags, analytics, and API key management are available in the responsive embedded interface. The design preview covers planned dashboard and monitoring screens. [Design system](DESIGN_SYSTEM.md) |
 | Localization and themes | Current | P1 | Support English and German interface text, dark, light, and system themes, and locale-aware date and number display. |
-| Local QR generation | Current | P1 | Export basic SVG and PNG codes locally and test them with an independent decoder. |
-| QR Studio | Planned | P1 | Add error correction, quiet zone, colors, transparency, templates, and optional logos after validating scan reliability. |
+| QR Studio | Current | P1 | Preview and export local SVG and PNG with colors, transparency, error correction, resolution, and quiet-zone controls. Verify output with an independent decoder. |
+| QR design presets and overlays | Planned | P1 | Add reusable templates, optional frames and logos, and assess how overlays affect scanning. |
 | Destination title lookup | Optional | P1 | Enable title fetching explicitly through the shared outbound HTTP client, with validated targets and response limits. |
 | Health Monitor | Planned | P2 | After explicit activation, run bounded, scheduled probes under the shared outbound request policy. Report status without deactivating links. |
 | Webhooks | Planned | P2 | Provide a generic webhook using safe outbound policies. Enable destinations explicitly. |

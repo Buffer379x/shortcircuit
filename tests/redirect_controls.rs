@@ -121,10 +121,16 @@ async fn read_json(resp: Response) -> Value {
 async fn qr_style_exports_keep_the_selected_colors_and_transparency() {
     let app = Fixture::start().await;
     let id = app
-        .create("go.example", "Styled/Code", "https://example.test/target", &[])
+        .create(
+            "go.example",
+            "Styled/Code",
+            "https://example.test/target",
+            &[],
+        )
         .await;
     let route = format!("/api/v1/links/{id}/qr");
-    let style = "size=384&foreground=002040&background=FFF4E0&transparent=true&correction=H&quiet_zone=8";
+    let style =
+        "size=384&foreground=002040&background=FFF4E0&transparent=true&correction=H&quiet_zone=8";
     let image = app
         .admin_request(Method::GET, &format!("{route}?format=svg&{style}"), None)
         .await;
@@ -148,7 +154,10 @@ async fn qr_style_exports_keep_the_selected_colors_and_transparency() {
         .unwrap();
     let info = reader.info();
     assert_eq!((info.width, info.height), (384, 384));
-    assert_eq!(info.palette.as_deref(), Some(&[0, 32, 64, 255, 244, 224][..]));
+    assert_eq!(
+        info.palette.as_deref(),
+        Some(&[0, 32, 64, 255, 244, 224][..])
+    );
     assert_eq!(info.trns.as_deref(), Some(&[255, 0][..]));
 }
 
@@ -156,7 +165,12 @@ async fn qr_style_exports_keep_the_selected_colors_and_transparency() {
 async fn qr_style_rejects_unsafe_colors_and_undersized_margins() {
     let app = Fixture::start().await;
     let id = app
-        .create("go.example", "invalid-style", "https://example.test/target", &[])
+        .create(
+            "go.example",
+            "invalid-style",
+            "https://example.test/target",
+            &[],
+        )
         .await;
     let route = format!("/api/v1/links/{id}/qr");
     for (query, code) in [
@@ -170,7 +184,11 @@ async fn qr_style_rejects_unsafe_colors_and_undersized_margins() {
         let response = app
             .admin_request(Method::GET, &format!("{route}?{query}"), None)
             .await;
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY, "{query}");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{query}"
+        );
         assert_eq!(read_json(response).await["code"], code);
     }
 }

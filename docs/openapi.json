@@ -3434,7 +3434,7 @@
             }
           },
           "422": {
-            "description": "Format or size is invalid, or the encoded URL is too long.",
+            "description": "The format, size, correction level, color, contrast, or quiet zone is invalid.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3474,7 +3474,7 @@
             }
           }
         },
-        "description": "Bearer API keys require the read scope and honor any configured host restriction.",
+        "description": "Bearer API keys require the read scope and honor any configured host restriction. Module colors must be darker than the background with a contrast ratio of at least 4.5:1.",
         "parameters": [
           {
             "name": "format",
@@ -3501,6 +3501,66 @@
               "minimum": 128,
               "maximum": 1024,
               "default": 384
+            }
+          },
+          {
+            "name": "foreground",
+            "in": "query",
+            "required": false,
+            "description": "Dark module color as six hexadecimal sRGB digits without a leading hash.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{6}$",
+              "default": "000000"
+            }
+          },
+          {
+            "name": "background",
+            "in": "query",
+            "required": false,
+            "description": "Light color or reference backdrop for a transparent export, as six hexadecimal sRGB digits.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{6}$",
+              "default": "ffffff"
+            }
+          },
+          {
+            "name": "transparent",
+            "in": "query",
+            "required": false,
+            "description": "Leave the light cells and quiet zone transparent in the image.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "correction",
+            "in": "query",
+            "required": false,
+            "description": "QR error correction level.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "L",
+                "M",
+                "Q",
+                "H"
+              ],
+              "default": "M"
+            }
+          },
+          {
+            "name": "quiet_zone",
+            "in": "query",
+            "required": false,
+            "description": "Clear margin on each side, in QR modules.",
+            "schema": {
+              "type": "integer",
+              "minimum": 4,
+              "maximum": 12,
+              "default": 4
             }
           }
         ]

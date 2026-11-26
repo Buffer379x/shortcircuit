@@ -27,6 +27,11 @@ const problemMessages = new Map<string, Message>([
   ['invalid_tags', 'invalidTags'],
   ['invalid_scopes', 'invalidScopes'],
   ['invalid_expiration', 'invalidExpiration'],
+  ['invalid_qr_color', 'invalidQrColor'],
+  ['invalid_qr_contrast', 'invalidQrContrast'],
+  ['invalid_qr_correction', 'invalidQrCorrection'],
+  ['invalid_qr_quiet_zone', 'invalidQrQuietZone'],
+  ['invalid_qr_size', 'invalidQrSize'],
   ['not_found', 'resourceMissing'],
 ]);
 

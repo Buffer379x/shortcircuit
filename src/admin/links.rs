@@ -506,6 +506,11 @@ static QR_WORK: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 struct QrQuery {
     format: Option<String>,
     size: Option<u16>,
+    foreground: Option<String>,
+    background: Option<String>,
+    transparent: Option<bool>,
+    correction: Option<String>,
+    quiet_zone: Option<i64>,
 }
 
 async fn link_qr(
@@ -538,17 +543,29 @@ async fn link_qr(
     .map_err(|_| Problem::unavailable())?
     .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
     let value = format!("{}/{}", domain.origin, slug);
+    let render_options = qr::Options {
+        size: options.size,
+        foreground: options.foreground,
+        background: options.background,
+        transparent: options.transparent,
+        correction: options.correction,
+        quiet_zone: options.quiet_zone,
+    };
     let permit = QR_WORK
         .try_acquire()
         .map_err(|_| Problem(StatusCode::TOO_MANY_REQUESTS, "try_again_later"))?;
     let bytes = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        qr::generate(&value, format, options.size)
+        qr::generate(&value, format, &render_options)
     })
     .await
     .map_err(|_| Problem::unavailable())?
     .map_err(|error| match error {
         QrError::InvalidSize => Problem::invalid("invalid_qr_size"),
+        QrError::InvalidColor => Problem::invalid("invalid_qr_color"),
+        QrError::InvalidContrast => Problem::invalid("invalid_qr_contrast"),
+        QrError::InvalidCorrection => Problem::invalid("invalid_qr_correction"),
+        QrError::InvalidQuietZone => Problem::invalid("invalid_qr_quiet_zone"),
         QrError::DataTooLong => Problem::invalid("qr_data_too_long"),
         QrError::EncodingFailed => Problem::unavailable(),
     })?;
