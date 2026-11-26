@@ -12,8 +12,8 @@ use std::{
 use shortcircuit::{
     AdminConfig, Analytics, Auth, BackupSchedule, BootstrapKind, Monitor, Operations,
     PublicControls, PublicHosts, RateLimit, TrustedProxies, admin_router_with_services,
-    apply_pending_restore, create_snapshot, data_lock, open_database_with_timeout, public_router_with_controls,
-    restore_snapshot,
+    apply_pending_restore, create_snapshot, data_lock, open_database_with_timeout,
+    public_router_with_controls, restore_snapshot,
 };
 use tokio::{net::TcpListener, sync::watch, time};
 use tracing_subscriber::EnvFilter;
@@ -44,8 +44,10 @@ fn database_path() -> PathBuf {
 }
 
 fn busy_timeout() -> Result<Duration, AppError> {
-    let ms = setting("SQLITE_BUSY_TIMEOUT_MS", "2000")?.parse::<u64>()
-        .ok().filter(|ms| (1..=10_000).contains(ms))
+    let ms = setting("SQLITE_BUSY_TIMEOUT_MS", "2000")?
+        .parse::<u64>()
+        .ok()
+        .filter(|ms| (1..=10_000).contains(ms))
         .ok_or_else(|| io::Error::other("SQLITE_BUSY_TIMEOUT_MS must be 1 to 10000"))?;
     Ok(Duration::from_millis(ms))
 }

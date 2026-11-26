@@ -55,6 +55,7 @@ pub(crate) struct LinkCheck {
 pub(crate) enum CheckError {
     Disabled,
     Busy,
+    Inactive,
     Missing,
     Database,
 }
@@ -119,6 +120,30 @@ impl Monitor {
         .await
     }
 
+    pub(crate) async fn queue_checks(&self, pool: &SqlitePool) -> Result<u64, CheckError> {
+        if !self.enabled() {
+            return Err(CheckError::Disabled);
+        }
+        let updated = sqlx::query(
+            "UPDATE link_monitor SET next_check = unixepoch()
+             WHERE link_id IN (
+                 SELECT m.link_id FROM link_monitor m JOIN links l ON l.id = m.link_id
+                 LEFT JOIN link_redirect_policies p ON p.link_id = l.id
+                 WHERE m.next_check > unixepoch() AND coalesce(m.last_checked, 0) <= unixepoch() - ?
+                   AND l.enabled = 1 AND l.archived = 0
+                   AND (p.starts_at IS NULL OR p.starts_at <= unixepoch())
+                   AND (p.expires_at IS NULL OR p.expires_at > unixepoch())
+                   AND NOT EXISTS (SELECT 1 FROM domains WHERE host = l.host AND enabled = 0)
+                 ORDER BY m.next_check, m.link_id LIMIT 50
+             )",
+        )
+        .bind(MIN_RECHECK)
+        .execute(pool)
+        .await?;
+        self.changed();
+        Ok(updated.rows_affected())
+    }
+
     pub(crate) async fn check(&self, pool: &SqlitePool, id: i64) -> Result<LinkCheck, CheckError> {
         let _job = self.try_job()?;
         let row = sqlx::query_as::<_, DueLink>(
@@ -136,11 +161,18 @@ impl Monitor {
         .fetch_optional(pool)
         .await?;
         let Some(row) = row else {
-            let checks = self.list(pool, id - 1, 1).await?;
-            return Err(if checks.first().is_some_and(|check| check.id == id) {
-                CheckError::Busy
-            } else {
-                CheckError::Missing
+            let checked = sqlx::query_scalar::<_, bool>(
+                "SELECT coalesce(last_checked, 0) > unixepoch() - ?
+                 FROM link_monitor WHERE link_id = ?",
+            )
+            .bind(MIN_RECHECK)
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+            return Err(match checked {
+                Some(true) => CheckError::Busy,
+                Some(false) => CheckError::Inactive,
+                None => CheckError::Missing,
             });
         };
         self.process_rows(pool, &[&row]).await?;
@@ -381,7 +413,8 @@ mod tests {
             "INSERT INTO links (host, slug, target) VALUES
                 ('go.example', 'sample', 'http://127.0.0.1/private'),
                 ('go.example', 'future', 'http://127.0.0.1/private');
-             INSERT INTO link_monitor (link_id, priority) VALUES (1, 0), (2, 0);
+             INSERT INTO link_monitor (link_id, priority, next_check)
+             VALUES (1, 0, unixepoch() + 600), (2, 0, unixepoch() + 600);
              INSERT INTO link_redirect_policies
                 (link_id, status, starts_at, forward_query, forward_path, rules)
              VALUES (2, 302, unixepoch() + 3600, 0, 0, '[]');",
@@ -396,6 +429,8 @@ mod tests {
         ));
 
         let active = Monitor::new(true, None, 24, 6).unwrap();
+        assert_eq!(active.queue_checks(&pool).await.unwrap(), 1);
+        assert_eq!(active.queue_checks(&pool).await.unwrap(), 0);
         active.run_due(&pool).await.unwrap();
         let items = active.list(&pool, 0, 2).await.unwrap();
         assert_eq!(items.len(), 2);

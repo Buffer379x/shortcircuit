@@ -5253,6 +5253,69 @@
         ]
       }
     },
+    "/api/v1/monitoring/check": {
+      "post": {
+        "summary": "Queue a batch of enrolled link checks",
+        "tags": [
+          "Monitoring"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Checks were scheduled for the monitoring worker.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "queued": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 50
+                    }
+                  },
+                  "required": [
+                    "queued"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "description": "Advances up to 50 eligible checks. Recently checked links and links already due keep their schedule."
+      }
+    },
     "/api/v1/monitoring/domain": {
       "post": {
         "summary": "Check a configured public domain",

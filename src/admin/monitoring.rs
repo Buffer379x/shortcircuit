@@ -25,6 +25,7 @@ use super::{
 pub(super) fn routes(monitor: Monitor) -> Router<AppState> {
     Router::new()
         .route("/api/v1/monitoring", get(list))
+        .route("/api/v1/monitoring/check", post(queue_checks))
         .route("/api/v1/monitoring/links/{id}", patch(enroll))
         .route("/api/v1/monitoring/links/{id}/check", post(check))
         .route("/api/v1/monitoring/domain", post(domain))
@@ -69,6 +70,19 @@ async fn list(
         items,
         next_after,
     }))
+}
+
+#[derive(Serialize)]
+struct Queued {
+    queued: u64,
+}
+
+async fn queue_checks(
+    State(state): State<AppState>,
+    Extension(monitor): Extension<Monitor>,
+) -> Result<(StatusCode, Json<Queued>), Problem> {
+    let queued = monitor.queue_checks(&state.pool).await?;
+    Ok((StatusCode::ACCEPTED, Json(Queued { queued })))
 }
 
 #[derive(Deserialize)]
@@ -182,6 +196,7 @@ impl From<CheckError> for Problem {
         match error {
             CheckError::Disabled => Self(StatusCode::CONFLICT, "monitoring_disabled"),
             CheckError::Busy => Self(StatusCode::TOO_MANY_REQUESTS, "monitoring_busy"),
+            CheckError::Inactive => Self(StatusCode::CONFLICT, "monitoring_link_inactive"),
             CheckError::Missing => Self(StatusCode::NOT_FOUND, "not_found"),
             CheckError::Database => Self::unavailable(),
         }

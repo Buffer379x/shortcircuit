@@ -118,7 +118,11 @@ impl Operations {
     }
 
     fn grant(&self, action: Action, token: &str) -> Result<(), Problem> {
-        let mut grants = self.shared.grants.lock().map_err(|_| Problem::unavailable())?;
+        let mut grants = self
+            .shared
+            .grants
+            .lock()
+            .map_err(|_| Problem::unavailable())?;
         grants[action as usize] = Some(Grant {
             session: Sha256::digest(token.as_bytes()).into(),
             expires_at: Instant::now() + AUTHORIZATION_TTL,
@@ -127,7 +131,11 @@ impl Operations {
     }
 
     fn consume(&self, action: Action, token: &str) -> Result<(), Problem> {
-        let mut grants = self.shared.grants.lock().map_err(|_| Problem::unavailable())?;
+        let mut grants = self
+            .shared
+            .grants
+            .lock()
+            .map_err(|_| Problem::unavailable())?;
         let session: [u8; 32] = Sha256::digest(token.as_bytes()).into();
         grants[action as usize]
             .take_if(|grant| {
@@ -223,13 +231,16 @@ async fn diagnostics(
     .map_err(|_| Problem::unavailable())?;
     Ok(Json(Diagnostics {
         version: env!("CARGO_PKG_VERSION"),
-        build_revision: [option_env!("SHORTCIRCUIT_BUILD_REVISION"), option_env!("GITHUB_SHA")]
-            .into_iter()
-            .flatten()
-            .find(|revision| {
-                (7..=64).contains(&revision.len())
-                    && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
-            }),
+        build_revision: [
+            option_env!("SHORTCIRCUIT_BUILD_REVISION"),
+            option_env!("GITHUB_SHA"),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|revision| {
+            (7..=64).contains(&revision.len())
+                && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }),
         started_at: operations.shared.started_at,
         uptime_seconds: operations.shared.started.elapsed().as_secs(),
         process_rss_bytes,
@@ -373,10 +384,12 @@ async fn download(
     let permit = operations.start_transfer()?;
     operations.consume(Action::Backup, &token.0)?;
     let directory = operations.shared.database.with_file_name("backups");
-    let result = verified_snapshot(&state.pool, &directory).await.and_then(|snapshot| {
-        let (file, length) = snapshot.open()?;
-        Ok((snapshot, file, length))
-    });
+    let result = verified_snapshot(&state.pool, &directory)
+        .await
+        .and_then(|snapshot| {
+            let (file, length) = snapshot.open()?;
+            Ok((snapshot, file, length))
+        });
     crate::backup::record_backup_result(&directory, result.is_ok()).await;
     let (snapshot, file, length) = match result {
         Ok(transfer) => transfer,
@@ -662,7 +675,10 @@ mod tests {
 
     #[test]
     fn reads_only_a_valid_linux_resident_memory_value() {
-        assert_eq!(parse_rss("Name:\tshortcircuit\nVmRSS:\t1042 kB\n"), Some(1_067_008));
+        assert_eq!(
+            parse_rss("Name:\tshortcircuit\nVmRSS:\t1042 kB\n"),
+            Some(1_067_008)
+        );
         for invalid in [
             "VmHWM: 1042 kB",
             "VmRSS: two kB",

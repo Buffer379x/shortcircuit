@@ -27,6 +27,7 @@
   let { api, t, language, domains }: { api: Api; t: Messages; language: Language; domains: Domains | null } = $props();
   let report = $state<Report>();
   let working = $state(false);
+  let queued = $state<number | null>(null);
   let error = $state<keyof Messages | null>(null);
   let query = $state('');
   let results = $state<LinkSearchPage>();
@@ -54,7 +55,9 @@
     try {
       await action();
     } catch (issue) {
-      error = issue instanceof ApiError && issue.code === 'monitoring_busy' ? 'monitorBusy' : problemMessage(issue);
+      if (issue instanceof ApiError && issue.code === 'monitoring_busy') error = 'monitorBusy';
+      else if (issue instanceof ApiError && issue.code === 'monitoring_link_inactive') error = 'monitorLinkInactive';
+      else error = problemMessage(issue);
     } finally {
       working = false;
     }
@@ -80,6 +83,13 @@
       await api<void>(`/monitoring/links/${id}`, 'PATCH', { enabled, priority });
       chosenLink = undefined;
       await fetchReport();
+    });
+  }
+
+  function queueChecks() {
+    return run(async () => {
+      const result = await api<{ queued: number }>('/monitoring/check', 'POST');
+      queued = result.queued;
     });
   }
 
@@ -137,6 +147,10 @@
   {/if}
   <section class="panel panel-pad stack">
     <h2>{t.monitorEnrolled}</h2>
+    {#if report.enabled && report.items.length > 0}
+      <div><button class="button" type="button" disabled={working} onclick={queueChecks}>{t.monitorQueueChecks}</button></div>
+      {#if queued !== null}<p role="status">{t.monitorQueued} {new Intl.NumberFormat(language).format(queued)}</p>{/if}
+    {/if}
     {#each report.items as item (item.id)}
       <article class="monitor-item stack">
         <strong>{item.host}/{item.slug}</strong>

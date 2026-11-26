@@ -41,3 +41,12 @@ Estimated effort after phase 0 is **23–39 person-weeks**. Schedule the first r
 | PostgreSQL, arm64, and password-encrypted backups | P4 | Medium to high | Evaluate against measured operational needs |
 
 [Feature matrix](FEATURE_MATRIX.md) · [Project status](PROJECT_STATUS.md)
+
+
+## Acceptance gates after preview.2
+
+The development branch groups the Overview, analytics reports, generic CSV mapping, browser backups, system diagnostics, administrative auditing, API key rotation, and opt-in link monitoring. The candidate lifecycle covers a clean Docker start, the embedded admin UI, a backup and restore cycle, and upgrade from preview.2 on a disposable volume.
+
+The intended Unraid host still needs its own verification of local pool storage, actual public and admin routes, proxy header behavior, and recovery. Confirm the original hostnames and slugs that the operator intends to preserve. Collect the representative LAN benchmark and review the final release after that verification.
+
+The use of tags and favorites covers routine organization. Collections remain elective. GeoIP, title lookup, notification providers beyond the generic health webhook, and Link Pages have separate deployment and privacy costs. Evaluate them against actual operating needs after the core acceptance run.
