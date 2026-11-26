@@ -261,6 +261,11 @@ async fn selected_link_operations_are_atomic_and_protected_exports_are_disabled(
     assert_eq!(export["items"][0]["enabled"], true);
     assert_eq!(export["items"][1]["enabled"], false);
     assert!(export["items"][1].get("id").is_none());
+    let csv = request(&app.admin, Method::POST, "/api/v1/links/bulk/export", &headers,
+        Some(json!({"links":selection, "format":"csv"}))).await;
+    assert_eq!(csv.status(), StatusCode::OK);
+    let csv = to_bytes(csv.into_body(), 32_768).await.unwrap();
+    assert!(std::str::from_utf8(&csv).unwrap().contains("\"'=Sample\""));
 
     let change = request(&app.admin, Method::POST, bulk, &headers,
         Some(action(json!({"action":"set_enabled", "enabled":false})))).await;

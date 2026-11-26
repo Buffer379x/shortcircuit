@@ -19,7 +19,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Ordered redirect rules | Current | P1 | The first matching rule wins. The administration interface edits and reorders rules. Conditions use language, device, operating system, browser, and query values. |
 | Path matching extensions and aliases | Optional | P2 | Evaluate Unicode slugs, case-insensitive or trailing-slash matching, and explicit aliases against collision, encoding, and proxy requirements. |
 | Search, filters, and sorting | Current | P1 | Search the full catalog by title, slug, domain, destination, or tag. Combine domain, status, and tag filters and sort paginated results. |
-| Bulk actions | Planned | P1 | Select links, preview changes, and audit sensitive actions such as deletion and expired-link cleanup. |
+| Bulk actions | Current | P1 | Select up to 50 links, change their status or tags atomically, export native JSON or CSV, and confirm permanent deletion. |
 | Slug generation settings | Planned | P1 | Allow a configurable generated length while preserving database uniqueness and bounded retries. |
 | Tags | Current | P1 | View tag counts, rename or merge tags, and remove their assignments. Tag suggestions and colors are planned. |
 | Crawler controls | Planned | P1 | Configure crawler directives and per-link crawlability. Check reserved route collisions before serving `robots.txt`. |
@@ -55,7 +55,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Interactive setup and authentication | Current | P0 | A short-lived CLI setup token, revocable sessions, CSRF protection, and documented recovery are available. Keep the administration interface behind LAN or VPN access. |
 | Scoped API credentials | Current | P0 | Issue keys with named scopes, optional domain restrictions and expiry, and revocation. The API reveals the secret only at creation. |
 | OpenAPI and API diagnostics | Current | P1 | The implemented API has an OpenAPI 3.1 document served through the admin interface. Request IDs and dedicated credential rotation are planned. |
-| Audit, diagnostics, and abuse controls | Planned | P0 | Audit sensitive operations, rate-limit protected endpoints, and make detailed diagnostics available to authorized administrators. |
+| Audit, diagnostics, and abuse controls | Planned | P0 | Add a dedicated audit trail for sensitive operations, rate-limit protected endpoints, and make detailed diagnostics available to authorized administrators. Bulk deletions currently produce a structured count in the application log. |
 | Backup and restore | Current | P0 | The CLI creates a verified local snapshot and restores it offline with an independent rollback copy. An opt-in scheduler retains verified copies. Administration through the browser is planned. |
 | Native data exchange | Current | P1 | Import and export bounded versioned JSON and CSV pages, preview conflicts, and apply transactionally. Field mapping is planned. |
 | Maintenance CLI and installation | Planned | P1 | Provide setup, recovery, and operational commands. Verify a non-root Docker image, local storage, and the Unraid installation. |

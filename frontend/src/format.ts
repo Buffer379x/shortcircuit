@@ -27,6 +27,11 @@ const problemMessages = new Map<string, Message>([
   ['invalid_tags', 'invalidTags'],
   ['invalid_link_search', 'invalidLinkSearch'],
   ['invalid_link_cursor', 'invalidLinkCursor'],
+  ['invalid_bulk_selection', 'invalidBulkSelection'],
+  ['bulk_selection_changed', 'bulkSelectionChanged'],
+  ['bulk_delete_confirmation', 'bulkDeleteConfirmation'],
+  ['bulk_tag_limit', 'bulkTagLimit'],
+  ['bulk_export_too_large', 'bulkExportTooLarge'],
   ['invalid_scopes', 'invalidScopes'],
   ['invalid_expiration', 'invalidExpiration'],
   ['invalid_qr_color', 'invalidQrColor'],
@@ -47,6 +52,15 @@ const problemMessages = new Map<string, Message>([
   ['qr_template_limit', 'qrTemplateLimit'],
   ['not_found', 'resourceMissing'],
 ]);
+
+export function downloadFile(data: Blob, filename: string) {
+  const url = URL.createObjectURL(data);
+  const download = document.createElement('a');
+  download.href = url;
+  download.download = filename;
+  download.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 export function problemMessage(error: unknown, unauthorized: Message = 'sessionExpired'): Message {
   if (!(error instanceof ApiError)) return 'requestFailed';
