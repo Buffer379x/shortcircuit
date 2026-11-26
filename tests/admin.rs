@@ -467,7 +467,10 @@ async fn protected_link_creation_and_updates_keep_secrets_out_of_responses() {
     )
     .await;
     assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(response_body(invalid).await["code"], "invalid_link_password");
+    assert_eq!(
+        response_body(invalid).await["code"],
+        "invalid_link_password"
+    );
 
     let password = "synthetic-link-password";
     let created = request(

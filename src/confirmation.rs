@@ -1,6 +1,6 @@
 use std::{
     sync::OnceLock,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -16,6 +16,7 @@ use crate::{auth::lowercase_hex, redirect::Challenge};
 
 const VALID_SECONDS: u64 = 5 * 60;
 const MAX_FORM_BYTES: usize = 4096;
+const FORM_TIMEOUT: Duration = Duration::from_secs(5);
 static KEY: OnceLock<Option<[u8; 32]>> = OnceLock::new();
 
 type LinkMac = Hmac<Sha256>;
@@ -73,7 +74,11 @@ impl Action<'_> {
         Ok(())
     }
 
-    pub(crate) async fn submit(self, headers: &HeaderMap, body: Body) -> Result<String, StatusCode> {
+    pub(crate) async fn submit(
+        self,
+        headers: &HeaderMap,
+        body: Body,
+    ) -> Result<String, StatusCode> {
         let mut origins = headers.get_all(header::ORIGIN).iter();
         if origins.next().and_then(|value| value.to_str().ok()) != Some(self.origin)
             || origins.next().is_some()
@@ -84,12 +89,17 @@ impl Action<'_> {
             .get(header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.split(';').next())
-            .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/x-www-form-urlencoded"));
+            .is_some_and(|value| {
+                value
+                    .trim()
+                    .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+            });
         if !content_type {
             return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
         }
-        let bytes = to_bytes(body, MAX_FORM_BYTES)
+        let bytes = tokio::time::timeout(FORM_TIMEOUT, to_bytes(body, MAX_FORM_BYTES))
             .await
+            .map_err(|_| StatusCode::REQUEST_TIMEOUT)?
             .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
         let mut challenge = None;
         let mut password = None;
@@ -117,17 +127,34 @@ impl Action<'_> {
             .and_then(|value| value.split(['-', ',', ';']).next())
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("de"));
         let (lang, title, password, button, error) = if german {
-            ("de", "Linkzugriff bestätigen", "Passwort", "Weiter", "Das Passwort ist falsch.")
+            (
+                "de",
+                "Linkzugriff bestätigen",
+                "Passwort",
+                "Weiter",
+                "Das Passwort ist falsch.",
+            )
         } else {
-            ("en", "Confirm link access", "Password", "Continue", "The password is incorrect.")
+            (
+                "en",
+                "Confirm link access",
+                "Password",
+                "Continue",
+                "The password is incorrect.",
+            )
         };
         let password = if self.link.password_required {
-            format!("<label>{password}<input type=\"password\" name=\"password\" autocomplete=\"current-password\" required></label>")
+            format!(
+                "<label>{password}<input type=\"password\" name=\"password\" autocomplete=\"current-password\" required></label>"
+            )
         } else {
             String::new()
         };
         let (status, feedback) = if wrong_password {
-            (StatusCode::FORBIDDEN, format!("<p role=\"alert\">{error}</p>"))
+            (
+                StatusCode::FORBIDDEN,
+                format!("<p role=\"alert\">{error}</p>"),
+            )
         } else {
             (StatusCode::OK, String::new())
         };

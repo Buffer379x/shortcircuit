@@ -324,8 +324,14 @@ pub(crate) async fn replace_policy(
         protected.push_bind(id);
         push_host_scope(&mut protected, hosts);
         protected.push(")");
-        if protected.build_query_scalar::<bool>().fetch_one(&mut *transaction).await? {
-            return Err(PolicyError::Invalid("protection_requires_temporary_redirect"));
+        if protected
+            .build_query_scalar::<bool>()
+            .fetch_one(&mut *transaction)
+            .await?
+        {
+            return Err(PolicyError::Invalid(
+                "protection_requires_temporary_redirect",
+            ));
         }
     }
     let visits = query
@@ -494,20 +500,38 @@ pub(crate) async fn confirm(
     pool: &SqlitePool,
     request: RedirectRequest<'_>,
     challenge: Challenge,
+    origin: &str,
 ) -> Result<Resolution, sqlx::Error> {
     let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let resolved = select_link(request)
-        .build_query_as::<SelectedLink>()
-        .fetch_optional(&mut *transaction)
-        .await?;
-    let Some(link) = resolved.filter(|link| !link.blocked() && link.challenge() == Some(challenge)) else {
-        return Ok(Resolution { outcome: Outcome::Blocked, subject: None });
+    let domain_changed = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM domains WHERE host = ? AND (enabled = 0 OR origin <> ?))",
+    )
+    .bind(request.host)
+    .bind(origin)
+    .fetch_one(&mut *transaction)
+    .await?;
+    let resolved = if domain_changed {
+        None
+    } else {
+        select_link(request)
+            .build_query_as::<SelectedLink>()
+            .fetch_optional(&mut *transaction)
+            .await?
+    };
+    let Some(link) = resolved.filter(|link| !link.blocked() && link.challenge() == Some(challenge))
+    else {
+        return Ok(Resolution {
+            outcome: Outcome::Blocked,
+            subject: None,
+        });
     };
     let Outcome::Redirect { target, .. } = link.redirect(request)? else {
         unreachable!("an eligible link produces a redirect");
     };
     if axum::http::HeaderValue::from_str(&target).is_err() {
-        return Err(sqlx::Error::Protocol("invalid protected link destination".into()));
+        return Err(sqlx::Error::Protocol(
+            "invalid protected link destination".into(),
+        ));
     }
     if link.one_time {
         sqlx::query("UPDATE link_protection SET consumed = 1 WHERE link_id = ?")
@@ -517,15 +541,23 @@ pub(crate) async fn confirm(
     }
     consume_limit(&mut transaction, &link).await?;
     transaction.commit().await?;
-    Ok(link.resolution(Outcome::Redirect { target, status: 303 }))
+    Ok(link.resolution(Outcome::Redirect {
+        target,
+        status: 303,
+    }))
 }
 
-async fn consume_limit(connection: &mut sqlx::SqliteConnection, link: &SelectedLink) -> Result<(), sqlx::Error> {
+async fn consume_limit(
+    connection: &mut sqlx::SqliteConnection,
+    link: &SelectedLink,
+) -> Result<(), sqlx::Error> {
     if link.policy.max_visits.is_some() {
-        sqlx::query("UPDATE link_redirect_policies SET visits_used = visits_used + 1 WHERE link_id = ?")
-            .bind(link.id)
-            .execute(connection)
-            .await?;
+        sqlx::query(
+            "UPDATE link_redirect_policies SET visits_used = visits_used + 1 WHERE link_id = ?",
+        )
+        .bind(link.id)
+        .execute(connection)
+        .await?;
     }
     Ok(())
 }
@@ -761,6 +793,7 @@ mod tests {
         for migration in [
             include_str!("../migrations/0004_redirect_policies.sql"),
             include_str!("../migrations/0006_analytics.sql"),
+            include_str!("../migrations/0007_link_protection.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }

@@ -4,6 +4,10 @@
 
 The versioned SQL migration creates a strict `links` table with an integer `id`, `host`, case-sensitive `slug`, `target`, and a UTC `created_at` timestamp. The unique index on `(host, slug)` also supports redirect lookups. The database stores the validated destination string as supplied so redirects preserve its encoding, query, and fragment. The source checks for SQLite 3.51.3 or newer at startup and configures WAL, foreign keys, `synchronous=FULL`, a pool of up to four connections, and two-second busy and pool-acquisition timeouts.
 
+## Protected links
+
+Migration `0007` adds `link_protection` with the link ID, optional Argon2id password hash, one-time and consumed flags, and a protection revision. A deleted link cascades to its protection record. An existing link has no protection by default. Changes to protection increment its revision. Confirmation checks that revision before consuming the one-time flag and any existing visit limit in the same write transaction. Signed confirmation tokens expire in memory and require no challenge rows.
+
 ## Planned Entities and Relationships
 
 The target storage is SQLite on a local persistent volume. Use named projections for list and dashboard queries. Consider an abstraction for multiple database engines when measured requirements justify it.
@@ -18,7 +22,6 @@ The target storage is SQLite on a local persistent volume. Use named projections
 | `collections`, `collection_links`, `favorites` | Collection and join records. Favorites link a user to a link or a collection through separate foreign-key relationships. | Use collections as the additional organization tool. Retain composable tag filters. |
 | `users`, `sessions` | User ID, account status, password hash in PHC format, session ID, `token_hash`, expiry, rotation, and revocation state | Index token digests. Support revocation and deletion by user, with idle and absolute expiry. Store only token digests. |
 | `api_keys`, `api_key_domains` | Public lookup ID, `token_hash`, name, permissions, expiry, revocation, and allowed domains | Check each permission against the domain and object. Issue keys through the application. |
-| `link_protection`, `access_challenges` | Link ID, optional password hash in PHC format and network rule, and short-lived one-time challenge digest | Define the order of confirmation and consumption. Bind the challenge to the link and revision, with expiry and automatic cleanup. |
 | `visits` | Monotonic event ID, UTC time, nullable link ID, domain ID, outcome, category, optional referrer domain, optional truncated IP prefix, optional geo and device fields, and optional rule ID | Orphan events have a null link ID. A deletion job may also clear the link ID. By default, exclude full IP addresses from storage. Index `(link_id, occurred_at, id)`, `(domain_id, occurred_at, id)`, and `(occurred_at, id)`. |
 | `visit_daily`, `visit_daily_breakdowns` | UTC day, typed grouping by link, domain, outcome, and class, plus an optional dimension and rollup code | Materialize only combinations used by queries. Cap high-cardinality referrers and report grouped values separately. Use a UTC projection for date ranges. Use raw or sufficiently granular data for local calendar days and daylight saving transitions, or show the precision limit. |
 | `audit_events`, `link_revisions` | Audit event type, actor ID, time, object ID, and optional previous configuration snapshot | Exclude destination URLs and secrets from audit events. Restrict history separately and define its retention and permanent removal of prior destinations. |

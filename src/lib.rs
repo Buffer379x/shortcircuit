@@ -21,7 +21,7 @@ pub use analytics::Analytics;
 pub use auth::{Auth, BootstrapKind};
 pub use backup::create_snapshot;
 pub use backup_schedule::BackupSchedule;
-pub use http::{public_router, public_router_with_analytics};
+pub use http::{public_router, public_router_on_port, public_router_with_analytics};
 pub use input::PublicHosts;
 pub use restore::{data_lock, restore_snapshot};
 pub use store::open_database;

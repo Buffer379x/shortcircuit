@@ -181,10 +181,12 @@ async fn create_link(
 }
 
 async fn link_password_hash(auth: &Auth, password: &str) -> Result<String, Problem> {
-    auth.hash_password(password).await.map_err(|error| match error {
-        AuthError::Invalid => Problem::invalid("invalid_link_password"),
-        other => other.into(),
-    })
+    auth.hash_password(password)
+        .await
+        .map_err(|error| match error {
+            AuthError::Invalid => Problem::invalid("invalid_link_password"),
+            other => other.into(),
+        })
 }
 
 fn forbidden() -> Problem {
@@ -422,9 +424,10 @@ async fn replace_protection(
         .await
         .map_err(|error| match error {
             ProtectionError::Database => Problem::unavailable(),
-            ProtectionError::RequiresTemporaryRedirect => {
-                Problem(StatusCode::CONFLICT, "protection_requires_temporary_redirect")
-            }
+            ProtectionError::RequiresTemporaryRedirect => Problem(
+                StatusCode::CONFLICT,
+                "protection_requires_temporary_redirect",
+            ),
             ProtectionError::Consumed => Problem(StatusCode::CONFLICT, "one_time_consumed"),
         })?
         .map(Json)

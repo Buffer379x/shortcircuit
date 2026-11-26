@@ -5,14 +5,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-use axum::{extract::{ConnectInfo, Request}, http::StatusCode};
+use axum::{
+    extract::{ConnectInfo, Request},
+    http::StatusCode,
+};
 
 const WINDOW: Duration = Duration::from_secs(60);
 const PEER_ATTEMPTS: u8 = 8;
 const GLOBAL_ATTEMPTS: u8 = 60;
 
 pub(crate) fn peer(request: &Request) -> IpAddr {
-    request.extensions().get::<ConnectInfo<SocketAddr>>()
+    request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
         .map_or(IpAddr::V4(Ipv4Addr::LOCALHOST), |info| info.0.ip())
 }
 

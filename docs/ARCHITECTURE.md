@@ -28,7 +28,7 @@ flowchart LR
 
 | Surface | Access | Responsibilities |
 |---|---|---|
-| Public listener, port 8080 | Reverse proxy and configured hostnames | `GET` and `HEAD` for short links. The target architecture allows narrowly scoped confirmation actions for protected links. |
+| Public listener, port 8080 | Reverse proxy and configured hostnames | `GET` and `HEAD` for short links and `POST` for a protected link's confirmation. |
 | Admin listener, port 8081 | Prefer a LAN or VPN, reverse proxy, and application authentication | UI, API, setup, system status, backups, and native imports. |
 | Local CLI | Operator with access to the container and app data | Setup token, recovery, status probe, and maintenance procedures through the same binary. |
 | Persistence | One active application process per local database | Data, backups, and assets under `/data`. See [Database Design](DATABASE.md). |
