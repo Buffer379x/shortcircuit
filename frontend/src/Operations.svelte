@@ -241,10 +241,11 @@
     {:else}
       <p>{t.systemRestoreHint}</p>
       <label class="field">
-        <span>{t.systemFile}</span>
+        <span id={ids + '-file'}>{t.systemFile}</span>
         <input type="file" accept=".sqlite,.db,.sqlite3,application/octet-stream,application/vnd.sqlite3" bind:this={input}
           onchange={(event) => selected = event.currentTarget.files?.[0] ?? null}
-          aria-describedby={diagnostics ? ids + '-size' : undefined} aria-invalid={tooLarge} />
+          aria-labelledby={ids + '-file'} aria-describedby={diagnostics ? ids + '-size' : undefined}
+          aria-invalid={tooLarge} />
         {#if diagnostics}<small id={ids + '-size'}>{t.systemMaxSize} {bytes(diagnostics.max_snapshot_bytes)}</small>{/if}
       </label>
       {#if tooLarge}<p class="notice error" role="alert">{t.systemSnapshotTooLarge}</p>{/if}
