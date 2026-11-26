@@ -121,7 +121,7 @@
     {#if needsTags}
       <label>
         <span class="visually-hidden">{t.bulkTagsInput}</span>
-        <input bind:value={tags} placeholder={t.bulkTagsInput} maxlength="820" required disabled={busy} />
+        <input bind:value={tags} placeholder={t.bulkTagsInput} required disabled={busy} />
       </label>
     {/if}
     <button type="submit" class="button primary" disabled={busy || (needsTags && !tags.trim())}>{t.bulkApply}</button>

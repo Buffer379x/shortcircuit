@@ -395,7 +395,11 @@ async function verify() {
     const bulk = page.getByRole('combobox', { name: 'Bulk actions', exact: true });
     const applyBulk = page.getByRole('button', { name: 'Apply to selection', exact: true });
     await bulk.selectOption('add_tags');
-    await page.getByRole('textbox', { name: 'Tags, separated by commas', exact: true }).fill('batch-review');
+    const batchTags = page.getByRole('textbox', { name: 'Tags, separated by commas', exact: true });
+    const longTagList = Array.from({ length: 20 }, (_, index) => 'ä'.repeat(20) + '🟩'.repeat(18) + String(index).padStart(2, '0')).join(', ');
+    await batchTags.fill(longTagList);
+    assert.equal(await batchTags.inputValue(), longTagList);
+    await batchTags.fill('batch-review');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await applyBulk.click();
     await page.getByText('Selected links updated.', { exact: true }).waitFor();
