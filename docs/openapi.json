@@ -3434,7 +3434,7 @@
             }
           },
           "422": {
-            "description": "The format, size, correction level, color, contrast, or quiet zone is invalid.",
+            "description": "The format, size, correction level, color, contrast, quiet zone, or frame is invalid.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3561,6 +3561,20 @@
               "minimum": 4,
               "maximum": 12,
               "default": 4
+            }
+          },
+          {
+            "name": "frame",
+            "in": "query",
+            "required": false,
+            "description": "Optional outline in the foreground color, outside the configured quiet zone.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "none",
+                "outline"
+              ],
+              "default": "none"
             }
           }
         ]
@@ -5694,7 +5708,8 @@
           "background",
           "transparent",
           "correction",
-          "quiet_zone"
+          "quiet_zone",
+          "frame"
         ],
         "properties": {
           "id": {
@@ -5744,6 +5759,15 @@
             "minimum": 4,
             "maximum": 12,
             "description": "Clear margin on each side, in QR modules."
+          },
+          "frame": {
+            "type": "string",
+            "enum": [
+              "none",
+              "outline"
+            ],
+            "default": "none",
+            "description": "Optional outline in the foreground color, outside the configured quiet zone."
           }
         }
       },
@@ -5802,6 +5826,15 @@
             "minimum": 4,
             "maximum": 12,
             "description": "Clear margin on each side, in QR modules."
+          },
+          "frame": {
+            "type": "string",
+            "enum": [
+              "none",
+              "outline"
+            ],
+            "default": "none",
+            "description": "Optional outline in the foreground color, outside the configured quiet zone."
           }
         }
       },

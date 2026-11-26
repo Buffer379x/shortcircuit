@@ -22,6 +22,7 @@
     transparent: boolean;
     correction: typeof correctionLevels[number];
     quietZone: number;
+    frame: QrStyle['frame'];
   };
   const defaults: Settings = {
     size: 384,
@@ -30,6 +31,7 @@
     transparent: false,
     correction: 'M',
     quietZone: 4,
+    frame: 'none',
   };
 
   const resolutions = [256, 384, 512, 768, 1024];
@@ -52,6 +54,7 @@
     transparent: settings.transparent,
     correction: settings.correction,
     quiet_zone: settings.quietZone,
+    frame: settings.frame,
   });
 
   onDestroy(() => requests.abort());
@@ -78,6 +81,7 @@
     if (current.transparent) query.set('transparent', 'true');
     if (current.correction !== defaults.correction) query.set('correction', current.correction);
     if (current.quietZone !== defaults.quietZone) query.set('quiet_zone', String(current.quietZone));
+    if (current.frame !== defaults.frame) query.set('frame', current.frame);
     return `/api/v1/links/${link.id}/qr?${query}`;
   }
 
@@ -103,6 +107,7 @@
       transparent: style.transparent,
       correction: style.correction,
       quietZone: style.quiet_zone,
+      frame: style.frame,
     });
   }
 
@@ -182,6 +187,14 @@
             <option value={settings.size}>{settings.size} × {settings.size}</option>
           {/if}
           {#each resolutions as resolution (resolution)}<option value={resolution}>{resolution} × {resolution}</option>{/each}
+        </select>
+      </label>
+      <label class="field">
+        <span>{t.qrFrame}</span>
+        <select value={settings.frame} disabled={exporting}
+          onchange={(event) => update({ frame: event.currentTarget.value as Settings['frame'] })}>
+          <option value="none">{t.qrFrameNone}</option>
+          <option value="outline">{t.qrFrameOutline}</option>
         </select>
       </label>
     </div>

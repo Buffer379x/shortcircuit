@@ -511,6 +511,7 @@ struct QrQuery {
     transparent: Option<bool>,
     correction: Option<String>,
     quiet_zone: Option<i64>,
+    frame: Option<String>,
 }
 
 async fn link_qr(
@@ -550,6 +551,7 @@ async fn link_qr(
         transparent: options.transparent,
         correction: options.correction,
         quiet_zone: options.quiet_zone,
+        frame: options.frame,
     };
     let permit = QR_WORK
         .try_acquire()

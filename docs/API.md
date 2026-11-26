@@ -27,7 +27,7 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `GET` and `PATCH /api/v1/links/{id}/protection` | Returns `password_required`, `one_time`, and `consumed`. PATCH takes `one_time` and optional `password` or `remove_password: true`. Omit both password fields to keep the current password. A permanent redirect or an attempt to remove a consumed one-time restriction returns `409`. |
 | `GET` and `DELETE /api/v1/links/{id}/history` | Browser-session access. GET returns current editable settings and up to 25 recent revisions. DELETE clears the link's history and returns `204`. |
 | `POST /api/v1/links/{id}/history/{revision}/restore` | Browser-session access with CSRF protection. Restores one metadata or redirect-policy revision and returns `204`. Informational protection entries return `409`. |
-| `GET /api/v1/links/{id}/qr` | Renders the configured public short URL as SVG or PNG. Supports image size, colors, transparency, error correction, and quiet zone. Requires a read scope or browser session. |
+| `GET /api/v1/links/{id}/qr` | Renders the configured public short URL as SVG or PNG. Supports image size, colors, transparency, error correction, quiet zone, and an optional outline. Requires a read scope or browser session. |
 | `GET` and `POST /api/v1/qr/templates` | Browser-session access. GET returns `items`, newest first. POST creates a QR design template and returns it with an `id`. |
 | `DELETE /api/v1/qr/templates/{id}` | Removes a saved template and returns `204`. Requires a browser session. |
 | `GET` or `HEAD /{slug}` | Resolves the link's redirect policy. The default is `302` with the stored `Location` and `Cache-Control: no-store`. A protected link returns a confirmation page for GET or an empty response for HEAD. |
@@ -56,10 +56,13 @@ The `/api/v1/links/{id}/qr` endpoint accepts the following query options. The QR
 | `transparent` | `true` or `false` | `false` |
 | `correction` | `L`, `M`, `Q`, or `H` | `M` |
 | `quiet_zone` | 4 to 12 modules on each side | `4` |
+| `frame` | `none` or `outline` | `none` |
 
 ShortCircuit requires dark modules and a contrast ratio of at least 4.5:1 as a scan-readability guard. A transparent export uses the background color as the contrast reference and leaves its light cells and quiet zone transparent. Place it on a background with the same or better contrast. A larger correction level or quiet zone can require a larger image for the same link. Check the final printed size and background with the intended scanner. [QR quiet-zone guidance](https://www.qrcode.com/en/howto/code.html) · [QR error correction](https://www.qrcode.com/en/about/error_correction.html) · [Relative luminance](https://www.w3.org/WAI/WCAG21/Understanding/contrast-minimum.html)
 
-To save a QR template, send a JSON object with `name`, `size`, `foreground`, `background`, `transparent`, `correction`, and `quiet_zone`. The same render setting limits apply, and saved colors use lowercase hexadecimal. Names are trimmed, case-sensitive, and limited to 64 characters. A duplicate name or a full catalog of 32 templates returns `409`. Applying a template in the QR dialog sets its style on the current link and uses that link's public short URL. Resolution requirements still depend on the encoded URL.
+The outline uses the foreground color. It reserves three modules per side for the line and clear space around it, in addition to the configured quiet zone. The image retains its requested dimensions. An outline can reduce the size available for each QR module, so verify the final output at the intended display or print size.
+
+To save a QR template, send a JSON object with `name`, `size`, `foreground`, `background`, `transparent`, `correction`, `quiet_zone`, and optionally `frame`. Templates default to `none` for the frame. The same render setting limits apply, and saved colors use lowercase hexadecimal. Names are trimmed, case-sensitive, and limited to 64 characters. A duplicate name or a full catalog of 32 templates returns `409`. Applying a template in the QR dialog sets its style on the current link and uses that link's public short URL. Resolution requirements still depend on the encoded URL.
 
 ### Analytics
 

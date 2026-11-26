@@ -8,6 +8,8 @@ const MIN_SIZE: u16 = 128;
 const MAX_SIZE: u16 = 1024;
 const DEFAULT_SIZE: u16 = 384;
 const MIN_CONTRAST: f64 = 4.5;
+// Outside the quiet zone: one clear module, the outline, and one outer clear module.
+const OUTLINE_PADDING: usize = 3;
 // The longest configured host and slug fit within this limit, including the scheme and port.
 const MAX_VALUE_BYTES: usize = 512;
 
@@ -25,6 +27,7 @@ pub(crate) struct Options {
     pub(crate) transparent: Option<bool>,
     pub(crate) correction: Option<String>,
     pub(crate) quiet_zone: Option<i64>,
+    pub(crate) frame: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -34,6 +37,7 @@ pub(crate) enum QrError {
     InvalidContrast,
     InvalidCorrection,
     InvalidQuietZone,
+    InvalidFrame,
     DataTooLong,
     EncodingFailed,
 }
@@ -84,6 +88,7 @@ struct Style {
     transparent: bool,
     correction: EcLevel,
     quiet_zone: usize,
+    outline: bool,
 }
 
 impl Style {
@@ -114,12 +119,18 @@ impl Style {
         if !(MIN_QUIET_ZONE..=MAX_QUIET_ZONE).contains(&quiet_zone) {
             return Err(QrError::InvalidQuietZone);
         }
+        let outline = match options.frame.as_deref() {
+            Some("outline") => true,
+            None | Some("none") => false,
+            _ => return Err(QrError::InvalidFrame),
+        };
         Ok(Self {
             foreground,
             background,
             transparent: options.transparent.unwrap_or(false),
             correction,
             quiet_zone: quiet_zone as usize,
+            outline,
         })
     }
 }
@@ -148,36 +159,68 @@ pub(crate) fn generate(value: &str, format: Format, options: &Options) -> Result
         .map_err(|_| QrError::EncodingFailed)?;
     let size = usize::from(size);
     let width = code.width();
-    let padded_width = width + 2 * style.quiet_zone;
+    let padding = style.quiet_zone + if style.outline { OUTLINE_PADDING } else { 0 };
+    let padded_width = width + 2 * padding;
     let scale = size / padded_width;
     if scale == 0 {
         return Err(QrError::InvalidSize);
     }
-    let margin = style.quiet_zone * scale + (size - padded_width * scale) / 2;
+    let start = (size - padded_width * scale) / 2;
+    let margin = start + padding * scale;
     let dark_modules = code
         .into_colors()
         .into_iter()
         .enumerate()
         .filter(|&(_, color)| color == Color::Dark)
         .map(|(index, _)| {
-            (
+            Rectangle::new(
                 margin + index % width * scale,
                 margin + index / width * scale,
+                scale,
+                scale,
             )
         });
+    let frame = style
+        .outline
+        .then(|| outline(start + scale, (padded_width - 2) * scale, scale));
+    let rectangles = dark_modules.chain(frame.into_iter().flatten());
 
     match format {
-        Format::Svg => Ok(svg(size, scale, &style, dark_modules)),
-        Format::Png => png(size, scale, &style, dark_modules),
+        Format::Svg => Ok(svg(size, &style, rectangles)),
+        Format::Png => png(size, &style, rectangles),
     }
 }
 
-fn svg(
-    size: usize,
-    scale: usize,
-    style: &Style,
-    dark_modules: impl Iterator<Item = (usize, usize)>,
-) -> Vec<u8> {
+struct Rectangle {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+}
+
+impl Rectangle {
+    fn new(x: usize, y: usize, width: usize, height: usize) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+fn outline(start: usize, side: usize, stroke: usize) -> [Rectangle; 4] {
+    let end = start + side - stroke;
+    let interior = side - 2 * stroke;
+    [
+        Rectangle::new(start, start, side, stroke),
+        Rectangle::new(start, end, side, stroke),
+        Rectangle::new(start, start + stroke, stroke, interior),
+        Rectangle::new(end, start + stroke, stroke, interior),
+    ]
+}
+
+fn svg(size: usize, style: &Style, rectangles: impl Iterator<Item = Rectangle>) -> Vec<u8> {
     let mut output = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}" shape-rendering="crispEdges">"#,
     );
@@ -191,8 +234,14 @@ fn svg(
     }
     write!(output, r#"<path fill="{}" d=""#, style.foreground)
         .expect("writing to a String cannot fail");
-    for (x, y) in dark_modules {
-        write!(output, "M{x} {y}h{scale}v{scale}h-{scale}z")
+    for Rectangle {
+        x,
+        y,
+        width,
+        height,
+    } in rectangles
+    {
+        write!(output, "M{x} {y}h{width}v{height}h-{width}z")
             .expect("writing to a String cannot fail");
     }
     output.push_str("\"/></svg>");
@@ -201,9 +250,8 @@ fn svg(
 
 fn png(
     size: usize,
-    scale: usize,
     style: &Style,
-    dark_modules: impl Iterator<Item = (usize, usize)>,
+    rectangles: impl Iterator<Item = Rectangle>,
 ) -> Result<Vec<u8>, QrError> {
     let mut output = Vec::new();
     let mut encoder = png::Encoder::new(&mut output, size as u32, size as u32);
@@ -223,10 +271,16 @@ fn png(
             1
         };
     let mut pixels = vec![light_pixel; size * size];
-    for (x, y) in dark_modules {
-        for row in y..y + scale {
+    for Rectangle {
+        x,
+        y,
+        width,
+        height,
+    } in rectangles
+    {
+        for row in y..y + height {
             let start = row * size + x;
-            pixels[start..start + scale].fill(0);
+            pixels[start..start + width].fill(0);
         }
     }
 
@@ -363,6 +417,62 @@ mod tests {
     }
 
     #[test]
+    fn outline_keeps_the_clear_margin_and_the_exact_payload_in_both_formats() {
+        const VALUE: &str = "https://q.co/A";
+        const SIZE: usize = 350;
+        let options = Options {
+            size: Some(350),
+            frame: Some("outline".to_owned()),
+            ..Options::default()
+        };
+        let svg = String::from_utf8(generate(VALUE, Format::Svg, &options).unwrap()).unwrap();
+        let svg_bitmap = paint_svg_rectangles(SIZE, &svg_rectangles(&svg));
+        let png = generate(VALUE, Format::Png, &options).unwrap();
+        let mut reader = png::Decoder::new(Cursor::new(png)).read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let image = reader.next_frame(&mut pixels).unwrap();
+        assert_eq!((image.width, image.height), (350, 350));
+        assert_eq!(image.color_type, png::ColorType::Grayscale);
+        assert_eq!(pixels, svg_bitmap);
+        // With 21 QR modules, a four-module quiet zone and three reserved modules
+        // per edge, each module occupies exactly 10 pixels.
+        let row = &pixels[70 * SIZE..71 * SIZE];
+        assert_eq!(&row[..10], &[255; 10]);
+        assert_eq!(&row[10..20], &[0; 10]);
+        assert_eq!(&row[20..70], &[255; 50]);
+        assert_eq!(&row[70..80], &[0; 10]);
+        assert_eq!(&row[330..340], &[0; 10]);
+        assert_eq!(&row[340..], &[255; 10]);
+        assert_eq!(decode(SIZE, &pixels).1, VALUE);
+        assert_eq!(decode(SIZE, &svg_bitmap).1, VALUE);
+    }
+
+    #[test]
+    fn transparent_outline_is_scannable_at_small_and_large_resolutions() {
+        let long = format!("https://go.example/QR/{}", "z".repeat(196));
+        for (size, value) in [(128, "https://q.co/A"), (768, long.as_str())] {
+            let options = Options {
+                size: Some(size),
+                transparent: Some(true),
+                correction: Some("H".to_owned()),
+                frame: Some("outline".to_owned()),
+                ..Options::default()
+            };
+            let png = generate(value, Format::Png, &options).unwrap();
+            let mut reader = png::Decoder::new(Cursor::new(png)).read_info().unwrap();
+            assert_eq!(reader.info().trns.as_deref(), Some(&[255, 0][..]));
+            let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+            reader.next_frame(&mut pixels).unwrap();
+            assert_eq!(pixels[0], 1);
+            for pixel in &mut pixels {
+                // Composite the frame and transparent cells on the reference background.
+                *pixel *= 255;
+            }
+            assert_eq!(decode(size.into(), &pixels).1, value);
+        }
+    }
+
+    #[test]
     fn rejects_invalid_style_options() {
         let value = "https://q.co/A";
         for color in ["fff", "#ffffff", "+fffff", "gg0000", "äffff"] {
@@ -419,6 +529,18 @@ mod tests {
     }
 
     fn svg_pixels(svg: &str, size: usize, scale: usize, margin: usize) -> Vec<u8> {
+        let rectangles = svg_rectangles(svg);
+        assert_eq!(rectangles[0], (margin, margin, scale, scale));
+        let bounds = margin..=size - margin - scale;
+        for &(x, y, width, height) in &rectangles {
+            assert!(bounds.contains(&x) && bounds.contains(&y));
+            assert_eq!(((x - margin) % scale, (y - margin) % scale), (0, 0));
+            assert_eq!((width, height), (scale, scale));
+        }
+        paint_svg_rectangles(size, &rectangles)
+    }
+
+    fn svg_rectangles(svg: &str) -> Vec<(usize, usize, usize, usize)> {
         let path = svg
             .split_once(" d=\"")
             .unwrap()
@@ -426,24 +548,31 @@ mod tests {
             .split_once('"')
             .unwrap()
             .0;
-        let prefix = format!("M{margin} {margin}h{scale}v{scale}h-{scale}z");
-        assert!(path.starts_with(prefix.as_str()));
+        path.trim_start_matches('M')
+            .split('M')
+            .map(|rectangle| {
+                let (origin, sides) = rectangle.split_once('h').unwrap();
+                let (x, y) = origin.split_once(' ').unwrap();
+                let (width, remainder) = sides.split_once('v').unwrap();
+                let (height, closing) = remainder.split_once("h-").unwrap();
+                assert_eq!(closing.strip_suffix('z').unwrap(), width);
+                (
+                    x.parse().unwrap(),
+                    y.parse().unwrap(),
+                    width.parse().unwrap(),
+                    height.parse().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    fn paint_svg_rectangles(size: usize, rectangles: &[(usize, usize, usize, usize)]) -> Vec<u8> {
         let mut pixels = vec![255; size * size];
-        let suffix = format!("h{scale}v{scale}h-{scale}z");
-        let bounds = margin..=size - margin - scale;
-        for square in path.trim_start_matches('M').split('M') {
-            let (x, y) = square
-                .strip_suffix(suffix.as_str())
-                .unwrap()
-                .split_once(' ')
-                .unwrap();
-            let x: usize = x.parse().unwrap();
-            let y: usize = y.parse().unwrap();
-            assert!(bounds.contains(&x) && bounds.contains(&y));
-            assert_eq!(((x - margin) % scale, (y - margin) % scale), (0, 0));
-            for row in y..y + scale {
+        for &(x, y, width, height) in rectangles {
+            assert!(x + width <= size && y + height <= size);
+            for row in y..y + height {
                 let start = row * size + x;
-                pixels[start..start + scale].fill(0);
+                pixels[start..start + width].fill(0);
             }
         }
         pixels
