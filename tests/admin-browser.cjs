@@ -95,7 +95,7 @@ async function verify() {
     await page.getByText('Analytics data cleared.', { exact: true }).waitFor();
 
     await page.getByRole('button', { name: 'Data exchange', exact: true }).click();
-    await page.getByLabel('JSON link file', { exact: true }).setInputFiles({
+    await page.getByLabel('Link data file', { exact: true }).setInputFiles({
       name: 'links.json',
       mimeType: 'application/json',
       buffer: Buffer.from(JSON.stringify({ version: 1, items: [{
@@ -114,13 +114,35 @@ async function verify() {
     await page.getByText('Import applied.', { exact: true }).waitFor();
     assert.equal((await page.request.get(publicOrigin + '/backup-check', { maxRedirects: 0 })).status(), 302);
 
+    await page.getByRole('combobox', { name: 'Export format', exact: true }).selectOption('csv');
+    const csvDownload = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download CSV page', exact: true }).click();
+    const csvPage = await csvDownload;
+    const csvText = await readFile(await csvPage.path(), 'utf8');
+    assert.match(csvText, /^version,host,slug,target,title,tags,enabled,analytics_enabled/);
+
+    await page.getByLabel('Link data file', { exact: true }).setInputFiles({
+      name: 'links.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from(
+        'version,host,slug,target,title,tags,enabled,analytics_enabled\n' +
+        '1,localhost,csv-check,https://example.test/csv-check,"Sample, title",[],true,true\n',
+      ),
+    });
+    await page.getByRole('button', { name: 'Preview import', exact: true }).click();
+    await page.getByText('localhost/csv-check', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Apply import', exact: true }).click();
+    await page.getByText('Import applied.', { exact: true }).waitFor();
+    const csvRedirect = await page.request.get(publicOrigin + '/csv-check', { maxRedirects: 0 });
+    assert.equal(csvRedirect.headers().location, 'https://example.test/csv-check');
+
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);
     assert.deepEqual(errors, []);
-    console.log('Browser smoke passed: setup, create link, QR, visit limits, analytics controls, native import, URL tools, mobile layout and sign-out.');
+    console.log('Browser smoke passed: setup, create link, QR, visit limits, analytics controls, JSON and CSV exchange, URL tools, mobile layout and sign-out.');
   } finally {
     await browser.close();
   }

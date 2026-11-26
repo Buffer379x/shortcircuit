@@ -87,20 +87,21 @@ export class ApiError extends Error {
 }
 
 export interface Api {
-  <T>(path: string, method?: 'GET' | 'POST' | 'PATCH' | 'DELETE', data?: unknown): Promise<T>;
+  <T>(path: string, method?: 'GET' | 'POST' | 'PATCH' | 'DELETE', data?: unknown, responseFormat?: 'json' | 'csv'): Promise<T>;
 }
 
 export function createApi(csrf: () => string | undefined, request = fetch): Api {
-  return async function<T>(path: string, method = 'GET', data?: unknown): Promise<T> {
-    const headers = new Headers({ Accept: 'application/json' });
+  return async function<T>(path: string, method = 'GET', data?: unknown, responseFormat = 'json'): Promise<T> {
+    const headers = new Headers({ Accept: responseFormat === 'csv' ? 'text/csv' : 'application/json' });
     const token = csrf();
     if (method !== 'GET' && token) headers.set('X-CSRF-Token', token);
-    if (data !== undefined) headers.set('Content-Type', 'application/json');
+    const body = data instanceof Blob ? data : data === undefined ? undefined : JSON.stringify(data);
+    if (body !== undefined) headers.set('Content-Type', data instanceof Blob ? data.type : 'application/json');
     const response = await request(`/api/v1${path}`, {
       method,
       credentials: 'same-origin',
       headers,
-      body: data === undefined ? undefined : JSON.stringify(data),
+      body,
     });
     if (!response.ok) {
       const problem = await response.json().catch(() => null);
@@ -108,7 +109,7 @@ export function createApi(csrf: () => string | undefined, request = fetch): Api 
       throw new ApiError(response.status, code);
     }
     if (response.status === 204) return undefined as T;
-    return response.json();
+    return responseFormat === 'csv' ? response as T : response.json();
   };
 }
 

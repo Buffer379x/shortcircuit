@@ -1,12 +1,16 @@
+mod csv_format;
+
 use std::collections::{HashMap, HashSet};
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{
         DefaultBodyLimit, Query, State,
-        rejection::{JsonRejection, QueryRejection},
+        rejection::{BytesRejection, JsonRejection, QueryRejection},
     },
-    http::StatusCode,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use serde::{Deserialize, Serialize};
@@ -34,6 +38,10 @@ pub(super) fn routes(pool: SqlitePool, hosts: PublicHosts) -> Router {
         .route(
             "/api/v1/exchange/links",
             get(export_links).post(import_links),
+        )
+        .route(
+            "/api/v1/exchange/links.csv",
+            get(export_csv).post(import_csv),
         )
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .with_state(ExchangeState { pool, hosts })
@@ -77,31 +85,13 @@ async fn export_links(
     State(state): State<ExchangeState>,
     query: Result<Query<ExportQuery>, QueryRejection>,
 ) -> Result<Json<ExportPage>, Problem> {
-    let Query(query) = query.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
-    let after_id = query.after_id.unwrap_or(0);
-    if after_id < 0 {
-        return Err(invalid());
-    }
-    let rows = sqlx::query_as::<_, TaggedLink>(
-        "WITH page AS (
-             SELECT id, host, slug, target, title, enabled, analytics_enabled
-             FROM links WHERE id > ? ORDER BY id LIMIT ?
-         )
-         SELECT page.*, link_tags.tag FROM page
-         LEFT JOIN link_tags ON link_tags.link_id = page.id
-         ORDER BY page.id, link_tags.tag",
-    )
-    .bind(after_id)
-    .bind((MAX_ITEMS + 1) as i64)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|_| Problem::unavailable())?;
+    let rows = export_rows(&state.pool, query).await?;
 
     let mut items = Vec::new();
     let mut used_bytes = 0;
     let mut last_id = None;
     let mut next_after_id = None;
-    for (id, item) in combine_tags(rows) {
+    for (id, item) in rows {
         // Keep the page small enough to post back with the import wrapper.
         let bytes = serde_json::to_vec(&item)
             .map_err(|_| Problem::unavailable())?
@@ -121,6 +111,95 @@ async fn export_links(
         items,
         next_after_id,
     }))
+}
+
+async fn export_rows(
+    pool: &SqlitePool,
+    query: Result<Query<ExportQuery>, QueryRejection>,
+) -> Result<Vec<(i64, LinkMetadata)>, Problem> {
+    let Query(query) = query.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
+    let after_id = query.after_id.unwrap_or(0);
+    if after_id < 0 {
+        return Err(invalid());
+    }
+    let rows = sqlx::query_as::<_, TaggedLink>(
+        "WITH page AS (
+             SELECT id, host, slug, target, title, enabled, analytics_enabled
+             FROM links WHERE id > ? ORDER BY id LIMIT ?
+         )
+         SELECT page.*, link_tags.tag FROM page
+         LEFT JOIN link_tags ON link_tags.link_id = page.id
+         ORDER BY page.id, link_tags.tag",
+    )
+    .bind(after_id)
+    .bind((MAX_ITEMS + 1) as i64)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| Problem::unavailable())?;
+
+    Ok(combine_tags(rows))
+}
+
+async fn export_csv(
+    State(state): State<ExchangeState>,
+    query: Result<Query<ExportQuery>, QueryRejection>,
+) -> Result<Response, Problem> {
+    let rows = export_rows(&state.pool, query).await?;
+    let (content, next) = csv_format::page(rows).map_err(|_| Problem::unavailable())?;
+    let mut response = (
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=shortcircuit-links.csv",
+            ),
+        ],
+        Bytes::from(content),
+    )
+        .into_response();
+    if let Some(next) = next {
+        let cursor =
+            HeaderValue::from_str(&next.to_string()).map_err(|_| Problem::unavailable())?;
+        response.headers_mut().insert("x-next-after-id", cursor);
+    }
+    Ok(response)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CsvImportQuery {
+    preview: Option<bool>,
+}
+
+async fn import_csv(
+    State(state): State<ExchangeState>,
+    headers: HeaderMap,
+    query: Result<Query<CsvImportQuery>, QueryRejection>,
+    bytes: Result<Bytes, BytesRejection>,
+) -> Result<(StatusCode, Json<ImportReport>), Problem> {
+    let Query(query) = query.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
+    let csv_body = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/csv"));
+    if !csv_body {
+        return Err(Problem(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid_exchange",
+        ));
+    }
+    let bytes = bytes.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
+    let items = csv_format::parse(&bytes).map_err(|_| invalid())?;
+    apply_import(
+        &state,
+        ImportPage {
+            version: EXCHANGE_VERSION,
+            preview: query.preview.unwrap_or(true),
+            items,
+        },
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -158,7 +237,14 @@ async fn import_links(
     State(state): State<ExchangeState>,
     body: Result<Json<ImportPage>, JsonRejection>,
 ) -> Result<(StatusCode, Json<ImportReport>), Problem> {
-    let Json(mut input) = body.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
+    let Json(input) = body.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
+    apply_import(&state, input).await
+}
+
+async fn apply_import(
+    state: &ExchangeState,
+    mut input: ImportPage,
+) -> Result<(StatusCode, Json<ImportReport>), Problem> {
     validate(&mut input)?;
 
     let statement = if input.preview {
@@ -339,7 +425,7 @@ async fn insert_link(
 mod tests {
     use axum::{
         body::{Body, to_bytes},
-        http::{Method, Request, header},
+        http::{Method, Request},
     };
     use serde_json::{Value, json};
     use tower::ServiceExt;

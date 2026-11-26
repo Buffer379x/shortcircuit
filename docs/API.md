@@ -47,6 +47,10 @@ Analytics endpoints require a browser administrator session. Changes require the
 
 `POST /api/v1/exchange/links` accepts `version: 1`, a Boolean `preview`, and up to 100 `items` within the request size limit. Existing domains must be active. The server returns per-link `create`, `unchanged`, or `conflict` results. An apply rechecks conflicts in the same transaction as the insert. If any item conflicts, the response is `409` and all existing links remain intact. This format transfers basic link data. A full snapshot includes settings, policies, and visit history.
 
+`GET /api/v1/exchange/links.csv` downloads one CSV page. Send `after_id` with the value from the previous response's `X-Next-After-Id` header to continue. The same authenticated endpoint accepts POST with `Content-Type: text/csv` and defaults to preview. Pass `preview=false` to apply an import. Responses to POST use the same JSON report as the native JSON endpoint.
+
+CSV uses the columns `version,host,slug,target,title,tags,enabled,analytics_enabled`. Each row uses version 1, a JSON array in the tags column, and lowercase Boolean values. The export quotes fields and prefixes spreadsheet-sensitive values. Use the original export for an exact round trip and use JSON for data exchange through tools that resave spreadsheets. [OWASP CSV injection guidance](https://community.owasp.org/attacks/CSV_Injection)
+
 ### Public redirect behavior
 
 An exact path takes precedence. When the exact path is missing, the longest stored prefix that allows extra paths can handle the request. Disabled or out-of-window links and exhausted visit limits return `404`. Unknown paths and the root path can use their configured domain fallback and otherwise return `404`. Disabled domains return `404` and remain editable on the admin listener.
