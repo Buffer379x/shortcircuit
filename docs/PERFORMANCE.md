@@ -1,5 +1,16 @@
 # Resource and Performance Plan
 
+## Loopback smoke measurement
+
+The container workflow measures one existing short link in its synthetic test data after the restore exercise. It warms the app with 64 requests, then times 1,024 requests across eight HTTP/1.1 connections. The runner records architecture, virtual CPU count, time percentiles, throughput, errors, and a Docker memory snapshot. Analytics uses its default settings. This loopback result describes the test runner and the small fixture.
+
+The measurement helper checks the response and never follows its destination. Repeat `--slug` to visit multiple known short paths. Use a separate client on the target LAN for the production benchmark. Record the CPU model, database size, number of links, active features, and proxy layout alongside the result.
+
+```sh
+python3 tests/redirect_benchmark.py --base-url http://localhost:8080 --slug example --warmup 200 --requests 10000 --concurrency 16
+```
+
+
 The figures below are project targets and planning estimates. Release builds and benchmark results are pending. The reference environment is an amd64 Linux homelab with an Intel N100 (four cores) or equivalent processor, 8 GiB of RAM, a local SSD pool, and one ShortCircuit container. Start with four SQLite connections and two Tokio worker threads. The reference dataset has 10,000 links across four domains, 1,000,000 historical visits, 20 tags, and 3% limited links. Report monitoring and GeoIP overhead separately. Measure latency through completion of the redirect response and record its actual status. Disable navigation to the destination.
 
 | Metric | Project target or definition | Planning estimate |
