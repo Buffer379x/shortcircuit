@@ -1,6 +1,9 @@
 use axum::{
     Json, Router,
-    extract::{Path, State, rejection::{JsonRejection, PathRejection}},
+    extract::{
+        Path, State,
+        rejection::{JsonRejection, PathRejection},
+    },
     http::StatusCode,
     routing::{patch, post},
 };
@@ -37,19 +40,32 @@ async fn organize_link(
     let input = json_payload(body)?;
     if (input.favorite.is_none() && input.archived.is_none())
         || input.key.len() != 32
-        || !input.key.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || !input
+            .key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(Problem::invalid("invalid_link_organization"));
     }
     let domains = domains::list(&state.pool, &state.hosts, state.config.local_port)
         .await
         .map_err(|_| Problem::unavailable())?;
-    let hosts = domains.into_iter().map(|domain| domain.host).collect::<Vec<_>>();
-    catalog::organize(&state.pool, &hosts, id, &input.key, input.favorite, input.archived)
-        .await
-        .map_err(|_| Problem::unavailable())?
-        .map(Json)
-        .ok_or(Problem(StatusCode::CONFLICT, "link_organization_changed"))
+    let hosts = domains
+        .into_iter()
+        .map(|domain| domain.host)
+        .collect::<Vec<_>>();
+    catalog::organize(
+        &state.pool,
+        &hosts,
+        id,
+        &input.key,
+        input.favorite,
+        input.archived,
+    )
+    .await
+    .map_err(|_| Problem::unavailable())?
+    .map(Json)
+    .ok_or(Problem(StatusCode::CONFLICT, "link_organization_changed"))
 }
 
 async fn search_links(

@@ -243,40 +243,77 @@ async fn archive_and_favorite_are_independent_of_the_public_redirect() {
     let original_key = &link["selection_key"];
     let change = json!({"key":original_key, "favorite":true, "archived":true});
     let denied = request(
-        &app.admin, Method::PATCH, &endpoint, &headers[..2], Some(change.clone()),
+        &app.admin,
+        Method::PATCH,
+        &endpoint,
+        &headers[..2],
+        Some(change.clone()),
     )
     .await;
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
     let updated = request(&app.admin, Method::PATCH, &endpoint, &headers, Some(change)).await;
     assert_eq!(updated.status(), StatusCode::OK);
-    assert_eq!(response_body(updated).await, json!({"favorite": true, "archived": true}));
+    assert_eq!(
+        response_body(updated).await,
+        json!({"favorite": true, "archived": true})
+    );
 
-    for (view, count) in [("unarchived", 0), ("favorites", 0), ("archived", 1), ("all", 1)] {
+    for (view, count) in [
+        ("unarchived", 0),
+        ("favorites", 0),
+        ("archived", 1),
+        ("all", 1),
+    ] {
         let page = request(
-            &app.admin, Method::POST, search, &headers, Some(json!({"view":view})),
+            &app.admin,
+            Method::POST,
+            search,
+            &headers,
+            Some(json!({"view":view})),
         )
         .await;
         assert_eq!(page.status(), StatusCode::OK);
-        assert_eq!(response_body(page).await["items"].as_array().unwrap().len(), count, "{view}");
+        assert_eq!(
+            response_body(page).await["items"].as_array().unwrap().len(),
+            count,
+            "{view}"
+        );
     }
     let redirect = request(
-        &app.public, Method::GET, "/Team/Docs", &[("host", "go.example")], None,
+        &app.public,
+        Method::GET,
+        "/Team/Docs",
+        &[("host", "go.example")],
+        None,
     )
     .await;
     assert_eq!(redirect.status(), StatusCode::FOUND);
     assert_eq!(redirect.headers()[header::LOCATION], target);
 
     let restored = request(
-        &app.admin, Method::PATCH, &endpoint, &headers,
+        &app.admin,
+        Method::PATCH,
+        &endpoint,
+        &headers,
         Some(json!({"key":original_key, "archived":false})),
     )
     .await;
-    assert_eq!(response_body(restored).await, json!({"favorite": true, "archived": false}));
+    assert_eq!(
+        response_body(restored).await,
+        json!({"favorite": true, "archived": false})
+    );
     let favorites = request(
-        &app.admin, Method::POST, search, &headers, Some(json!({"view":"favorites"})),
+        &app.admin,
+        Method::POST,
+        search,
+        &headers,
+        Some(json!({"view":"favorites"})),
     )
     .await;
-    assert_eq!(response_body(favorites).await["items"][0]["slug"], "Team/Docs");
+    assert_eq!(
+        response_body(favorites).await["items"][0]["slug"],
+        "Team/Docs"
+    );
 
     sqlx::raw_sql(
         "DELETE FROM links; INSERT INTO links(host, slug, target)
@@ -286,15 +323,19 @@ async fn archive_and_favorite_are_independent_of_the_public_redirect() {
     .await
     .unwrap();
     let stale = request(
-        &app.admin, Method::PATCH, &endpoint, &headers,
+        &app.admin,
+        Method::PATCH,
+        &endpoint,
+        &headers,
         Some(json!({"key":original_key, "favorite":true})),
     )
     .await;
     assert_eq!(stale.status(), StatusCode::CONFLICT);
-    let favorite: bool = sqlx::query_scalar("SELECT favorite FROM links WHERE slug = 'replacement'")
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
+    let favorite: bool =
+        sqlx::query_scalar("SELECT favorite FROM links WHERE slug = 'replacement'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
     assert!(!favorite);
 }
 
@@ -320,7 +361,10 @@ async fn catalog_combines_multiple_tags_with_all_or_any() {
     .unwrap();
     for (mode, expected) in [("all", vec!["both"]), ("any", vec!["both", "one"])] {
         let response = request(
-            &app.admin, Method::POST, "/api/v1/links/search", &headers,
+            &app.admin,
+            Method::POST,
+            "/api/v1/links/search",
+            &headers,
             Some(json!({
                 "host":"go.example", "tags":["docs", "internal", " docs "],
                 "tag_match":mode, "sort":"slug_asc"
@@ -329,8 +373,12 @@ async fn catalog_combines_multiple_tags_with_all_or_any() {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         let payload = response_body(response).await;
-        let slugs: Vec<_> = payload["items"].as_array().unwrap().iter()
-            .map(|item| item["slug"].as_str().unwrap()).collect();
+        let slugs: Vec<_> = payload["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["slug"].as_str().unwrap())
+            .collect();
         assert_eq!(slugs, expected);
     }
 }
