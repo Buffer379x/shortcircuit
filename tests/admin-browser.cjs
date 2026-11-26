@@ -375,8 +375,24 @@ async function verify() {
     await view.selectOption('favorites');
     await backupRow.waitFor();
     assert.equal(await favorite.getAttribute('aria-pressed'), 'true');
+    const organizationPath = /\/api\/v1\/links\/\d+\/organization$/;
+    let releaseArchive;
+    const archivePending = new Promise(resolve => { releaseArchive = resolve; });
+    await page.route(organizationPath, async route => {
+      await archivePending;
+      await route.continue();
+    }, { times: 1 });
+    const archiveSent = page.waitForRequest(organizationPath);
     await backupRow.getByRole('button', { name: 'Archive link', exact: true }).click();
+    await archiveSent;
+    const searchBox = page.getByRole('searchbox', { name: 'Search all links', exact: true });
+    try {
+      await searchBox.focus();
+    } finally {
+      releaseArchive();
+    }
     await page.getByText('There are no favorites.', { exact: true }).waitFor();
+    assert.equal(await searchBox.evaluate(input => input === document.activeElement), true);
     const archivedRedirect = await page.request.get(publicOrigin + '/backup-check', { maxRedirects: 0 });
     assert.equal(archivedRedirect.status(), 302);
     assert.equal(archivedRedirect.headers().location, 'https://example.test/backup-check');

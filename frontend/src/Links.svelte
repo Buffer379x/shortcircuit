@@ -349,7 +349,7 @@
     }
   }
 
-  async function organize(link: CatalogLink, change: Partial<LinkOrganization>, message: keyof Messages) {
+  async function organize(link: CatalogLink, change: Partial<LinkOrganization>, message: keyof Messages, control: HTMLButtonElement) {
     if (updating !== null) return;
     updating = link.id;
     actionError = null;
@@ -359,10 +359,11 @@
         key: link.selection_key,
         ...change,
       });
+      const focusWasOnControl = document.activeElement === control;
       patchListedLink(link.id, updated, link.selection_key);
       if (!inCurrentView(updated)) {
         updateSelection(link.selection_key, false);
-        viewControl?.focus();
+        if (focusWasOnControl) viewControl?.focus();
       }
       refreshCatalog(false);
       notice = message;
@@ -525,8 +526,8 @@
                       onchange={(event) => updateSelection(link.selection_key, event.currentTarget.checked)} />
                   </label>
                   <button class="icon-button ghost favorite-button" type="button" aria-label={t.favoriteLink} title={t.favoriteLink}
-                    aria-pressed={link.favorite} disabled={bulkBusy || updating !== null}
-                    onclick={() => organize(link, { favorite: !link.favorite }, link.favorite ? 'favoriteRemoved' : 'favoriteAdded')}><Icon name="star" /></button>
+                    aria-pressed={link.favorite} aria-disabled={updating !== null} disabled={bulkBusy}
+                    onclick={(event) => organize(link, { favorite: !link.favorite }, link.favorite ? 'favoriteRemoved' : 'favoriteAdded', event.currentTarget)}><Icon name="star" /></button>
                   <div class="link-text">
                     {#if link.title}<strong>{link.title}</strong>{/if}
                     <a class="mono link-short" href={shortUrl(link, domains)} target="_blank" rel="noreferrer">{link.host}/{link.slug}</a>
@@ -555,9 +556,9 @@
                   <button class="icon-button ghost" type="button" disabled={bulkBusy} aria-label={t.linkHistory} title={t.linkHistory} onclick={() => historyLink = link}><Icon name="history" /></button>
                   <button class="icon-button ghost" type="button" aria-label={t.qrCode} title={t.qrCode} onclick={() => qrLink = link}><Icon name="qr" /></button>
                   <button class="button toggle-button" type="button" disabled={bulkBusy || updating !== null} onclick={() => toggle(link)}>{link.enabled ? t.disable : t.enable}</button>
-                  <button class="icon-button ghost" type="button" disabled={bulkBusy || updating !== null}
+                  <button class="icon-button ghost" type="button" disabled={bulkBusy} aria-disabled={updating !== null}
                     aria-label={link.archived ? t.unarchiveLink : t.archiveLink} title={link.archived ? t.unarchiveLink : t.archiveLink}
-                    onclick={() => organize(link, { archived: !link.archived }, link.archived ? 'linkUnarchived' : 'linkArchived')}><Icon name={link.archived ? 'unarchive' : 'archive'} /></button>
+                    onclick={(event) => organize(link, { archived: !link.archived }, link.archived ? 'linkUnarchived' : 'linkArchived', event.currentTarget)}><Icon name={link.archived ? 'unarchive' : 'archive'} /></button>
                   <button class="icon-button ghost delete-button" type="button" disabled={bulkBusy} aria-label={t.deleteLink} title={t.deleteLink} onclick={() => { formError = null; removing = link; }}><Icon name="trash" /></button>
                 </div>
               </td>
