@@ -16,6 +16,7 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `GET /api/v1/domains` | Returns active `hosts`, an `origins` map for configured hosts visible to the caller, and the local public port. |
 | `POST /api/v1/links/duplicates` | Admin session lookup for an exact stored destination. Accepts `target` and an optional positive `exclude_id`. Returns up to ten items newest first and `has_more`. |
 | `GET /api/v1/links` | Accepts the optional `after_id` cursor. Returns `items` and `next_after_id` with up to 100 records per page. |
+| `POST /api/v1/links/search` | Searches, filters, and sorts all links in the administrator's catalog. Requires a browser session, Origin and CSRF. Search terms and cursors are sent in the JSON body. |
 | `POST /api/v1/links` | Accepts `target` and optional `host`, `slug`, `title`, `tags`, and `protection`. The protection object takes `one_time` and optional `password`. Both the link and protection commit together. Returns `201`, or `409` for a duplicate slug on the same host. |
 | `PATCH /api/v1/links/{id}` | Accepts any of `target`, `title`, `enabled`, `tags`, and `analytics_enabled`. A supplied tag list replaces the previous list. The published host and slug remain fixed. |
 | `DELETE /api/v1/links/{id}` | Deletes a link and returns `204`. |
@@ -37,6 +38,12 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 Link objects contain `id`, `host`, `slug`, `target`, `created_at`, `title`, `enabled`, `analytics_enabled`, and `tags`. Slugs use case-sensitive ASCII letters, digits, hyphens, underscores, and segment separators. Their maximum is 200 bytes. Destinations are absolute HTTP or HTTPS URIs up to 4,096 bytes, with valid percent encoding and credentials excluded. A link can carry up to 20 tags. Titles and tags use limits of 160 and 40 Unicode characters respectively.
 
 An API key uses `Authorization: Bearer <token>`. A key can hold `read` for list operations, `write` for creation and edits, and `delete` for link deletion. An optional host restriction applies to both reads and changes. The browser supplies an exact `Origin` and `X-CSRF-Token` for session-authenticated changes. Errors use `application/problem+json` with `status`, `title`, and `code`. [Security design](SECURITY.md)
+
+### Catalog search
+
+The search body accepts optional `query`, `host`, `tag`, `enabled`, `sort`, and `after` fields. The query is a case-insensitive Unicode substring up to 4,096 bytes and matches titles, slugs, domains, short URLs, destinations, and tag names. Optional domain, tag, and enabled filters combine with AND.
+
+Supported sort values are `newest` (default), `oldest`, `title_asc`, `title_desc`, `slug_asc`, `slug_desc`, `host_asc`, `host_desc`, `target_asc`, `target_desc`, `enabled_first`, and `disabled_first`. Each response includes up to 100 `items` and `next_cursor`. Send the returned cursor as `after` with the same filters and sort to continue. A null cursor means the search is complete. The cursor carries its sort key and the link ID, so deleting the anchor link does not prevent paging. Changing filters or sort starts a new search.
 
 ### Link history
 

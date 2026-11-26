@@ -25,6 +25,8 @@ const problemMessages = new Map<string, Message>([
   ['invalid_host', 'invalidHost'],
   ['invalid_title', 'invalidTitle'],
   ['invalid_tags', 'invalidTags'],
+  ['invalid_link_search', 'invalidLinkSearch'],
+  ['invalid_link_cursor', 'invalidLinkCursor'],
   ['invalid_scopes', 'invalidScopes'],
   ['invalid_expiration', 'invalidExpiration'],
   ['invalid_qr_color', 'invalidQrColor'],

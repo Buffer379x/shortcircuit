@@ -91,9 +91,30 @@ export interface LinkHistory {
   items: LinkRevision[];
 }
 
-export interface LinkPage {
+export const linkSorts = [
+  'newest', 'oldest', 'title_asc', 'title_desc', 'slug_asc', 'slug_desc',
+  'host_asc', 'host_desc', 'target_asc', 'target_desc', 'enabled_first', 'disabled_first',
+] as const;
+export type LinkSort = typeof linkSorts[number];
+
+export interface LinkCursor {
+  id: number;
+  key: string;
+  sort: LinkSort;
+}
+
+export interface LinkSearch {
+  query?: string;
+  host?: string;
+  tag?: string;
+  enabled?: boolean;
+  sort: LinkSort;
+  after?: LinkCursor;
+}
+
+export interface LinkSearchPage {
   items: Link[];
-  next_after_id: number | null;
+  next_cursor: LinkCursor | null;
 }
 
 export interface QrStyle {

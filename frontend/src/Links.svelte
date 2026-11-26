@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { linkName, shortUrl } from './api';
-  import type { Api, Domains, Link, LinkMetadata, LinkPage, LinkProtectionChange } from './api';
+  import { linkName, linkSorts, shortUrl } from './api';
+  import type { Api, Domains, Link, LinkCursor, LinkMetadata, LinkProtectionChange, LinkSearch, LinkSearchPage, LinkSort, Tag } from './api';
   import Dialog from './Dialog.svelte';
   import { formatDate, passwordAllowed, problemMessage } from './format';
   import DuplicateLookup from './DuplicateLookup.svelte';
@@ -17,13 +17,17 @@
   let { t, language, api, domains }: { t: Messages; language: Language; api: Api; domains: Domains } = $props();
 
   let items = $state<Link[]>([]);
-  let cursor = $state<number | null>(null);
+  let cursor = $state.raw<LinkCursor | null>(null);
   let loading = $state(false);
   let initialized = $state(false);
   let loadError = $state<keyof Messages | null>(null);
   let search = $state('');
   let tag = $state('');
+  let domain = $state('');
   let status = $state('');
+  let sort = $state<LinkSort>('newest');
+  let catalogTags = $state.raw<string[]>([]);
+  let revision = $state(0);
   let notice = $state<keyof Messages | null>(null);
   let actionError = $state<keyof Messages | null>(null);
   let updating = $state<number | null>(null);
@@ -46,39 +50,146 @@
   let oneTime = $state(false);
   let linkPassword = $state('');
 
-  const availableTags = $derived([...new Set(items.flatMap((link) => link.tags))].sort((a, b) => a.localeCompare(b, language)));
-  const query = $derived(search.trim().toLocaleLowerCase(language));
-  const visible = $derived(items.filter((link) => (
-    (!tag || link.tags.includes(tag)) &&
-    (!status || link.enabled === (status === 'enabled')) &&
-    (!query || [link.title ?? '', link.slug, link.host, link.target, shortUrl(link, domains), ...link.tags]
-      .some((value) => value.toLocaleLowerCase(language).includes(query)))
-  )));
+  const availableTags = $derived([...new Set([
+    ...catalogTags, ...items.flatMap((link) => link.tags), ...(tag ? [tag] : []),
+  ])].sort((a, b) => a.localeCompare(b, language)));
+  const availableDomains = $derived(Object.keys(domains.origins).sort());
   const limit = $derived(new Intl.NumberFormat(language));
+  const tagRequests = new AbortController();
+  let tagGeneration = 0;
+  let currentQuery: LinkSearch = { sort: 'newest' };
+  let queryKey = '';
+  let loadedPages = 0;
+  let pageRequest: AbortController | null = null;
+  let retryPage: (() => void) | null = null;
+  const sortLabels = {
+    newest: 'sortNewest', oldest: 'sortOldest',
+    title_asc: 'sortTitleAscending', title_desc: 'sortTitleDescending',
+    slug_asc: 'sortSlugAscending', slug_desc: 'sortSlugDescending',
+    host_asc: 'sortHostAscending', host_desc: 'sortHostDescending',
+    target_asc: 'sortTargetAscending', target_desc: 'sortTargetDescending',
+    enabled_first: 'sortEnabledFirst', disabled_first: 'sortDisabledFirst',
+  } as const satisfies Record<LinkSort, keyof Messages>;
 
-  onMount(() => { void load(); });
+  onMount(() => {
+    void loadTags();
+    return () => tagRequests.abort();
+  });
 
-  async function load() {
-    if (loading) return;
+  $effect(() => {
+    void revision;
+    const criteria: LinkSearch = {
+      query: search.trim() || undefined,
+      host: domain || undefined,
+      tag: tag || undefined,
+      enabled: status ? status === 'enabled' : undefined,
+      sort,
+    };
+    const key = JSON.stringify(criteria);
+    const retainedDepth = key === queryKey ? loadedPages : 0;
+    const pending = new AbortController();
+    pageRequest = pending;
+    currentQuery = criteria;
+    queryKey = key;
+    if (retainedDepth === 0) {
+      items = [];
+      cursor = null;
+      initialized = false;
+      loadedPages = 0;
+    }
     loading = true;
     loadError = null;
+    const timer = setTimeout(
+      () => { void loadPages(criteria, null, pending.signal, Math.max(1, retainedDepth)); },
+      retainedDepth ? 0 : 150,
+    );
+    return () => {
+      clearTimeout(timer);
+      pending.abort();
+    };
+  });
+
+  async function loadTags() {
+    const generation = ++tagGeneration;
     try {
-      const query = cursor === null ? '' : `?after_id=${cursor}`;
-      const page = await api<LinkPage>(`/links${query}`);
-      const seen = new Set(items.map((link) => link.id));
-      items = [...items, ...page.items.filter((link) => !seen.has(link.id))];
-      cursor = page.next_after_id;
+      const page = await api<{ items: Tag[] }>('/catalog/tags', 'GET', undefined, 'json', tagRequests.signal);
+      if (!tagRequests.signal.aborted && generation === tagGeneration) {
+        catalogTags = page.items.map(({ name }) => name);
+        if (tag && !catalogTags.includes(tag)) tag = '';
+      }
+    } catch {
+      // Tags from the fetched links remain usable when the catalog is unavailable.
+    }
+  }
+
+  async function loadPages(criteria: LinkSearch, after: LinkCursor | null, signal: AbortSignal, pages = 1) {
+    loading = true;
+    loadError = null;
+    retryPage = null;
+    try {
+      const collected = after ? [...items] : [];
+      const seen = new Set(collected.map((link) => link.id));
+      let next = after;
+      let depth = after ? loadedPages : 0;
+      for (let index = 0; index < pages; index += 1) {
+        const page = await api<LinkSearchPage>('/links/search', 'POST', { ...criteria, after: next ?? undefined }, 'json', signal);
+        if (signal.aborted) return;
+        for (const link of page.items) {
+          if (!seen.has(link.id)) collected.push(link);
+          seen.add(link.id);
+        }
+        depth += 1;
+        next = page.next_cursor;
+        if (!next) break;
+      }
+      items = collected;
+      cursor = next;
+      loadedPages = depth;
       initialized = true;
     } catch (error) {
-      loadError = problemMessage(error);
+      if (!signal.aborted) {
+        loadError = problemMessage(error);
+        retryPage = () => { void loadPages(criteria, after, signal, pages); };
+      }
     } finally {
-      loading = false;
+      if (!signal.aborted) loading = false;
     }
+  }
+
+  function loadMore() {
+    if (!loading && pageRequest && cursor) void loadPages(currentQuery, cursor, pageRequest.signal);
+  }
+
+  function refreshCatalog(refreshTags = true) {
+    pageRequest?.abort();
+    revision += 1;
+    if (refreshTags) void loadTags();
+  }
+
+  function patchListedLink(id: number, changes: LinkMetadata) {
+    items = items.flatMap((link) => {
+      if (link.id !== id) return [link];
+      const updated = { ...link, ...changes };
+      const text = search.trim().toLowerCase();
+      const matching = (!domain || domain === updated.host)
+        && (!tag || updated.tags.includes(tag))
+        && (!status || updated.enabled === (status === 'enabled'))
+        && (!text || [updated.title, updated.slug, updated.host, updated.target,
+          `${updated.host}/${updated.slug}`, shortUrl(updated, domains), ...updated.tags]
+          .some((value) => value.toLowerCase().includes(text)));
+      return matching ? [updated] : [];
+    });
+  }
+
+  function restoreMetadata(id: number, metadata: LinkMetadata) {
+    patchListedLink(id, metadata);
+    refreshCatalog();
   }
 
   function clearFilters() {
     search = '';
     tag = '';
+    domain = '';
     status = '';
   }
 
@@ -99,11 +210,6 @@
   function closeForm() {
     linkPassword = '';
     formOpen = false;
-  }
-
-  function restoreMetadata(id: number, metadata: LinkMetadata) {
-    items = items.map((link) => link.id === id ? { ...link, ...metadata } : link);
-    if (!availableTags.includes(tag)) tag = '';
   }
 
   async function save(event: SubmitEvent) {
@@ -144,24 +250,23 @@
           return;
         }
         const updated = await api<Link>(`/links/${editing.id}`, 'PATCH', changes);
-        items = items.map((link) => link.id === updated.id ? updated : link);
+        patchListedLink(updated.id, updated);
         notice = 'linkUpdated';
       } else {
         const protection: Omit<LinkProtectionChange, 'remove_password'> | undefined = oneTime || linkPassword ? {
           one_time: oneTime,
           ...(linkPassword ? { password: linkPassword } : {}),
         } : undefined;
-        const created = await api<Link>('/links', 'POST', {
+        await api<Link>('/links', 'POST', {
           ...fields,
           ...(host ? { host } : {}),
           ...(slug.trim() ? { slug: slug.trim() } : {}),
           ...(protection ? { protection } : {}),
         });
-        items = [created, ...items.filter((link) => link.id !== created.id)];
         clearFilters();
         notice = 'linkCreated';
       }
-      if (!availableTags.includes(tag)) tag = '';
+      refreshCatalog();
       closeForm();
     } catch (error) {
       formError = problemMessage(error);
@@ -177,7 +282,8 @@
     notice = null;
     try {
       const updated = await api<Link>(`/links/${link.id}`, 'PATCH', { enabled: !link.enabled });
-      items = items.map((item) => item.id === updated.id ? updated : item);
+      patchListedLink(updated.id, updated);
+      refreshCatalog(false);
       notice = 'linkUpdated';
     } catch (error) {
       actionError = problemMessage(error);
@@ -189,14 +295,15 @@
   async function remove(event: SubmitEvent) {
     event.preventDefault();
     if (!removing || saving) return;
+    const id = removing.id;
     saving = true;
     formError = null;
     actionError = null;
     notice = null;
     try {
-      await api<void>(`/links/${removing.id}`, 'DELETE');
-      items = items.filter((item) => item.id !== removing?.id);
-      if (!availableTags.includes(tag)) tag = '';
+      await api<void>(`/links/${id}`, 'DELETE');
+      items = items.filter((item) => item.id !== id);
+      refreshCatalog();
       removing = null;
       notice = 'linkDeleted';
     } catch (error) {
@@ -218,7 +325,7 @@
   }
 
   function exportVisible() {
-    const data = new Blob([JSON.stringify(visible, null, 2) + '\n'], { type: 'application/json' });
+    const data = new Blob([JSON.stringify(items, null, 2) + '\n'], { type: 'application/json' });
     const url = URL.createObjectURL(data);
     const download = document.createElement('a');
     download.href = url;
@@ -241,7 +348,14 @@
     <label class="search">
       <Icon name="search" />
       <span class="visually-hidden">{t.search}</span>
-      <input type="search" placeholder={t.search} bind:value={search} />
+      <input type="search" placeholder={t.search} maxlength="4096" bind:value={search} />
+    </label>
+    <label>
+      <span class="visually-hidden">{t.domainFilter}</span>
+      <select bind:value={domain}>
+        <option value="">{t.allDomains}</option>
+        {#each availableDomains as option (option)}<option value={option}>{option}</option>{/each}
+      </select>
     </label>
     <label>
       <span class="visually-hidden">{t.tagFilter}</span>
@@ -258,10 +372,16 @@
         <option value="disabled">{t.disabled}</option>
       </select>
     </label>
-    <button class="button" type="button" disabled={!visible.length} onclick={exportVisible}><Icon name="download" />{t.exportShown}</button>
+    <label>
+      <span class="visually-hidden">{t.sortLinks}</span>
+      <select bind:value={sort}>
+        {#each linkSorts as value (value)}<option value={value}>{t[sortLabels[value]]}</option>{/each}
+      </select>
+    </label>
+    <button class="button" type="button" disabled={!items.length} onclick={exportVisible}><Icon name="download" />{t.exportShown}</button>
   </div>
 
-  {#if visible.length}
+  {#if items.length}
     <div class="table-wrap">
       <!-- svelte-ignore a11y_no_redundant_roles (Mobile card layout overrides native table display.) -->
       <table class="links-table" role="table" aria-label={t.links}>
@@ -270,7 +390,7 @@
         </thead>
         <!-- svelte-ignore a11y_no_redundant_roles (Preserve table semantics in mobile cards.) -->
         <tbody role="rowgroup">
-          {#each visible as link (link.id)}
+          {#each items as link (link.id)}
             <!-- svelte-ignore a11y_no_redundant_roles (Body rows display as grids on mobile.) -->
             <tr role="row">
               <td role="cell">
@@ -312,18 +432,18 @@
   {:else if !loading && initialized}
     <div class="empty">
       <span class="link-symbol"><Icon name="link" /></span>
-      <p>{search || tag || status ? t.noMatches : t.noLinks}</p>
-      {#if search || tag || status}<button class="text-button" type="button" onclick={clearFilters}>{t.resetFilters}</button>{/if}
+      <p>{search || tag || status || domain ? t.noMatches : t.noLinks}</p>
+      {#if search || tag || status || domain}<button class="text-button" type="button" onclick={clearFilters}>{t.resetFilters}</button>{/if}
     </div>
   {/if}
   {#if loadError}
-    <div class="panel-foot between"><p role="alert" class="notice error">{t[loadError]}</p><button class="button" type="button" onclick={load}>{t.retry}</button></div>
+    <div class="panel-foot between"><p role="alert" class="notice error">{t[loadError]}</p><button class="button" type="button" onclick={() => retryPage?.()}>{t.retry}</button></div>
   {/if}
   <div class="panel-foot between">
     <p class="table-count" aria-live="polite">
-      {#if loading}{t.loading}{:else}{limit.format(visible.length)} {t.shown} · {limit.format(items.length)} {t.loaded}{/if}
+      {#if loading}{t.loading}{:else}{limit.format(items.length)} {t.loaded}{/if}
     </p>
-    {#if cursor !== null && !loadError}<button class="button" type="button" disabled={loading} onclick={load}>{t.loadMore}</button>{/if}
+    {#if cursor !== null && !loadError}<button class="button" type="button" disabled={loading} onclick={loadMore}>{t.loadMore}</button>{/if}
   </div>
 </section>
 
