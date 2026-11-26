@@ -1,6 +1,6 @@
 # Project status
 
-**November 26, 2026 · Development after 0.6.0-preview.2, schema version 24.** Architecture and design are approved for implementation. Existing links are recreated manually. The handoff's Stage 1 items are implemented in source and verified locally. Target-host acceptance and release approval are pending. [Quality review](QUALITY_REVIEW.md) · [Improvement plan](IMPROVEMENT_PLAN.md) · [Release verification](RELEASE_VERIFICATION.md)
+**November 26, 2026 · 0.7.0-preview.1, schema version 24.** Architecture and design are approved for implementation. Existing links are recreated manually. The handoff's Stage 1 items are implemented in source and verified locally. Target-host acceptance and release approval are pending. [Quality review](QUALITY_REVIEW.md) · [Improvement plan](IMPROVEMENT_PLAN.md) · [Release verification](RELEASE_VERIFICATION.md)
 
 | Area | Status |
 |---|---|
@@ -46,13 +46,12 @@ The [quality review](QUALITY_REVIEW.md) found one P0 issue: the read-only contai
 
 ## Release readiness
 
-**Not ready for a stable release. Suitable for a new preview after owner approval.** The source passes every local check, including the container lifecycle with the image as shipped and an upgrade from the published preview with 300,000 analytics events. What remains open:
+**Not ready for a stable release.** On November 26, 2026 the owner approved publishing the improvements as `0.7.0-preview.1`, a development preview. Template decision: keep the Docker volume, which works with the template alone, and enable daily backups and the Trusted proxies field. The source passes every local check, including the container lifecycle with the image as shipped and an upgrade from the published preview with 300,000 analytics events. What remains open:
 
 - **CI has not run on this working tree**, and the workspace has no Git metadata, so no commits exist. Commit the changes in focused pieces and let Core checks run before any release step.
 - **Owner decisions:**
-  - Unraid template defaults: an appdata path for `/data`, a default backup schedule, and a `TRUSTED_PROXIES` field (OPS-01, OPS-07).
+  - Moving `/data` out of `docker.img` by default needs an ownership step that the template alone cannot perform. Backups still share the volume until they are copied elsewhere (OPS-01).
   - The runtime base image: distroless or a newer Debian, given that the Unraid console needs a shell (SEC-07, OWN-3).
-  - The next version number and tag (OPS-06).
   - Whether a restore should revoke credentials created after the snapshot (SEC-06).
 - **Target-host acceptance** as listed in [release verification](RELEASE_VERIFICATION.md#target-host-verification):
   - pre-upgrade snapshot and upgrade on the Unraid host

@@ -40,6 +40,13 @@ class UnraidTemplate(unittest.TestCase):
         self.assertIn("--security-opt=no-new-privileges=true", params)
         self.assertEqual(template.findtext("WebUI"), template.findtext("./Config[@Target='ADMIN_ORIGIN']"))
         self.assertIn("--volume=shortcircuit-data:/data", params)
+        self.assertEqual(
+            template.findtext("ReadMe"),
+            f"https://raw.githubusercontent.com/Buffer379x/shortcircuit/v{version}/docs/UNRAID_INSTALLATION.md",
+        )
+        variables = {config.get("Target"): config.text or "" for config in template.findall("./Config[@Type='Variable']")}
+        self.assertEqual(variables["TRUSTED_PROXIES"], "")
+        self.assertEqual(variables["BACKUP_INTERVAL_HOURS"], "24")
         self.assertIsNone(template.find("./Config[@Target='/data']"))
 
     def test_template_references_the_branding_image(self):

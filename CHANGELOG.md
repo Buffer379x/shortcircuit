@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.7.0-preview.1
+
+- The Unraid template enables daily scheduled backups, adds a Trusted proxies field, and links the installation guide for this release.
 - Fix analytics writes, reports, search, restore, and upgrades with real data in the read-only container by giving SQLite a temporary directory on the data volume (`SQLITE_TMPDIR=/data/tmp`).
 - Write a verified pre-upgrade snapshot before migrations and run migrations outside the request pool's two-second deadline.
 - Continue scheduled backups from the newest scheduled snapshot after a restart.

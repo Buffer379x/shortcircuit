@@ -1,6 +1,6 @@
 {
   "name": "shortcircuit-admin",
-  "version": "0.6.0-preview.2",
+  "version": "0.7.0-preview.1",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22.12.0" },
