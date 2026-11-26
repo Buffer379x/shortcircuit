@@ -2,6 +2,9 @@ use std::fmt::{self, Write};
 
 use qrcode::{Color, EcLevel, QrCode};
 
+mod logo;
+
+pub(crate) const MAX_LOGO_BYTES: usize = 256 * 1024;
 const MIN_QUIET_ZONE: i64 = 4;
 const MAX_QUIET_ZONE: i64 = 12;
 const MIN_SIZE: u16 = 128;
@@ -38,6 +41,10 @@ pub(crate) enum QrError {
     InvalidCorrection,
     InvalidQuietZone,
     InvalidFrame,
+    InvalidLogo,
+    InvalidLogoDimensions,
+    InvalidLogoCorrection,
+    LogoUnreadable,
     DataTooLong,
     EncodingFailed,
 }
@@ -150,9 +157,33 @@ impl Options {
 }
 
 pub(crate) fn generate(value: &str, format: Format, options: &Options) -> Result<Vec<u8>, QrError> {
-    let (size, style) = options.render_settings()?;
+    render(value, format, options, None)
+}
+
+pub(crate) fn generate_with_logo(
+    value: &str,
+    format: Format,
+    options: &Options,
+    bytes: &[u8],
+) -> Result<Vec<u8>, QrError> {
+    render(value, format, options, Some(bytes))
+}
+
+fn render(
+    value: &str,
+    format: Format,
+    options: &Options,
+    logo: Option<&[u8]>,
+) -> Result<Vec<u8>, QrError> {
+    let (size, mut style) = options.render_settings()?;
     if value.len() > MAX_VALUE_BYTES {
         return Err(QrError::DataTooLong);
+    }
+    if logo.is_some() {
+        if options.correction.is_some() && style.correction != EcLevel::H {
+            return Err(QrError::InvalidLogoCorrection);
+        }
+        style.correction = EcLevel::H;
     }
 
     let code = QrCode::with_error_correction_level(value.as_bytes(), style.correction)
@@ -185,8 +216,17 @@ pub(crate) fn generate(value: &str, format: Format, options: &Options) -> Result
         .then(|| outline(start + scale, (padded_width - 2) * scale, scale));
     let rectangles = dark_modules.chain(frame.into_iter().flatten());
 
+    if let Some(bytes) = logo {
+        let overlay = logo::overlay(bytes, width, scale, margin, style.background)?;
+        let rectangles: Vec<_> = rectangles.collect();
+        let pixels = logo::verified_pixels(value, size, &style, &rectangles, &overlay)?;
+        return match format {
+            Format::Svg => Ok(svg(size, &style, rectangles.into_iter(), &overlay)),
+            Format::Png => logo::encode_png(size, &pixels),
+        };
+    }
     match format {
-        Format::Svg => Ok(svg(size, &style, rectangles)),
+        Format::Svg => Ok(svg(size, &style, rectangles, &[])),
         Format::Png => png(size, &style, rectangles),
     }
 }
@@ -220,7 +260,12 @@ fn outline(start: usize, side: usize, stroke: usize) -> [Rectangle; 4] {
     ]
 }
 
-fn svg(size: usize, style: &Style, rectangles: impl Iterator<Item = Rectangle>) -> Vec<u8> {
+fn svg(
+    size: usize,
+    style: &Style,
+    rectangles: impl Iterator<Item = Rectangle>,
+    overlay: &[(Rectangle, Rgb)],
+) -> Vec<u8> {
     let mut output = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}" shape-rendering="crispEdges">"#,
     );
@@ -244,7 +289,15 @@ fn svg(size: usize, style: &Style, rectangles: impl Iterator<Item = Rectangle>) 
         write!(output, "M{x} {y}h{width}v{height}h-{width}z")
             .expect("writing to a String cannot fail");
     }
-    output.push_str("\"/></svg>");
+    output.push_str("\"/>");
+    for (Rectangle { x, y, width, height }, color) in overlay {
+        write!(
+            output,
+            r#"<rect x="{x}" y="{y}" width="{width}" height="{height}" fill="{color}"/>"#
+        )
+        .expect("writing to a String cannot fail");
+    }
+    output.push_str("</svg>");
     output.into_bytes()
 }
 

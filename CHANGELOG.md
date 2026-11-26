@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add optional PNG logos to the QR dialog with verified output in PNG and SVG.
 - Add an optional QR outline outside the quiet zone. The preview, PNG, SVG, and saved templates support the same setting.
 - Save and reuse named QR design templates across links. Include templates in SQLite backups.
 - Add QR Studio color, transparency, error correction, and quiet-zone controls with contrast validation and optional PNG clipboard copy.

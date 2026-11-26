@@ -157,7 +157,7 @@ async function verify() {
       mimeType: 'image/png',
       buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAYAAADwdn+XAAAAFUlEQVR4nGNQTFv8nxLMMGrAcDAAAC6wFJBQyGgvAAAAAElFTkSuQmCC', 'base64'),
     });
-    const logoPreview = qr.locator('canvas[role="img"]:visible');
+    const logoPreview = qr.locator('[role="img"] canvas:visible');
     await logoPreview.waitFor();
     assert.equal(await qr.getByRole('combobox', { name: 'Error correction', exact: true }).inputValue(), 'H');
     assert.deepEqual(await logoPreview.evaluate(canvas =>

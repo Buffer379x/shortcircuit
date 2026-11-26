@@ -38,9 +38,15 @@
   const quietZones = [4, 5, 6, 7, 8, 9, 10, 11, 12];
   const supportsCopy = typeof ClipboardItem === 'function' && typeof navigator.clipboard?.write === 'function';
   const requests = new AbortController();
+  const maxLogoBytes = 256 * 1024;
   let settings = $state.raw<Settings>(defaults);
+  let logo = $state.raw<Blob | null>(null);
+  let logoInput: HTMLInputElement;
+  let logoCanvas = $state<HTMLCanvasElement>();
+  let logoError = $state<keyof Messages | null>(null);
   let preview = $state<'loading' | 'ready' | 'error'>('loading');
   let previewSource = $state<string | null>(null);
+  let previewError = $state<keyof Messages | null>(null);
   let exporting = $state(false);
   let exportError = $state<keyof Messages | null>(null);
   let copied = $state(false);
@@ -60,10 +66,18 @@
   onDestroy(() => requests.abort());
 
   $effect(() => {
-    const url = qrUrl('svg', settings);
+    const current = settings;
+    const image = logo;
     if (!validContrast) return;
-    const timer = setTimeout(() => { previewSource = url; }, 120);
-    return () => clearTimeout(timer);
+    const pending = new AbortController();
+    const timer = setTimeout(() => {
+      if (image) void loadLogoPreview(current, image, pending.signal);
+      else previewSource = qrUrl('svg', current);
+    }, 120);
+    return () => {
+      clearTimeout(timer);
+      pending.abort();
+    };
   });
 
   function luminance(color: string): number {
@@ -74,7 +88,7 @@
     return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
   }
 
-  function qrUrl(format: Format, current: Settings): string {
+  function qrPath(format: Format, current: Settings, hasLogo = false): string {
     const query = new URLSearchParams({ format, size: String(current.size) });
     if (current.foreground !== defaults.foreground) query.set('foreground', current.foreground.slice(1));
     if (current.background !== defaults.background) query.set('background', current.background.slice(1));
@@ -82,17 +96,52 @@
     if (current.correction !== defaults.correction) query.set('correction', current.correction);
     if (current.quietZone !== defaults.quietZone) query.set('quiet_zone', String(current.quietZone));
     if (current.frame !== defaults.frame) query.set('frame', current.frame);
-    return `/api/v1/links/${link.id}/qr?${query}`;
+    return `/links/${link.id}/qr${hasLogo ? '/logo' : ''}?${query}`;
+  }
+
+  function qrUrl(format: Format, current: Settings): string {
+    return '/api/v1' + qrPath(format, current);
   }
 
   function update(change: Partial<Settings>) {
     const next = { ...settings, ...change };
     if (qrUrl('svg', next) === previewUrl) return;
     settings = next;
+    resetPreview();
+  }
+
+  function resetPreview() {
     preview = 'loading';
     previewSource = null;
+    previewError = null;
     exportError = null;
     copied = false;
+  }
+
+  function chooseLogo(input: HTMLInputElement) {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (file.size > maxLogoBytes || (file.type && file.type !== 'image/png')) {
+      logoError = file.size > maxLogoBytes ? 'invalidQrLogoBody' : 'invalidQrLogoType';
+      input.value = '';
+      return;
+    }
+    logoError = null;
+    logo = file.slice(0, file.size, 'image/png');
+    settings = { ...settings, correction: 'H' };
+    resetPreview();
+  }
+
+  function removeLogo() {
+    logo = null;
+    logoInput.value = '';
+    logoError = null;
+    resetPreview();
+  }
+
+  function retryPreview() {
+    resetPreview();
+    settings = { ...settings };
   }
 
   function settlePreview(image: Element, state: 'ready' | 'error') {
@@ -105,14 +154,16 @@
       foreground: '#' + style.foreground,
       background: '#' + style.background,
       transparent: style.transparent,
-      correction: style.correction,
+      correction: logo ? 'H' : style.correction,
       quietZone: style.quiet_zone,
       frame: style.frame,
     });
   }
 
-  async function fetchQr(format: Format, current: Settings): Promise<Blob> {
-    const response = await fetch(qrUrl(format, current), { credentials: 'same-origin', signal: requests.signal });
+  async function fetchQr(format: Format, current: Settings, image: Blob | null, signal: AbortSignal): Promise<Blob> {
+    const response = image
+      ? await api<Response>(qrPath(format, current, true), 'POST', image, 'image', signal)
+      : await fetch(qrUrl(format, current), { credentials: 'same-origin', signal });
     if (!response.ok) {
       const problem = await response.json().catch(() => null);
       const code = typeof problem?.code === 'string' ? problem.code : '';
@@ -123,12 +174,32 @@
     return data;
   }
 
+  async function loadLogoPreview(current: Settings, image: Blob, signal: AbortSignal) {
+    try {
+      const bitmap = await createImageBitmap(await fetchQr('png', current, image, signal));
+      try {
+        if (signal.aborted || logo !== image || settings !== current) return;
+        const context = logoCanvas?.getContext('2d');
+        if (!context) throw new Error();
+        context.clearRect(0, 0, current.size, current.size);
+        context.drawImage(bitmap, 0, 0);
+        preview = 'ready';
+      } finally {
+        bitmap.close();
+      }
+    } catch (error) {
+      if (signal.aborted || logo !== image || settings !== current) return;
+      previewError = error instanceof ApiError ? problemMessage(error) : 'qrPreviewUnavailable';
+      preview = 'error';
+    }
+  }
+
   async function exportQr(format: Format, copy = false) {
     if (!canExport) return;
     exporting = true;
     exportError = null;
     copied = false;
-    const data = fetchQr(format, settings);
+    const data = fetchQr(format, settings, logo, requests.signal);
     try {
       if (copy) {
         // Start the clipboard write directly from the click, including while the PNG is fetched.
@@ -169,7 +240,7 @@
       </label>
       <label class="field">
         <span>{t.qrCorrection}</span>
-        <select value={settings.correction} disabled={exporting}
+        <select value={settings.correction} disabled={exporting || logo !== null}
           onchange={(event) => update({ correction: event.currentTarget.value as Settings['correction'] })}>
           {#each correctionLevels as level (level)}<option value={level}>{level}</option>{/each}
         </select>
@@ -203,20 +274,38 @@
         onchange={(event) => update({ transparent: event.currentTarget.checked })} />{t.qrTransparent}
     </label>
     {#if settings.transparent}<p class="muted">{t.qrTransparentHint}</p>{/if}
+    <div class="stack compact">
+      <div class="row logo-controls">
+        <label class="field">
+          <span>{t.qrLogo}</span>
+          <input type="file" accept="image/png,.png" bind:this={logoInput} disabled={exporting}
+            onchange={(event) => chooseLogo(event.currentTarget)} />
+        </label>
+        {#if logo}
+          <button class="button" type="button" disabled={exporting} onclick={removeLogo}>{t.qrRemoveLogo}</button>
+        {/if}
+      </div>
+      {#if logo}<p class="muted">{t.qrLogoHint}</p>{/if}
+      {#if logoError}<p class="notice error" role="alert">{t[logoError]}</p>{/if}
+    </div>
     <QrTemplates {api} {t} style={templateStyle} disabled={exporting} canSave={canExport} onapply={applyStyle} />
     {#if validContrast}
       <figure class="qr-content stack compact">
         <div class="qr-preview">
           {#if preview === 'error'}
             <div class="stack compact">
-              <p role="alert">{t.qrPreviewUnavailable}</p>
-              <button class="button" type="button" onclick={() => { preview = 'loading'; }}>{t.retry}</button>
+              <p role="alert">{t[previewError ?? 'qrPreviewUnavailable']}</p>
+              <button class="button" type="button" onclick={retryPreview}>{t.retry}</button>
             </div>
           {:else}
             {#if settings.transparent && preview === 'ready'}
               <svg viewBox="0 0 1 1" aria-hidden="true"><rect width="1" height="1" fill={settings.background} /></svg>
             {/if}
-            {#if previewSource === previewUrl}
+            {#if logo}
+              <div class="qr-bitmap" role="img" aria-label={t.qrCode} hidden={preview !== 'ready'}>
+                <canvas bind:this={logoCanvas} width={settings.size} height={settings.size} aria-hidden="true"></canvas>
+              </div>
+            {:else if previewSource === previewUrl}
               {#key previewUrl}
                 <img src={previewUrl} alt={t.qrCode} hidden={preview === 'loading'}
                   onload={(event) => settlePreview(event.currentTarget, 'ready')} onerror={(event) => settlePreview(event.currentTarget, 'error')} />
@@ -267,10 +356,25 @@
     margin-inline: auto;
   }
 
-  .qr-preview svg, img {
+  .qr-preview svg, img, .qr-bitmap {
     grid-area: 1 / 1;
     inline-size: 100%;
     block-size: auto;
+  }
+
+  .qr-bitmap canvas {
+    display: block;
+    inline-size: 100%;
+    block-size: auto;
+  }
+
+  .logo-controls {
+    align-items: end;
+    flex-wrap: wrap;
+  }
+
+  .logo-controls .field {
+    flex: 1 1 13rem;
   }
 
   @media (max-width: 360px) {

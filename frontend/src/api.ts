@@ -129,13 +129,16 @@ export class ApiError extends Error {
   }
 }
 
+const responseTypes = { json: 'application/json', csv: 'text/csv', image: 'image/png, image/svg+xml' };
+type ResponseFormat = keyof typeof responseTypes;
+
 export interface Api {
-  <T>(path: string, method?: 'GET' | 'POST' | 'PATCH' | 'DELETE', data?: unknown, responseFormat?: 'json' | 'csv'): Promise<T>;
+  <T>(path: string, method?: 'GET' | 'POST' | 'PATCH' | 'DELETE', data?: unknown, responseFormat?: ResponseFormat, signal?: AbortSignal): Promise<T>;
 }
 
 export function createApi(csrf: () => string | undefined, request = fetch): Api {
-  return async function<T>(path: string, method = 'GET', data?: unknown, responseFormat = 'json'): Promise<T> {
-    const headers = new Headers({ Accept: responseFormat === 'csv' ? 'text/csv' : 'application/json' });
+  return async function<T>(path: string, method = 'GET', data?: unknown, responseFormat: ResponseFormat = 'json', signal?: AbortSignal): Promise<T> {
+    const headers = new Headers({ Accept: responseTypes[responseFormat] });
     const token = csrf();
     if (method !== 'GET' && token) headers.set('X-CSRF-Token', token);
     const body = data instanceof Blob ? data : data === undefined ? undefined : JSON.stringify(data);
@@ -145,6 +148,7 @@ export function createApi(csrf: () => string | undefined, request = fetch): Api 
       credentials: 'same-origin',
       headers,
       body,
+      signal,
     });
     if (!response.ok) {
       const problem = await response.json().catch(() => null);
@@ -152,7 +156,7 @@ export function createApi(csrf: () => string | undefined, request = fetch): Api 
       throw new ApiError(response.status, code);
     }
     if (response.status === 204) return undefined as T;
-    return responseFormat === 'csv' ? response as T : response.json();
+    return responseFormat === 'json' ? response.json() : response as T;
   };
 }
 

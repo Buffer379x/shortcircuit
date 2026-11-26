@@ -3580,6 +3580,288 @@
         ]
       }
     },
+    "/api/v1/links/{id}/qr/logo": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Numeric link ID.",
+          "schema": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      ],
+      "post": {
+        "operationId": "renderLinkQrWithLogo",
+        "summary": "Render a verified short URL QR code with a PNG logo",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Image format.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "svg",
+                "png"
+              ],
+              "default": "svg"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "description": "Image width and height in pixels.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 128,
+              "maximum": 1024,
+              "default": 384
+            }
+          },
+          {
+            "name": "foreground",
+            "in": "query",
+            "required": false,
+            "description": "Dark module color as six hexadecimal sRGB digits without a leading hash.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{6}$",
+              "default": "000000"
+            }
+          },
+          {
+            "name": "background",
+            "in": "query",
+            "required": false,
+            "description": "Light color or reference backdrop for a transparent export, as six hexadecimal sRGB digits.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{6}$",
+              "default": "ffffff"
+            }
+          },
+          {
+            "name": "transparent",
+            "in": "query",
+            "required": false,
+            "description": "Leave the light cells and quiet zone transparent in the image.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "correction",
+            "in": "query",
+            "required": false,
+            "description": "Error correction for an embedded logo. Defaults to H.",
+            "schema": {
+              "type": "string",
+              "const": "H",
+              "default": "H"
+            }
+          },
+          {
+            "name": "quiet_zone",
+            "in": "query",
+            "required": false,
+            "description": "Clear margin on each side, in QR modules.",
+            "schema": {
+              "type": "integer",
+              "minimum": 4,
+              "maximum": 12,
+              "default": 4
+            }
+          },
+          {
+            "name": "frame",
+            "in": "query",
+            "required": false,
+            "description": "Optional outline in the foreground color, outside the configured quiet zone.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "none",
+                "outline"
+              ],
+              "default": "none"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "A single static PNG of at most 262144 bytes, 512 by 512 pixels.",
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "QR code encoding the configured public origin and exact slug.",
+            "content": {
+              "image/svg+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "image/png": {}
+            }
+          },
+          "400": {
+            "description": "The query or request body is malformed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid browser session is required.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request Origin or X-CSRF-Token is missing or invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The link ID is invalid or unknown.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Reading the upload exceeded the eight-second deadline.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The PNG exceeds the request size limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type must be image/png.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The PNG or render options are invalid, or the exact URL could not be verified.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "All QR generation workers are busy.",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds.",
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "const": 60
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/openapi.json": {
       "get": {
         "summary": "Download the OpenAPI specification",
