@@ -72,3 +72,10 @@ The target model uses integer UTC Unix timestamps with a documented unit, prefer
 Prefer the SQLite Online Backup API with reviewed Rust bindings and a shared `libsqlite3-sys` version. `VACUUM INTO` is a consistent alternative if tests show acceptable operational impact and the output file is explicitly synced. Collect the database snapshot and referenced assets from the same logical view. Use a versioned manifest with schema and digest information. Limit and isolate uploads and publish a backup only after verification. [SQLite Backup API](https://www.sqlite.org/backup.html) · [VACUUM INTO](https://www.sqlite.org/lang_vacuum.html)
 
 Verify restore uploads in staging before the maintenance window. Put the application in maintenance mode, block writes and new redirects, drain analytics, and close the connection pool. Activate validated data atomically on the same filesystem. Retain the previous dataset as a separate generation for rollback and switch the database and assets together. Once assets are present, prefer an atomic pointer to a self-contained dataset. Keep WAL files with their original generation. Check readiness and schema after startup and revoke prior sessions. See [Backup and Restore](BACKUP_RESTORE.md) for the workflow and limits.
+
+
+## Administration and monitoring records
+
+The latest schema adds coarse analytics dimensions, a bounded administrative audit log, and explicit link-monitor enrollment with an enrollment revision. A link target change removes its monitoring row. The revision prevents a delayed result from updating a replacement enrollment. Public redirect visits and atomic access limits do not depend on the monitoring table.
+
+Runtime connections default to a SQLite busy timeout of 2,000 milliseconds. Set `SQLITE_BUSY_TIMEOUT_MS` to a value from 1 to 10,000 if the local storage and workload warrant a change. The separate pool acquisition timeout remains two seconds.

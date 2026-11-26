@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add an Overview with link lifecycle counts, recent links, traffic, and monitor status.
+- Add browser field mapping for generic CSV files while retaining the native format.
+- Expand analytics with custom UTC dates, host filters, client and traffic breakdowns, domain and tag rankings, and a JSON report download.
+- Download verified SQLite snapshots and prepare offline restore from the administration interface.
+- Add API key rotation, an administrative audit trail, configurable rate limits, and an explicit trusted-proxy policy.
+- Add opt-in checks for stored targets and configured public domains, with bounded retries and optional HTTPS health notifications.
+
 - Add domain crawler preferences and per-link indexing hints.
 - Simulate the current redirect policy draft using sample request details.
 

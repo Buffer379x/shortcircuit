@@ -37,12 +37,12 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 
 | Capability | Status | Priority | Scope |
 |---|---|---|---|
-| Visit totals and time series | Current | P1 | Report totals by UTC date and top link using bounded ingestion and indexed aggregates. Tag and domain views remain planned. |
+| Visit totals and time series | Current | P1 | Report totals by UTC date and rank links, domains, and current tag assignments using bounded ingestion and indexed aggregates. |
 | Catalog usage | Current | P1 | Show successful redirects kept in analytics and the last recorded use, with a UTC date when the exact time has aged out. |
-| Visit details and unmatched requests | Planned | P1 | Show retained details and classify requests to the site root, invalid short links, and other unmatched paths. Prevent sensitive URL values from entering analytics. |
-| Referrers, devices, and bots | Current / planned | P1 | Referrer capture can store hostnames. Coarse traffic classes are reported. Browser, operating system, and device breakdowns and more detailed visit filters are planned. |
+| Visit details and unmatched requests | Current / planned | P1 | Show retained details for redirected, blocked, and unmatched short-link requests. Separate reporting for requests to the site root remains open. |
+| Referrers, devices, and bots | Current | P1 | Referrer capture can store hostnames. Reports group traffic by estimated visit class, browser, OS, device and traffic source, including detected previews. |
 | Privacy settings, retention, and deletion | Current | P1 | Honor global and per-link opt-outs and Do Not Track, with configurable retention and a clear-all action. Analytics collection operates independently of visit limits. |
-| Period comparisons and report controls | Current | P1 | Compare fixed 7-, 30-, 90-, and 365-day views against the preceding UTC period. Custom dates and additional visualization are planned. |
+| Period comparisons and report controls | Current | P1 | Compare a preset or inclusive custom UTC period with its predecessor, filter by host, and download a versioned report. |
 | Geolocation | Optional | P1 | Use an operator-provided local GeoIP dataset. Apply the configured granularity and handle missing data explicitly in both reports and rules. |
 | Multiple segment comparisons | Optional | P2 | Compare selected links, tags, or domains when reporting needs justify the extra views. Use consistent time boundaries. |
 | Advanced visualizations and estimates | Optional | P4 | Evaluate local maps, heatmaps, milestones, and unique visitor estimates against accessibility and privacy requirements. |
@@ -55,11 +55,11 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Admin API authorization and errors | Current | P0 | Browser sessions and scoped bearer keys authorize the link API. Errors use structured problem responses. The public listener serves redirects independently. |
 | Liveness and readiness | Current | P0 | The admin listener serves minimal status-only probes for process and database readiness. |
 | Interactive setup and authentication | Current | P0 | A short-lived CLI setup token, revocable sessions, CSRF protection, and documented recovery are available. Keep the administration interface behind LAN or VPN access. |
-| Scoped API credentials | Current | P0 | Issue keys with named scopes, optional domain restrictions and expiry, and revocation. The API reveals the secret only at creation. |
-| OpenAPI and API diagnostics | Current | P1 | The implemented API has an OpenAPI 3.1 document served through the admin interface. Request IDs and dedicated credential rotation are planned. |
-| Audit, diagnostics, and abuse controls | Planned | P0 | Add a dedicated audit trail for sensitive operations, rate-limit protected endpoints, and make detailed diagnostics available to authorized administrators. Bulk deletions currently produce a structured count in the application log. |
-| Backup and restore | Current | P0 | The CLI creates a verified local snapshot and restores it offline with an independent rollback copy. An opt-in scheduler retains verified copies. Administration through the browser is planned. |
-| Native data exchange | Current | P1 | Import and export bounded versioned JSON and CSV pages, preview conflicts, and apply transactionally. Field mapping is planned. |
+| Scoped API credentials | Current | P0 | Issue keys with named scopes, optional domain restrictions and expiry, and revocation. Password-confirmed rotation preserves the key metadata and discloses the new secret once. |
+| OpenAPI and API diagnostics | Current | P1 | The implemented API has an OpenAPI 3.1 document served through the admin interface. A browser-accessible system endpoint reports database and restore state. |
+| Audit, diagnostics, and abuse controls | Current | P0 | The administrative audit log records sensitive account, credential, and recovery actions. Separate configurable budgets limit login, admin API, and protected-link requests. The default client address is the transport peer. |
+| Backup and restore | Current | P0 | The CLI creates and restores verified SQLite snapshots. An opt-in scheduler retains verified copies. The browser can download a snapshot and stage a restore for the next controlled restart. |
+| Native data exchange | Current | P1 | Import and export bounded versioned JSON and CSV pages, map generic CSV columns in the browser, preview conflicts, and apply transactionally. |
 | Maintenance CLI and installation | Current | P1 | CLI commands handle setup, recovery, backups, restore, and readiness. The Unraid preview template uses the versioned amd64 non-root image. Production validation on the intended storage and proxy remains open. |
 | Cross-origin admin API access | Optional | P2 | Consider explicit origins for integrations that need browser access. |
 | Additional authentication methods and roles | Optional | P3 | Consider TOTP, recovery codes, OIDC, and roles as operational requirements emerge. |
@@ -69,14 +69,14 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 
 | Capability | Status | Priority | Scope |
 |---|---|---|---|
-| Admin interface | Current | P1 | Account setup, links, domains, tags, analytics, and API key management are available in the responsive embedded interface. The design preview covers planned dashboard and monitoring screens. [Design system](DESIGN_SYSTEM.md) |
-| Localization and themes | Current | P1 | Support English and German interface text, dark, light, and system themes, and locale-aware date and number display. |
+| Admin interface | Current | P1 | Account setup, links, domains, tags, analytics, and API key management are available in the responsive embedded interface. Overview, monitoring, system diagnostics, backups and the audit log are built into the admin interface. [Design system](DESIGN_SYSTEM.md) |
+| Localization and themes | Current | P1 | Support English and German interface text, dark, light, and system themes, locale-aware numbers and dates, and a display timezone preference. |
 | QR Studio | Current | P1 | Preview and export local SVG and PNG with colors, transparency, error correction, resolution, quiet zone, and an optional outline. Verify output with an independent decoder. |
 | QR design templates | Current | P1 | Save, apply, and delete reusable render settings in the QR dialog. Templates are included in SQLite backups. |
 | QR logo overlay | Current | P1 | Select a static PNG for the current dialog. The renderer checks the exact encoded URL before returning either format. |
 | Destination title lookup | Optional | P1 | Enable title fetching explicitly through the shared outbound HTTP client, with validated targets and response limits. |
-| Health Monitor | Planned | P2 | After explicit activation, run bounded, scheduled probes under the shared outbound request policy. Report status without deactivating links. |
-| Webhooks | Planned | P2 | Provide a generic webhook using safe outbound policies. Enable destinations explicitly. |
+| Health Monitor | Current | P2 | After activation and per-link enrollment, run adaptive, bounded probes under the outbound address policy. Support manual checks, a bounded batch queue and configured public-domain probes. |
+| Webhooks | Current / planned | P2 | An explicitly configured HTTPS webhook receives confirmed link health changes with bounded retries. More event types and private connector rules remain open. |
 | Notification connectors | Optional | P2 | Evaluate ntfy, Gotify, and other connectors when the generic webhook leaves a gap. |
 | Quick Share and API examples | Optional | P3 | Provide examples for authenticated automation and Apple Shortcuts. Evaluate client libraries where needed, and assess a share target and browser integration on supported devices. |
 | Installable admin interface | Optional | P2 | Evaluate PWA installation, cache behavior for authenticated sessions, and operation under an approved subpath. |

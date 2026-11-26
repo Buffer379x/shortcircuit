@@ -1,11 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { scopes } from './api';
+  import { ApiError, scopes } from './api';
   import type { Api, Domains, Key, Scope } from './api';
   import Dialog from './Dialog.svelte';
   import { formatDate, fromUnixSeconds, labelAllowed, problemMessage } from './format';
   import Icon from './Icon.svelte';
   import type { Language, Messages } from './i18n';
+  import { useTimeZone } from './timezone';
+
+  const readTimeZone = useTimeZone();
 
   let { t, language, api, domains }: { t: Messages; language: Language; api: Api; domains: Domains } = $props();
   const scopeLabels: Record<Scope, keyof Messages> = { read: 'read', write: 'write', delete: 'deleteScope' };
@@ -15,13 +18,17 @@
   let notice = $state<keyof Messages | null>(null);
   let adding = $state(false);
   let removing = $state<Key | null>(null);
+  let rotating = $state<Key | null>(null);
+  let currentPassword = $state('');
   let saving = $state(false);
   let formError = $state<keyof Messages | null>(null);
+  let rotateError = $state<keyof Messages | null>(null);
   let name = $state('');
   let expiration = $state('');
   let host = $state('');
   let permissions = $state<Scope[]>([]);
   let token = $state('');
+  let replacementToken = $state(false);
   let copyMessage = $state<'copiedToken' | 'copyFailed' | null>(null);
 
   onMount(() => { void load(); });
@@ -77,10 +84,42 @@
       items = [result.key, ...items.filter((key) => key.id !== result.key.id)];
       adding = false;
       copyMessage = null;
+      replacementToken = false;
       token = result.token;
     } catch (error) {
       formError = problemMessage(error);
     } finally {
+      saving = false;
+    }
+  }
+
+  function closeRotation() {
+    rotating = null;
+    currentPassword = '';
+  }
+
+  async function rotate(event: SubmitEvent) {
+    event.preventDefault();
+    if (!rotating || saving) return;
+    const id = rotating.id;
+    saving = true;
+    rotateError = null;
+    notice = null;
+    try {
+      const result = await api<{ key: Key; token: string }>(`/keys/${id}/rotate`, 'POST', {
+        current_password: currentPassword,
+      });
+      items = items.map((key) => key.id === id ? result.key : key);
+      closeRotation();
+      copyMessage = null;
+      replacementToken = true;
+      token = result.token;
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'expired_key') rotateError = 'expiredKey';
+      else if (error instanceof ApiError && error.code === 'invalid_credentials') rotateError = 'incorrectCurrentPassword';
+      else rotateError = problemMessage(error);
+    } finally {
+      currentPassword = '';
       saving = false;
     }
   }
@@ -137,6 +176,7 @@
         <tbody role="rowgroup">
           {#each items as key (key.id)}
             {@const createdTime = fromUnixSeconds(key.created_at)}
+            {@const expired = key.expires_at !== null && key.expires_at * 1000 <= Date.now()}
             <!-- svelte-ignore a11y_no_redundant_roles (Body rows display as grids on mobile.) -->
             <tr role="row">
               <td role="cell"><strong>{key.name}</strong></td>
@@ -147,18 +187,23 @@
                 {#if key.expires_at !== null}
                   {@const expirationTime = fromUnixSeconds(key.expires_at)}
                   {#if expirationTime}
-                    <time datetime={expirationTime}>{formatDate(expirationTime, language, true)}</time>
+                    <time datetime={expirationTime}>{formatDate(expirationTime, language, true, readTimeZone())}</time>
                   {:else}
                     {t.dateOutOfRange}
                   {/if}
-                  {#if key.expires_at * 1000 <= Date.now()}<span class="status expired">{t.expired}</span>{/if}
+                  {#if expired}<span class="status expired">{t.expired}</span>{/if}
                 {:else}{t.never}{/if}
               </td>
               <td role="cell">
                 <span class="cell-label" aria-hidden="true">{t.created}</span>
-                {#if createdTime}<time datetime={createdTime}>{formatDate(createdTime, language)}</time>{:else}{t.dateOutOfRange}{/if}
+                {#if createdTime}<time datetime={createdTime}>{formatDate(createdTime, language, false, readTimeZone())}</time>{:else}{t.dateOutOfRange}{/if}
               </td>
-              <td role="cell" class="align-right"><button class="button danger" type="button" onclick={() => { formError = null; removing = key; }}>{t.revoke}</button></td>
+              <td role="cell" class="align-right">
+                <div class="row row-actions key-actions">
+                  <button class="button" type="button" disabled={expired} onclick={() => { rotateError = null; rotating = key; }}>{t.rotateKey}</button>
+                  <button class="button danger" type="button" onclick={() => { formError = null; removing = key; }}>{t.revoke}</button>
+                </div>
+              </td>
             </tr>
           {/each}
         </tbody>
@@ -202,7 +247,7 @@
   </form>
 </Dialog>
 
-<Dialog {t} title={t.tokenCreated} open={!!token} onclose={() => token = ''}>
+<Dialog {t} title={replacementToken ? t.tokenRotated : t.tokenCreated} open={!!token} onclose={() => token = ''}>
   <div class="dialog-body stack">
     <p>{t.tokenHint}</p>
     <label class="field"><span>{t.apiToken}</span><input class="mono" readonly value={token} spellcheck="false" autocomplete="off" /></label>
@@ -229,3 +274,30 @@
     </form>
   {/if}
 </Dialog>
+
+<Dialog {t} title={t.rotateKey} open={rotating !== null} busy={saving} onclose={closeRotation}>
+  {#if rotating}
+    <form onsubmit={rotate} aria-busy={saving}>
+      <div class="dialog-body stack">
+        <strong>{rotating.name}</strong>
+        <p>{t.rotateHint}</p>
+        <label class="field">
+          <span>{t.currentPassword}</span>
+          <input name="current_password" type="password" autocomplete="current-password" required bind:value={currentPassword} disabled={saving} />
+        </label>
+        {#if rotateError}<p class="notice error" role="alert">{t[rotateError]}</p>{/if}
+      </div>
+      <footer class="dialog-foot row">
+        <button class="button" type="button" disabled={saving} onclick={closeRotation}>{t.cancel}</button>
+        <button class="button danger" type="submit" disabled={saving}>{saving ? t.saving : t.rotateKey}</button>
+      </footer>
+    </form>
+  {/if}
+</Dialog>
+
+<style>
+  .keys-table th:last-child { width: 140px; }
+  .key-actions {
+    gap: 6px;
+  }
+</style>

@@ -246,5 +246,28 @@ class LinkSchemaTests(unittest.TestCase):
                 db.execute(f"UPDATE {table} SET {field} = 2")
 
 
+    def test_monitor_enrollment_is_removed_when_a_destination_changes(self):
+        db = self.database()
+        db.execute("PRAGMA foreign_keys = ON")
+        for migration in sorted(MIGRATION.parent.glob("*.sql")):
+            if migration > MIGRATION:
+                db.executescript(migration.read_text())
+        self.insert(db, "go.example", "enrollment", "https://example.test/saved")
+        self.assertEqual(db.execute("SELECT count(*) FROM link_monitor").fetchone(), (0,))
+        first = db.execute(
+            "INSERT INTO link_monitor (link_id, priority) VALUES (1, 1) RETURNING revision"
+        ).fetchone()
+        db.execute("UPDATE links SET target = target, title = 'Updated'")
+        self.assertEqual(db.execute("SELECT revision FROM link_monitor").fetchone(), first)
+        db.execute("UPDATE links SET target = 'https://example.test/changed'")
+        self.assertEqual(db.execute("SELECT count(*) FROM link_monitor").fetchone(), (0,))
+        second = db.execute(
+            "INSERT INTO link_monitor (link_id, priority) VALUES (1, 0) RETURNING revision"
+        ).fetchone()
+        self.assertNotEqual(first, second)
+        db.execute("DELETE FROM links")
+        self.assertEqual(db.execute("SELECT count(*) FROM link_monitor").fetchone(), (0,))
+
+
 if __name__ == "__main__":
     unittest.main()

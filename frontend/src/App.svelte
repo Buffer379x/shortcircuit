@@ -14,25 +14,37 @@
   import Keys from './Keys.svelte';
   import Links from './Links.svelte';
   import Preferences from './Preferences.svelte';
+  import Monitoring from './Monitoring.svelte';
+  import Operations from './Operations.svelte';
+  import Overview from './Overview.svelte';
+  import { isTimeZone, provideTimeZone } from './timezone';
+  import Audit from './Audit.svelte';
 
-  type Page = 'links' | 'exchange' | 'analytics' | 'domains' | 'tags' | 'apiKeys' | 'account';
+  type Page = 'overview' | 'links' | 'exchange' | 'analytics' | 'domains' | 'tags' | 'apiKeys' | 'account' | 'operations' | 'monitoring' | 'auditLog';
   const pages = [
+    { id: 'overview', icon: 'analytics' },
     { id: 'links', icon: 'link' },
     { id: 'analytics', icon: 'analytics' },
+    { id: 'monitoring', icon: 'rule' },
     { id: 'domains', icon: 'globe' },
     { id: 'tags', icon: 'tag' },
     { id: 'exchange', icon: 'exchange' },
     { id: 'apiKeys', icon: 'key' },
     { id: 'account', icon: 'account' },
+    { id: 'operations', icon: 'archive' },
+    { id: 'auditLog', icon: 'history' },
   ] as const;
 
   let language = $state<Language>('en');
   let theme = $state<Theme>('dark');
+  let timeZone = $state<string>();
+  provideTimeZone(() => timeZone);
   let systemDark = $state(false);
   const t = $derived(messages[language]);
   let user = $state<User | null>(null);
   let setup = $state(false);
-  let page = $state<Page>('links');
+  let page = $state<Page>('overview');
+  let createRequested = $state(false);
   let main = $state<HTMLElement>();
   let sessionLoading = $state(true);
   let sessionError = $state<keyof Messages | null>(null);
@@ -50,7 +62,7 @@
     } catch (error) {
       if (activeUser && activeUser === user && error instanceof ApiError && error.status === 401) {
         if (path === '/auth/password') void refreshSession();
-        else resetSession('sessionExpired');
+        else if (error.code !== 'invalid_credentials') resetSession('sessionExpired');
       }
       throw error;
     }
@@ -60,6 +72,8 @@
     try {
       const savedLanguage = localStorage.getItem('shortcircuit-language');
       const savedTheme = localStorage.getItem('shortcircuit-theme');
+      const savedZone = localStorage.getItem('shortcircuit-timezone');
+      if (savedZone && isTimeZone(savedZone)) timeZone = savedZone;
       if (savedLanguage === 'en' || savedLanguage === 'de') language = savedLanguage;
       if (savedTheme === 'dark' || savedTheme === 'light' || savedTheme === 'system') theme = savedTheme;
     } catch {
@@ -79,6 +93,8 @@
     try {
       localStorage.setItem('shortcircuit-language', language);
       localStorage.setItem('shortcircuit-theme', theme);
+      if (timeZone) localStorage.setItem('shortcircuit-timezone', timeZone);
+      else localStorage.removeItem('shortcircuit-timezone');
     } catch {
       // Allow the controls to work when storage is unavailable.
     }
@@ -115,7 +131,8 @@
   function resetSession(notice: keyof Messages | null = null) {
     user = null;
     domains = null;
-    page = 'links';
+    page = 'overview';
+    createRequested = false;
     authNotice = notice;
     signOutError = null;
   }
@@ -144,6 +161,11 @@
     } finally {
       signingOut = false;
     }
+  }
+
+  function createFromOverview() {
+    createRequested = true;
+    void navigate('links');
   }
 
   async function navigate(destination: Page) {
@@ -190,17 +212,25 @@
       </header>
       <main id="main-content" class="main" tabindex="-1" bind:this={main}>
         {#if signOutError}<p class="notice error page-notice" role="alert">{t[signOutError]}</p>{/if}
-        {#if page === 'account'}
-          <Account {t} {user} {api} onPasswordChanged={passwordChanged} />
+        {#if page === 'overview'}
+          <Overview {t} {language} {api} oncreate={createFromOverview} onnavigate={navigate} />
+        {:else if page === 'account'}
+          <Account {t} {user} {api} bind:timeZone onPasswordChanged={passwordChanged} />
+        {:else if page === 'operations'}
+          <Operations {language} {api} />
+        {:else if page === 'auditLog'}
+          <Audit {t} {language} {api} />
+        {:else if page === 'monitoring'}
+          <Monitoring {t} {language} {api} {domains} />
         {:else if page === 'exchange'}
-          <Exchange {t} {api} {language} />
+          <Exchange {t} {api} {language} {domains} />
         {:else if page === 'analytics'}
           <Analytics {t} {api} {language} />
         {:else if page === 'domains' || page === 'tags'}
           {#key page}<Catalog {t} {api} {language} kind={page} onDomainSaved={loadDomains} />{/key}
         {:else if domains}
           {#if page === 'links'}
-            <Links {t} {api} {domains} {language} />
+            <Links {t} {api} {domains} {language} bind:createRequested />
           {:else}
             <Keys {t} {api} {domains} {language} />
           {/if}

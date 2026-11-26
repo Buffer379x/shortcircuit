@@ -163,6 +163,104 @@
         ]
       }
     },
+    "/api/v1/analytics/export": {
+      "get": {
+        "summary": "Download an analytics report",
+        "tags": [
+          "Analytics"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "granularity": {
+                      "const": "utc_day"
+                    },
+                    "report": {
+                      "$ref": "#/components/schemas/AnalyticsSummary"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "granularity",
+                    "report"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Supply days or both start and end. Inclusive UTC dates span at most 365 days and end by the current UTC date. Tag rankings use current link assignments.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365,
+              "default": 30
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "host",
+            "schema": {
+              "$ref": "#/components/schemas/CatalogHost"
+            }
+          }
+        ]
+      }
+    },
     "/api/v1/analytics/settings": {
       "get": {
         "summary": "Read analytics settings",
@@ -306,6 +404,168 @@
               "minimum": 1,
               "maximum": 365,
               "default": 30
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "host",
+            "schema": {
+              "$ref": "#/components/schemas/CatalogHost"
+            }
+          }
+        ],
+        "description": "Supply days or both start and end. Inclusive UTC dates span at most 365 days and end by the current UTC date. Tag rankings use current link assignments."
+      }
+    },
+    "/api/v1/audit": {
+      "get": {
+        "summary": "List recent administrative actions",
+        "tags": [
+          "System"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "format": "int64",
+                            "minimum": 1
+                          },
+                          "created_at": {
+                            "type": "integer",
+                            "format": "int64",
+                            "minimum": 0
+                          },
+                          "action": {
+                            "type": "string"
+                          },
+                          "actor": {
+                            "type": "string",
+                            "enum": [
+                              "admin",
+                              "system",
+                              "api_key"
+                            ]
+                          },
+                          "actor_id": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "format": "int64",
+                            "minimum": 1
+                          },
+                          "object_id": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "format": "int64",
+                            "minimum": 1
+                          },
+                          "outcome": {
+                            "type": "string",
+                            "enum": [
+                              "success",
+                              "rejected",
+                              "failed"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "created_at",
+                          "action",
+                          "actor",
+                          "actor_id",
+                          "object_id",
+                          "outcome"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "next_before": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int64",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "next_before"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100
             }
           }
         ]
@@ -2032,7 +2292,7 @@
             }
           }
         },
-        "description": "Preview writes no links. Apply rechecks conflicts and inserts the whole page atomically. Existing links are never overwritten. The original eight columns and an optional final description column are supported.",
+        "description": "Preview writes no links. Apply rechecks conflicts and inserts the whole page atomically. Existing links are never overwritten. The original eight columns and an optional final description column are supported. Omitting all mapping parameters preserves native CSV behavior. Mapped CSV requires slug_column, target_column and exactly one host selection. Source column positions must be distinct.",
         "parameters": [
           {
             "name": "preview",
@@ -2044,6 +2304,136 @@
               "default": true
             }
           },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Exact configured admin origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          {
+            "name": "host_column",
+            "in": "query",
+            "description": "Zero-based CSV source column.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            }
+          },
+          {
+            "name": "slug_column",
+            "in": "query",
+            "description": "Zero-based CSV source column.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            }
+          },
+          {
+            "name": "target_column",
+            "in": "query",
+            "description": "Zero-based CSV source column.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            }
+          },
+          {
+            "name": "title_column",
+            "in": "query",
+            "description": "Zero-based CSV source column.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            }
+          },
+          {
+            "name": "description_column",
+            "in": "query",
+            "description": "Zero-based CSV source column.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            }
+          },
+          {
+            "name": "tags_column",
+            "in": "query",
+            "description": "Zero-based CSV source column.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            }
+          },
+          {
+            "name": "enabled_column",
+            "in": "query",
+            "description": "Zero-based CSV source column.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            }
+          },
+          {
+            "name": "analytics_enabled_column",
+            "in": "query",
+            "description": "Zero-based CSV source column.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            }
+          },
+          {
+            "name": "host",
+            "in": "query",
+            "description": "Configured destination host for every row. Supply either host or host_column in mapped mode.",
+            "schema": {
+              "$ref": "#/components/schemas/CatalogHost"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/csv": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogCsvPage"
+              }
+            }
+          },
+          "description": "CSV with 1 to 100 data rows."
+        }
+      }
+    },
+    "/api/v1/exchange/links.csv/columns": {
+      "post": {
+        "summary": "Read importable CSV column names",
+        "description": "Inspects the UTF-8 CSV with the same parser and body limits used for import. Duplicate names are preserved in source order. This operation does not apply changes.",
+        "tags": [
+          "Exchange"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
           {
             "name": "Origin",
             "in": "header",
@@ -2065,6 +2455,44 @@
             }
           },
           "description": "CSV with 1 to 100 data rows."
+        },
+        "responses": {
+          "200": {
+            "description": "The source headings and whether they match the native format.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "columns": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "native": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "columns",
+                    "native"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -2362,6 +2790,88 @@
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/keys/{id}/rotate": {
+      "post": {
+        "summary": "Rotate a scoped API key",
+        "tags": [
+          "API keys"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyCreated"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Requires the current password. The existing key is revoked in the same transaction that creates the replacement, which has a new ID and the same permissions, host and expiry. Expired keys cannot be rotated.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "current_password": {
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "current_password"
+                ],
+                "additionalProperties": false
               }
             }
           }
@@ -4669,6 +5179,412 @@
         }
       }
     },
+    "/api/v1/monitoring": {
+      "get": {
+        "summary": "List monitored links",
+        "tags": [
+          "Monitoring"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LinkMonitorItem"
+                      }
+                    },
+                    "next_after": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int64",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "items",
+                    "next_after"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/monitoring/check": {
+      "post": {
+        "summary": "Queue a batch of enrolled link checks",
+        "tags": [
+          "Monitoring"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Checks were scheduled for the monitoring worker.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "queued": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 50
+                    }
+                  },
+                  "required": [
+                    "queued"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "description": "Advances up to 50 eligible checks. Recently checked links and links already due keep their schedule."
+      }
+    },
+    "/api/v1/monitoring/domain": {
+      "post": {
+        "summary": "Check a configured public domain",
+        "tags": [
+          "Monitoring"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "probe": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "integer",
+                              "format": "int64",
+                              "minimum": 100,
+                              "maximum": 599
+                            },
+                            "redirects": {
+                              "type": "integer",
+                              "format": "int64",
+                              "minimum": 0
+                            },
+                            "elapsed_ms": {
+                              "type": "integer",
+                              "format": "int64",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "redirects",
+                            "elapsed_ms"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "failure": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "blocked",
+                            "busy",
+                            "dns",
+                            "timeout",
+                            "connection",
+                            "protocol"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "probe",
+                    "failure"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Uses the saved domain origin. Both DNS and connections obey the outbound policy.",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "$ref": "#/components/schemas/CatalogHost"
+                  }
+                },
+                "required": [
+                  "host"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/monitoring/links/{id}": {
+      "patch": {
+        "summary": "Change monitoring for a saved link",
+        "tags": [
+          "Monitoring"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful operation"
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Outbound checks require opt-in and a saved link. Editing its destination removes the enrollment.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "priority": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "required": [
+                  "enabled"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/monitoring/links/{id}/check": {
+      "post": {
+        "summary": "Check an enrolled link",
+        "tags": [
+          "Monitoring"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkMonitorItem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/api/v1/openapi.json": {
       "get": {
         "summary": "Download the OpenAPI specification",
@@ -4690,6 +5606,206 @@
               "application/json": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/overview": {
+      "get": {
+        "summary": "Read the operational overview",
+        "description": "Includes current link lifecycle counts, links expiring within seven days, and up to five recent links.",
+        "tags": [
+          "System"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Overview of links, domains, and enrolled health checks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "links": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        },
+                        "active": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        },
+                        "scheduled": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        },
+                        "expired": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        },
+                        "disabled": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        },
+                        "archived": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        },
+                        "exhausted": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        },
+                        "expiring_soon": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "active",
+                        "scheduled",
+                        "expired",
+                        "disabled",
+                        "archived",
+                        "exhausted",
+                        "expiring_soon"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "active_domains": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    },
+                    "recent_links": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "format": "int64",
+                            "minimum": 1
+                          },
+                          "host": {
+                            "type": "string"
+                          },
+                          "slug": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "active",
+                              "scheduled",
+                              "expired",
+                              "disabled",
+                              "archived",
+                              "exhausted"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "host",
+                          "slug",
+                          "title",
+                          "created_at",
+                          "state"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "monitoring": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "total": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        },
+                        "healthy": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        },
+                        "attention": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        },
+                        "pending": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        },
+                        "last_checked": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "format": "int64",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "enabled",
+                        "total",
+                        "healthy",
+                        "attention",
+                        "pending",
+                        "last_checked"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "links",
+                    "active_domains",
+                    "recent_links",
+                    "monitoring"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -4915,6 +6031,484 @@
         }
       }
     },
+    "/api/v1/system": {
+      "get": {
+        "summary": "Read database and backup diagnostics",
+        "tags": [
+          "System"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "string"
+                    },
+                    "sqlite_version": {
+                      "type": "string"
+                    },
+                    "schema_version": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 1
+                    },
+                    "database_bytes": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    },
+                    "scheduled_backups": {
+                      "type": "boolean"
+                    },
+                    "restore_status": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "pending_restart",
+                        "applied",
+                        "failed",
+                        "interrupted",
+                        "unavailable"
+                      ]
+                    },
+                    "max_snapshot_bytes": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 1
+                    },
+                    "build_revision": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[0-9a-fA-F]{7,64}$"
+                    },
+                    "started_at": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int64",
+                      "minimum": 0,
+                      "description": "UTC Unix seconds"
+                    },
+                    "uptime_seconds": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    },
+                    "process_rss_bytes": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int64",
+                      "minimum": 0,
+                      "description": "Linux process resident bytes when available."
+                    },
+                    "link_count": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    },
+                    "raw_event_count": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    },
+                    "analytics_enabled": {
+                      "type": "boolean"
+                    },
+                    "last_backup_status": {
+                      "enum": [
+                        "verified",
+                        "failed",
+                        null
+                      ]
+                    },
+                    "last_verified_backup_at": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int64",
+                      "minimum": 0,
+                      "description": "UTC Unix seconds"
+                    },
+                    "monitoring_enabled": {
+                      "type": "boolean"
+                    },
+                    "last_monitor_check_at": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int64",
+                      "minimum": 0,
+                      "description": "UTC Unix seconds"
+                    },
+                    "system_operation_in_progress": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "sqlite_version",
+                    "schema_version",
+                    "database_bytes",
+                    "scheduled_backups",
+                    "restore_status",
+                    "max_snapshot_bytes",
+                    "build_revision",
+                    "started_at",
+                    "uptime_seconds",
+                    "process_rss_bytes",
+                    "link_count",
+                    "raw_event_count",
+                    "analytics_enabled",
+                    "last_backup_status",
+                    "last_verified_backup_at",
+                    "monitoring_enabled",
+                    "last_monitor_check_at",
+                    "system_operation_in_progress"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/system/backup": {
+      "get": {
+        "summary": "Download a verified SQLite snapshot",
+        "tags": [
+          "System"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            },
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Consumes a fresh backup grant. The snapshot contains sensitive application data. HEAD requests do not consume a grant and return 405."
+      }
+    },
+    "/api/v1/system/backup/authorize": {
+      "post": {
+        "summary": "Authorize a backup",
+        "tags": [
+          "System"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful operation"
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "A one-use grant is bound to the current browser session and operation.",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "password"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/system/restore": {
+      "post": {
+        "summary": "Validate and stage a SQLite snapshot",
+        "tags": [
+          "System"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schema_version": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 1
+                    },
+                    "created_at": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "schema_version",
+                    "created_at"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Consumes a fresh restore grant. A staged snapshot is activated during the next controlled startup.",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Discard a staged SQLite snapshot",
+        "tags": [
+          "System"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful operation"
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Consumes a fresh restore grant.",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/system/restore/authorize": {
+      "post": {
+        "summary": "Authorize a restore",
+        "tags": [
+          "System"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful operation"
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "A one-use grant is bound to the current browser session and operation.",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "password"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "summary": "Check process liveness",
@@ -5060,6 +6654,49 @@
                     "string",
                     "null"
                   ]
+                },
+                "browser": {
+                  "type": "string",
+                  "enum": [
+                    "chrome",
+                    "edge",
+                    "firefox",
+                    "opera",
+                    "safari",
+                    "unknown"
+                  ]
+                },
+                "os": {
+                  "type": "string",
+                  "enum": [
+                    "android",
+                    "chromeos",
+                    "ios",
+                    "linux",
+                    "macos",
+                    "windows",
+                    "unknown"
+                  ]
+                },
+                "device": {
+                  "type": "string",
+                  "enum": [
+                    "desktop",
+                    "mobile",
+                    "tablet",
+                    "unknown"
+                  ]
+                },
+                "traffic_source": {
+                  "type": "string",
+                  "enum": [
+                    "automated",
+                    "direct",
+                    "internal",
+                    "preview",
+                    "referral",
+                    "unknown"
+                  ]
                 }
               },
               "required": [
@@ -5070,7 +6707,11 @@
                 "kind",
                 "visit_class",
                 "source",
-                "referrer"
+                "referrer",
+                "browser",
+                "os",
+                "device",
+                "traffic_source"
               ],
               "additionalProperties": false
             }
@@ -5238,6 +6879,160 @@
             "type": "integer",
             "minimum": 0,
             "description": "Dropped events since process startup."
+          },
+          "start_day": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Inclusive UTC epoch day."
+          },
+          "end_day": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Inclusive UTC epoch day."
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "top_domains": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "host": {
+                  "type": "string"
+                },
+                "total": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "host",
+                "total"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "top_tags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tag": {
+                  "type": "string"
+                },
+                "total": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "tag",
+                "total"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "breakdowns": {
+            "type": "object",
+            "properties": {
+              "browser": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "category": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "category",
+                    "total"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "os": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "category": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "category",
+                    "total"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "device": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "category": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "category",
+                    "total"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "traffic_source": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "category": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "category",
+                    "total"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "browser",
+              "os",
+              "device",
+              "traffic_source"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -5247,7 +7042,13 @@
           "previous_redirects",
           "daily",
           "top_links",
-          "dropped"
+          "dropped",
+          "start_day",
+          "end_day",
+          "host",
+          "top_domains",
+          "top_tags",
+          "breakdowns"
         ],
         "additionalProperties": false
       },
@@ -7659,6 +9460,106 @@
             }
           }
         }
+      },
+      "LinkMonitorItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "host": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_checked",
+              "healthy",
+              "redirected",
+              "warning",
+              "unreachable",
+              "broken",
+              "unknown"
+            ]
+          },
+          "last_checked": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "http_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 1
+          },
+          "elapsed_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "redirects": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "failure": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "blocked",
+                  "busy",
+                  "dns",
+                  "timeout",
+                  "connection",
+                  "protocol"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "consecutive_failures": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "host",
+          "slug",
+          "priority",
+          "status",
+          "last_checked",
+          "http_status",
+          "elapsed_ms",
+          "redirects",
+          "failure",
+          "consecutive_failures"
+        ],
+        "additionalProperties": false
       }
     }
   }

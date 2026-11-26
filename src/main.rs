@@ -10,9 +10,10 @@ use std::{
 };
 
 use shortcircuit::{
-    AdminConfig, Analytics, Auth, BackupSchedule, BootstrapKind, PublicHosts,
-    admin_router_with_analytics, create_snapshot, data_lock, open_database, public_router_on_port,
-    restore_snapshot,
+    AdminConfig, Analytics, Auth, BackupSchedule, BootstrapKind, Monitor, Operations,
+    PublicControls, PublicHosts, RateLimit, TrustedProxies, admin_router_with_services,
+    apply_pending_restore, create_snapshot, data_lock, open_database_with_timeout,
+    public_router_with_controls, restore_snapshot,
 };
 use tokio::{net::TcpListener, sync::watch, time};
 use tracing_subscriber::EnvFilter;
@@ -42,10 +43,19 @@ fn database_path() -> PathBuf {
         .join("shortcircuit.db")
 }
 
+fn busy_timeout() -> Result<Duration, AppError> {
+    let ms = setting("SQLITE_BUSY_TIMEOUT_MS", "2000")?
+        .parse::<u64>()
+        .ok()
+        .filter(|ms| (1..=10_000).contains(ms))
+        .ok_or_else(|| io::Error::other("SQLITE_BUSY_TIMEOUT_MS must be 1 to 10000"))?;
+    Ok(Duration::from_millis(ms))
+}
+
 async fn issue_bootstrap(kind: BootstrapKind) -> Result<(), AppError> {
     let database = database_path();
     let _lock = data_lock(&database, false)?;
-    let pool = open_database(&database).await?;
+    let pool = open_database_with_timeout(&database, busy_timeout()?).await?;
     let token = Auth::new(pool.clone()).issue_bootstrap(kind).await?;
     pool.close().await;
     println!("{token}");
@@ -90,8 +100,73 @@ fn backup_schedule() -> Result<Option<BackupSchedule>, AppError> {
     BackupSchedule::new(hours, keep).map_err(|error| io::Error::other(error).into())
 }
 
+fn rate_limit(variable: &str) -> Result<Option<RateLimit>, AppError> {
+    let limit = setting(variable, "")?;
+    if limit.is_empty() {
+        return Ok(None);
+    }
+    let invalid = || {
+        io::Error::other(format!(
+            "invalid {variable}, expected per-peer,global per minute"
+        ))
+    };
+    let (per_peer, global) = limit.split_once(',').ok_or_else(invalid)?;
+    RateLimit::new(
+        per_peer.parse().map_err(|_| invalid())?,
+        global.parse().map_err(|_| invalid())?,
+    )
+    .map(Some)
+    .map_err(|reason| io::Error::other(format!("invalid {variable}: {reason}")).into())
+}
+
+fn monitor_settings() -> Result<Monitor, AppError> {
+    let enabled = match setting("MONITOR_ENABLED", "false")?.as_str() {
+        "true" => true,
+        "false" => false,
+        _ => return Err(io::Error::other("MONITOR_ENABLED must be true or false").into()),
+    };
+    let hourly = |name, default| -> Result<u16, AppError> {
+        setting(name, default)?
+            .parse::<u16>()
+            .map_err(|_| io::Error::other(format!("invalid {name}")).into())
+    };
+    let interval_hours = hourly("MONITOR_INTERVAL_HOURS", "24")?;
+    let priority_default = interval_hours.min(6).to_string();
+    let priority_hours = hourly("MONITOR_PRIORITY_HOURS", &priority_default)?;
+    let configured = setting("MONITOR_WEBHOOK_URL", "")?;
+    let webhook = if let Some(file) = env::var_os("MONITOR_WEBHOOK_URL_FILE") {
+        if !configured.is_empty() {
+            return Err(io::Error::other("set only one monitor webhook URL configuration").into());
+        }
+        let source = std::fs::File::open(file)
+            .map_err(|_| io::Error::other("could not open MONITOR_WEBHOOK_URL_FILE"))?;
+        let mut value = String::new();
+        source
+            .take(4098)
+            .read_to_string(&mut value)
+            .map_err(|_| io::Error::other("could not read MONITOR_WEBHOOK_URL_FILE"))?;
+        if value.len() > 4097 || value.trim_end_matches(['\r', '\n']).is_empty() {
+            return Err(io::Error::other("invalid MONITOR_WEBHOOK_URL_FILE").into());
+        }
+        Some(value.trim_end_matches(['\r', '\n']).to_owned())
+    } else {
+        (!configured.is_empty()).then_some(configured)
+    };
+    Monitor::new(enabled, webhook, interval_hours, priority_hours)
+        .map_err(|error| io::Error::other(error).into())
+}
+
 async fn serve() -> Result<(), AppError> {
+    let database_busy_timeout = busy_timeout()?;
     let backup_schedule = backup_schedule()?;
+    let monitor = monitor_settings()?;
+    let proxies =
+        TrustedProxies::parse(&setting("TRUSTED_PROXIES", "")?).map_err(io::Error::other)?;
+    let public_controls = PublicControls {
+        proxies: proxies.clone(),
+        password: rate_limit("RATE_LIMIT_PUBLIC_PASSWORD")?.unwrap_or(RateLimit::PASSWORD_DEFAULT),
+        public: rate_limit("RATE_LIMIT_PUBLIC")?,
+    };
     let public_addr = bind_address("PUBLIC_BIND", "127.0.0.1:8080")?;
     let admin_addr = bind_address("ADMIN_BIND", "127.0.0.1:8081")?;
     let hosts = PublicHosts::parse(&setting("PUBLIC_HOSTS", "localhost,127.0.0.1,[::1]")?)
@@ -102,7 +177,13 @@ async fn serve() -> Result<(), AppError> {
         &setting("ADMIN_ORIGIN", "http://localhost:8081")?,
         public_port,
     )
-    .map_err(io::Error::other)?;
+    .map_err(io::Error::other)?
+    .with_access_controls(
+        proxies,
+        rate_limit("RATE_LIMIT_LOGIN")?.unwrap_or(RateLimit::PASSWORD_DEFAULT),
+        rate_limit("RATE_LIMIT_SENSITIVE")?.unwrap_or(RateLimit::SENSITIVE_DEFAULT),
+        rate_limit("RATE_LIMIT_API")?.unwrap_or(RateLimit::ADMIN_DEFAULT),
+    );
     let config = match env::var("SHORTCODE_LENGTH") {
         Ok(value) => {
             let length = value.parse().map_err(|_| {
@@ -122,8 +203,13 @@ async fn serve() -> Result<(), AppError> {
         .into());
     }
     let database = database_path();
-    let _lock = data_lock(&database, false)?;
-    let pool = open_database(&database).await?;
+    let operations = Operations::new(database.clone(), backup_schedule.is_some())
+        .with_monitoring(monitor.enabled());
+    let (_lock, restore_applied) = apply_pending_restore(&database).await?;
+    let pool = open_database_with_timeout(&database, database_busy_timeout).await?;
+    if let Some(applied) = restore_applied {
+        Operations::record_startup_restore(&pool, applied).await;
+    }
 
     let admin_socket = TcpListener::bind(admin_addr).await?;
     tracing::info!(
@@ -135,6 +221,12 @@ async fn serve() -> Result<(), AppError> {
 
     let (analytics, mut writer) = Analytics::start(pool.clone()).await?;
     let (stop, receiver) = watch::channel(false);
+    let monitoring = monitor.enabled().then(|| {
+        let monitor = monitor.clone();
+        let pool = pool.clone();
+        let receiver = receiver.clone();
+        tokio::spawn(async move { monitor.run(pool, receiver).await })
+    });
     let scheduled = backup_schedule.map(|schedule| {
         tokio::spawn(schedule.run(
             pool.clone(),
@@ -144,18 +236,19 @@ async fn serve() -> Result<(), AppError> {
     });
     let public = axum::serve(
         public_socket,
-        public_router_on_port(
+        public_router_with_controls(
             pool.clone(),
             hosts.clone(),
             public_port,
             Some(analytics.clone()),
+            public_controls,
         )
         .into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(wait_for_stop(receiver.clone()));
     let admin = axum::serve(
         admin_socket,
-        admin_router_with_analytics(pool.clone(), hosts, config, analytics)
+        admin_router_with_services(pool.clone(), hosts, config, analytics, operations, monitor)
             .into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(wait_for_stop(receiver));
@@ -180,6 +273,10 @@ async fn serve() -> Result<(), AppError> {
             writer.abort();
             tracing::warn!("analytics flush deadline reached");
         }
+    }
+    if let Some(task) = monitoring {
+        task.abort();
+        let _ = task.await;
     }
     if let Some(mut task) = scheduled {
         match time::timeout(Duration::from_secs(5), &mut task).await {
@@ -207,8 +304,9 @@ async fn backup() -> Result<(), AppError> {
     if !database.is_file() {
         return Err(io::Error::other("no ShortCircuit database exists").into());
     }
-    let pool = open_database(&database).await?;
+    let pool = open_database_with_timeout(&database, busy_timeout()?).await?;
     let result = create_snapshot(&pool, &database.with_file_name("backups")).await;
+    Operations::record_backup_result(&database, result.is_ok()).await;
     pool.close().await;
     println!("{}", result?.display());
     Ok(())

@@ -97,9 +97,30 @@ struct Event {
     host: String,
     link_id: Option<i64>,
     kind: Kind,
+    client: Client,
+    referrer: Option<String>,
+}
+
+struct Client {
     visit_class: &'static str,
     source: &'static str,
-    referrer: Option<String>,
+    browser: &'static str,
+    os: &'static str,
+    device: &'static str,
+    traffic_source: &'static str,
+}
+
+impl Default for Client {
+    fn default() -> Self {
+        Self {
+            visit_class: "unknown",
+            source: "unknown",
+            browser: "unknown",
+            os: "unknown",
+            device: "unknown",
+            traffic_source: "unknown",
+        }
+    }
 }
 
 enum Change {
@@ -229,10 +250,21 @@ fn capture(
     {
         return None;
     }
-    let (visit_class, source) = if settings.classify {
-        classify(headers)
+    let referrer = if settings.referrers {
+        referrer_host(headers)
     } else {
-        ("unknown", "unknown")
+        None
+    };
+    let client = if settings.classify {
+        let traffic_source = match referrer.as_deref() {
+            Some(referrer) if referrer == host => "internal",
+            Some(_) => "referral",
+            None if settings.referrers && !headers.contains_key(header::REFERER) => "direct",
+            None => "unknown",
+        };
+        classify(headers, traffic_source)
+    } else {
+        Client::default()
     };
     let occurred_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -244,13 +276,8 @@ fn capture(
         host: host.to_owned(),
         link_id,
         kind,
-        visit_class,
-        source,
-        referrer: if settings.referrers {
-            referrer_host(headers)
-        } else {
-            None
-        },
+        client,
+        referrer,
     })
 }
 
@@ -269,27 +296,33 @@ fn referrer_host(headers: &HeaderMap) -> Option<String> {
     }
 }
 
-fn classify(headers: &HeaderMap) -> (&'static str, &'static str) {
-    let Some(agent) = headers
+fn classify(headers: &HeaderMap, traffic_source: &'static str) -> Client {
+    let agent = headers
         .get(header::USER_AGENT)
         .and_then(|value| value.to_str().ok())
         .filter(|value| value.len() <= MAX_HEADER_BYTES)
-    else {
-        return ("unknown", "unknown");
-    };
-    let agent = agent.to_ascii_lowercase();
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     let contains = |markers: &[&str]| markers.iter().any(|marker| agent.contains(*marker));
+    if preview_hint(headers)
+        || contains(&[
+            "facebookexternalhit",
+            "slackbot",
+            "discordbot",
+            "twitterbot",
+            "telegrambot",
+            "linkedinbot",
+            "whatsapp/",
+        ])
+    {
+        return Client {
+            visit_class: "bot",
+            source: "preview",
+            traffic_source: "preview",
+            ..Client::default()
+        };
+    }
     if contains(&[
-        "facebookexternalhit",
-        "slackbot",
-        "discordbot",
-        "twitterbot",
-        "telegrambot",
-        "linkedinbot",
-        "whatsapp/",
-    ]) {
-        ("bot", "preview")
-    } else if contains(&[
         "bot",
         "crawl",
         "spider",
@@ -299,20 +332,80 @@ fn classify(headers: &HeaderMap) -> (&'static str, &'static str) {
         "wget/",
         "python-requests/",
     ]) {
-        ("bot", "bot")
-    } else if contains(&["edge/", "edg/", "edga/", "edgios/"]) {
-        ("human", "edge")
-    } else if contains(&["opera", "opr/", "opios/"]) {
-        ("human", "opera")
-    } else if contains(&["firefox/", "fxios/"]) {
-        ("human", "firefox")
-    } else if contains(&["chrome/", "chromium/", "crios/"]) {
-        ("human", "chrome")
-    } else if contains(&["safari/"]) {
-        ("human", "safari")
-    } else {
-        ("unknown", "unknown")
+        return Client {
+            visit_class: "bot",
+            source: "bot",
+            traffic_source: "automated",
+            ..Client::default()
+        };
     }
+
+    let browser = if contains(&["edge/", "edg/", "edga/", "edgios/"]) {
+        "edge"
+    } else if contains(&["opera", "opr/", "opios/"]) {
+        "opera"
+    } else if contains(&["firefox/", "fxios/"]) {
+        "firefox"
+    } else if contains(&["chrome/", "chromium/", "crios/"]) {
+        "chrome"
+    } else if contains(&["safari/"]) {
+        "safari"
+    } else {
+        "unknown"
+    };
+    let os = if contains(&["windows"]) {
+        "windows"
+    } else if contains(&["android"]) {
+        "android"
+    } else if contains(&["iphone", "ipad", "ipod"]) {
+        "ios"
+    } else if contains(&["cros"]) {
+        "chromeos"
+    } else if contains(&["macintosh", "mac os x"]) {
+        "macos"
+    } else if contains(&["linux"]) {
+        "linux"
+    } else {
+        "unknown"
+    };
+    let device = if contains(&["ipad", "tablet"]) {
+        "tablet"
+    } else if contains(&["mobile", "iphone", "ipod", "windows phone"]) {
+        "mobile"
+    } else if os == "android" {
+        "tablet"
+    } else if os == "unknown" {
+        "unknown"
+    } else {
+        "desktop"
+    };
+    Client {
+        visit_class: if browser == "unknown" {
+            "unknown"
+        } else {
+            "human"
+        },
+        source: browser,
+        browser,
+        os,
+        device,
+        traffic_source,
+    }
+}
+
+fn preview_hint(headers: &HeaderMap) -> bool {
+    ["sec-purpose", "purpose"].into_iter().any(|name| {
+        headers.get_all(name).iter().any(|value| {
+            value.to_str().is_ok_and(|value| {
+                value.len() <= MAX_HEADER_BYTES
+                    && value.split(';').any(|token| {
+                        ["prefetch", "prerender", "preview"]
+                            .iter()
+                            .any(|purpose| token.trim().eq_ignore_ascii_case(purpose))
+                    })
+            })
+        })
+    })
 }
 
 async fn run_writer(pool: SqlitePool, shared: Arc<Shared>, mut receiver: mpsc::Receiver<Event>) {
@@ -374,7 +467,8 @@ async fn write_batch(
     }
 
     let mut details = QueryBuilder::<Sqlite>::new(
-        "WITH pending (occurred_at, link_id, host, kind, visit_class, source, referrer) AS (",
+        "WITH pending (occurred_at, link_id, host, kind, visit_class, source, referrer,
+                       browser, os, device, traffic_source) AS (",
     );
     details.push_values(current, |mut values, event| {
         values
@@ -382,13 +476,19 @@ async fn write_batch(
             .push_bind(event.link_id)
             .push_bind(event.host.as_str())
             .push_bind(event.kind.as_str())
-            .push_bind(event.visit_class)
-            .push_bind(event.source)
-            .push_bind(event.referrer.as_deref());
+            .push_bind(event.client.visit_class)
+            .push_bind(event.client.source)
+            .push_bind(event.referrer.as_deref())
+            .push_bind(event.client.browser)
+            .push_bind(event.client.os)
+            .push_bind(event.client.device)
+            .push_bind(event.client.traffic_source);
     });
     details.push(
-        ") INSERT INTO analytics_events (occurred_at, link_id, host, kind, visit_class, source, referrer)
-         SELECT occurred_at, link_id, host, kind, visit_class, source, referrer
+        ") INSERT INTO analytics_events (occurred_at, link_id, host, kind, visit_class, source,
+                                        referrer, browser, os, device, traffic_source)
+         SELECT occurred_at, link_id, host, kind, visit_class, source, referrer,
+                browser, os, device, traffic_source
          FROM pending
          WHERE link_id IS NULL OR EXISTS (
              SELECT 1 FROM links WHERE links.id = pending.link_id
@@ -402,8 +502,10 @@ async fn write_batch(
         .await?;
     if !inserted.is_empty() {
         let mut rollups = QueryBuilder::<Sqlite>::new(
-            "INSERT INTO analytics_daily (day, link_id, host, kind, visit_class, total)
-             SELECT occurred_at / 86400, COALESCE(link_id, 0), host, kind, visit_class, count(*)
+            "INSERT INTO analytics_daily (day, link_id, host, kind, visit_class, browser, os,
+                                          device, traffic_source, total)
+             SELECT occurred_at / 86400, COALESCE(link_id, 0), host, kind, visit_class,
+                    browser, os, device, traffic_source, count(*)
              FROM analytics_events WHERE id IN (",
         );
         let mut ids = rollups.separated(", ");
@@ -411,8 +513,9 @@ async fn write_batch(
             ids.push_bind(id);
         }
         rollups.push(
-            ") GROUP BY occurred_at / 86400, COALESCE(link_id, 0), host, kind, visit_class
-             ON CONFLICT(day, host, link_id, kind, visit_class)
+            ") GROUP BY occurred_at / 86400, COALESCE(link_id, 0), host, kind, visit_class,
+                        browser, os, device, traffic_source
+             ON CONFLICT(day, host, link_id, kind, visit_class, browser, os, device, traffic_source)
              DO UPDATE SET total = total + excluded.total",
         );
         rollups.build().execute(&mut *transaction).await?;
@@ -436,12 +539,15 @@ async fn prune(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .await?
         .rows_affected();
         let expired_rollups = sqlx::query(
-            "DELETE FROM analytics_daily WHERE (day, host, link_id, kind, visit_class) IN (
-                SELECT day, host, link_id, kind, visit_class FROM analytics_daily
+            "DELETE FROM analytics_daily
+             WHERE (day, host, link_id, kind, visit_class, browser, os, device, traffic_source) IN (
+                SELECT day, host, link_id, kind, visit_class, browser, os, device, traffic_source
+                FROM analytics_daily
                 WHERE day < unixepoch() / 86400 + 1 - (
                     SELECT aggregate_days FROM analytics_settings WHERE id = 1
                 )
-                ORDER BY day, host, link_id, kind, visit_class LIMIT ?
+                ORDER BY day, host, link_id, kind, visit_class, browser, os, device, traffic_source
+                LIMIT ?
              )",
         )
         .bind(PRUNE_BATCH_SIZE as i64)
@@ -670,5 +776,40 @@ mod tests {
             headers.insert(header::REFERER, axum::http::HeaderValue::from_static(value));
             assert_eq!(referrer_host(&headers).as_deref(), expected);
         }
+    }
+
+    #[test]
+    fn classification_keeps_coarse_categories_and_prefetch_takes_precedence() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::USER_AGENT,
+            axum::http::HeaderValue::from_static(
+                "Mozilla/5.0 (Linux; Android 14; Sample Device) Chrome/140.1 Mobile Safari/537.36",
+            ),
+        );
+        let client = classify(&headers, "referral");
+        assert_eq!(
+            (
+                client.browser,
+                client.os,
+                client.device,
+                client.traffic_source
+            ),
+            ("chrome", "android", "mobile", "referral"),
+        );
+
+        headers.insert(
+            "sec-purpose",
+            axum::http::HeaderValue::from_static("prefetch;prerender"),
+        );
+        let client = classify(&headers, "referral");
+        assert_eq!(
+            (client.visit_class, client.traffic_source),
+            ("bot", "preview"),
+        );
+        assert_eq!(
+            (client.browser, client.os, client.device),
+            ("unknown", "unknown", "unknown"),
+        );
     }
 }

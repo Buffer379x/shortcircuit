@@ -10,6 +10,8 @@ mod domains;
 mod history;
 mod http;
 mod input;
+mod monitor;
+mod outbound;
 mod protection;
 mod qr;
 mod rate_limit;
@@ -17,12 +19,19 @@ mod redirect;
 mod restore;
 mod store;
 
-pub use admin::{AdminConfig, admin_router, admin_router_with_analytics};
+pub use admin::{
+    AdminConfig, Operations, admin_router, admin_router_with_analytics, admin_router_with_services,
+};
 pub use analytics::Analytics;
 pub use auth::{Auth, BootstrapKind};
 pub use backup::create_snapshot;
 pub use backup_schedule::BackupSchedule;
-pub use http::{public_router, public_router_on_port, public_router_with_analytics};
+pub use http::{
+    PublicControls, public_router, public_router_on_port, public_router_with_analytics,
+    public_router_with_controls,
+};
 pub use input::PublicHosts;
-pub use restore::{data_lock, restore_snapshot};
-pub use store::open_database;
+pub use monitor::Monitor;
+pub use rate_limit::{RateLimit, TrustedProxies};
+pub use restore::{apply_pending_restore, data_lock, restore_snapshot};
+pub use store::{open_database, open_database_with_timeout};

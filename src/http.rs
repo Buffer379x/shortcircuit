@@ -16,7 +16,7 @@ use crate::{
     confirmation::Action,
     domains,
     input::{PublicHosts, request_host, valid_slug},
-    rate_limit::{AttemptLimiter, peer},
+    rate_limit::{AttemptLimiter, RateLimit, TrustedProxies},
     redirect::{self, Outcome, RedirectRequest, Resolution},
 };
 
@@ -30,6 +30,24 @@ struct AppState {
     analytics: Option<Analytics>,
     auth: Auth,
     attempts: Arc<AttemptLimiter>,
+    public_limit: Option<Arc<AttemptLimiter>>,
+    proxies: TrustedProxies,
+}
+
+pub struct PublicControls {
+    pub proxies: TrustedProxies,
+    pub password: RateLimit,
+    pub public: Option<RateLimit>,
+}
+
+impl Default for PublicControls {
+    fn default() -> Self {
+        Self {
+            proxies: TrustedProxies::default(),
+            password: RateLimit::PASSWORD_DEFAULT,
+            public: None,
+        }
+    }
 }
 
 pub fn public_router(pool: SqlitePool, hosts: PublicHosts) -> Router {
@@ -50,6 +68,22 @@ pub fn public_router_on_port(
     public_port: u16,
     analytics: Option<Analytics>,
 ) -> Router {
+    public_router_with_controls(
+        pool,
+        hosts,
+        public_port,
+        analytics,
+        PublicControls::default(),
+    )
+}
+
+pub fn public_router_with_controls(
+    pool: SqlitePool,
+    hosts: PublicHosts,
+    public_port: u16,
+    analytics: Option<Analytics>,
+    controls: PublicControls,
+) -> Router {
     Router::new()
         .fallback(resolve)
         .with_state(AppState {
@@ -58,7 +92,12 @@ pub fn public_router_on_port(
             hosts,
             public_port,
             analytics,
-            attempts: Arc::new(AttemptLimiter::new()),
+            attempts: Arc::new(AttemptLimiter::with_limit(controls.password)),
+            public_limit: controls
+                .public
+                .map(AttemptLimiter::with_limit)
+                .map(Arc::new),
+            proxies: controls.proxies,
         })
         .layer(middleware::from_fn(response_headers))
 }
@@ -82,7 +121,17 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
     if !matches!(*request.method(), Method::GET | Method::HEAD | Method::POST) {
         return method_not_allowed();
     }
-    let peer = post.then(|| peer(&request));
+    let peer = (post || state.public_limit.is_some()).then(|| state.proxies.client(&request));
+    if let Some(limiter) = &state.public_limit
+        && let Some(ip) = peer
+        && let Err(status) = limiter.allow(ip)
+    {
+        return if status == StatusCode::TOO_MANY_REQUESTS {
+            (status, [(header::RETRY_AFTER, "60")]).into_response()
+        } else {
+            status.into_response()
+        };
+    }
     let (parts, body) = request.into_parts();
     let uri = &parts.uri;
     if uri
@@ -174,7 +223,7 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
                 .path_and_query()
                 .map_or(uri.path(), |path| path.as_str()),
         };
-        if let Some(peer) = peer {
+        if post && let Some(peer) = peer {
             result = match confirm(&state, action, lookup, &parts.headers, body, peer).await {
                 Ok(confirmed) => confirmed,
                 Err(StatusCode::UNAUTHORIZED) => return action.page(lookup.language, true),

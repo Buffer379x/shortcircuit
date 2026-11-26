@@ -1,12 +1,13 @@
 use std::{
     error::Error,
     fs::{self, DirBuilder, File, OpenOptions},
-    io,
+    io::{self, Read, Write},
     os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use serde::{Deserialize, Serialize};
 use sqlx::{
     Connection, SqliteConnection, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
@@ -14,12 +15,92 @@ use sqlx::{
 
 pub(crate) const MAX_SNAPSHOT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const BACKUP_FORMAT_VERSION: i64 = 1;
+const BACKUP_STATUS: &str = ".backup-status";
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum BackupStatus {
+    Verified,
+    Failed,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BackupHealth {
+    pub(crate) status: Option<BackupStatus>,
+    pub(crate) verified_at: Option<u64>,
+}
+
+pub(crate) fn backup_health(backups_dir: &Path) -> BackupHealth {
+    read_backup_health(backups_dir).unwrap_or_default()
+}
+
+fn read_backup_health(backups_dir: &Path) -> io::Result<BackupHealth> {
+    let path = backups_dir.join(BACKUP_STATUS);
+    let metadata = fs::symlink_metadata(&path)?;
+    if !metadata.is_file() || metadata.len() > 256 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid backup status file",
+        ));
+    }
+    let file = File::open(path)?;
+    serde_json::from_reader(file.take(256)).map_err(io::Error::other)
+}
+
+pub(crate) async fn record_backup_result(backups_dir: &Path, succeeded: bool) {
+    let backups_dir = backups_dir.to_owned();
+    let result =
+        tokio::task::spawn_blocking(move || write_backup_health(&backups_dir, succeeded)).await;
+    if !matches!(result, Ok(Ok(()))) {
+        tracing::warn!("could not persist backup verification status");
+    }
+}
+
+fn write_backup_health(backups_dir: &Path, succeeded: bool) -> io::Result<()> {
+    let directory = prepare_directory(backups_dir)?;
+    // The CLI, scheduler, and browser may complete backups in different processes.
+    let lock = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(directory.join(".backup-status.lock"))?;
+    lock.lock()?;
+
+    let mut health = backup_health(&directory);
+    if succeeded {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_secs();
+        health.status = Some(BackupStatus::Verified);
+        health.verified_at = Some(health.verified_at.map_or(now, |prior| prior.max(now)));
+    } else {
+        health.status = Some(BackupStatus::Failed);
+    }
+    let temporary = StagedSnapshot::reserve(&directory)?;
+    let mut file = File::options().write(true).open(&temporary.database)?;
+    file.write_all(&serde_json::to_vec(&health).map_err(io::Error::other)?)?;
+    file.sync_all()?;
+    fs::rename(&temporary.database, directory.join(BACKUP_STATUS))?;
+    File::open(directory)?.sync_all()
+}
 
 /// Create a local backup in the server-configured directory.
 pub async fn create_snapshot(
     pool: &SqlitePool,
     backups_dir: &Path,
 ) -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
+    let staged = verified_snapshot(pool, backups_dir).await?;
+    Ok(tokio::task::spawn_blocking(move || staged.publish()).await??)
+}
+
+pub(crate) async fn verified_snapshot(
+    pool: &SqlitePool,
+    backups_dir: &Path,
+) -> Result<StagedSnapshot, Box<dyn Error + Send + Sync>> {
     let backups_dir = backups_dir.to_owned();
     let staged =
         tokio::task::spawn_blocking(move || StagedSnapshot::reserve(&backups_dir)).await??;
@@ -34,9 +115,7 @@ pub async fn create_snapshot(
         .execute(pool)
         .await?;
 
-    if fs::metadata(&staged.database)?.len() > MAX_SNAPSHOT_BYTES {
-        return Err(io::Error::other("backup exceeds the supported snapshot size").into());
-    }
+    staged.checked_size()?;
     let mut snapshot = SqliteConnection::connect_with(
         &SqliteConnectOptions::new()
             .filename(&staged.database)
@@ -51,8 +130,8 @@ pub async fn create_snapshot(
     verify_snapshot(&mut snapshot).await?;
     snapshot.close().await?;
 
-    let published = tokio::task::spawn_blocking(move || staged.publish()).await??;
-    Ok(published)
+    staged.checked_size()?;
+    Ok(staged)
 }
 
 async fn annotate_snapshot(
@@ -125,13 +204,27 @@ async fn verify_snapshot(
     Ok(())
 }
 
-struct StagedSnapshot {
+pub(crate) struct StagedSnapshot {
     directory: PathBuf,
     database: PathBuf,
     target: PathBuf,
 }
 
 impl StagedSnapshot {
+    fn checked_size(&self) -> io::Result<u64> {
+        let bytes = fs::metadata(&self.database)?.len();
+        if bytes > MAX_SNAPSHOT_BYTES {
+            return Err(io::Error::other(
+                "backup exceeds the supported snapshot size",
+            ));
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn open(&self) -> io::Result<(File, u64)> {
+        Ok((File::open(&self.database)?, self.checked_size()?))
+    }
+
     fn reserve(backups_dir: &Path) -> io::Result<Self> {
         let backups_dir = prepare_directory(backups_dir)?;
         let created_at = SystemTime::now()
@@ -229,6 +322,23 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     use super::*;
+
+    #[tokio::test]
+    async fn a_failed_attempt_preserves_the_last_verified_backup_time() {
+        let work = tempfile::tempdir().unwrap();
+        let directory = work.path().join("backups");
+        assert!(backup_health(&directory).status.is_none());
+
+        record_backup_result(&directory, true).await;
+        let verified = backup_health(&directory);
+        assert_eq!(verified.status, Some(BackupStatus::Verified));
+        assert!(verified.verified_at.is_some_and(|at| at > 0));
+
+        record_backup_result(&directory, false).await;
+        let failed = backup_health(&directory);
+        assert_eq!(failed.status, Some(BackupStatus::Failed));
+        assert_eq!(failed.verified_at, verified.verified_at);
+    }
 
     #[tokio::test]
     async fn backup_copies_live_rows_and_scrubs_only_the_snapshot() {

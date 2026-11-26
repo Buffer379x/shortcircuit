@@ -65,6 +65,7 @@ jobs:
           IMAGE: ${{ steps.version.outputs.image }}
         run: |
           docker build --platform linux/amd64 --tag "$IMAGE" \
+            --build-arg "SHORTCIRCUIT_BUILD_REVISION=$RELEASE_SHA" \
             --label "org.opencontainers.image.version=$VERSION" \
             --label "org.opencontainers.image.revision=$RELEASE_SHA" .
           args=$(python3 -c '

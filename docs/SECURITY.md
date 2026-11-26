@@ -54,3 +54,29 @@ The 0.2 implementation adds a CLI-issued setup token, Argon2id passwords, revoca
 - The QR logo endpoint requires an administrator browser session, Origin and CSRF validation. It accepts a raw static PNG of at most 256 KiB and 512 pixels per side. Two upload slots apply an eight-second body-read deadline, and the two QR workers bound decoding and rendering. Responses contain only rendered pixels or generated SVG geometry. The service ignores text and color profile data in the upload and retains the logo only for the request.
 - Audit the action, authorized actor, object ID, time, and outcome. Use a log field allowlist and omit query strings, passwords, keys, cookies, full IP addresses, header dumps, and full destination URLs from runtime diagnostics. Protect access to audit records and exports independently. Apply equivalent logging controls to the reverse proxy at installation. [OWASP Logging](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html)
 - Review dependency and operating system advisories, licenses, Cargo and JavaScript feature lists, and base image digests before release. Use lockfiles, reproducible build steps, artifact verification, and minimal CI credentials. Apply the same checks to automated dependency updates.
+
+## Implemented outbound monitoring policy
+
+Monitoring is disabled at startup by default. Setting `MONITOR_ENABLED=true` lets an administrator enroll a saved link or check a saved public domain. A changed destination removes its enrollment. The public listener only resolves a stored destination. It never performs probes. A probe that has already started can finish after enrollment is withdrawn. Its result is discarded if the enrollment was removed or replaced.
+
+Health probes use a client restricted to validated HTTP destinations on port 80 and HTTPS destinations on port 443. The resolver rejects nonpublic addresses and DNS answers containing any blocked address. The connection can use only the validated addresses, including after a redirect. Each hop establishes a new validation context. Health checks allow at most three redirects and use HEAD with a bounded GET probe when the destination rejects HEAD. Requests discard response bodies. TLS hostname and certificate verification remain enabled.
+
+Use `MONITOR_WEBHOOK_URL_FILE` with a read-only secret file, or set `MONITOR_WEBHOOK_URL`, to opt in to an HTTPS endpoint for confirmed link-health transitions. A delivery contains only link IDs and status codes. It follows the same address and timeout policy and does not follow redirects. ShortCircuit does not accept internal connector exceptions in this configuration. Choose enrolled links deliberately because the destination receives the stored path and query during checks. Avoid enrolling signed, one-use, and sensitive destinations when the probe itself could consume or disclose their contents.
+
+The scheduler serializes probes. Stable links target a 24-hour interval and priority links a 6-hour interval by default, plus deterministic jitter. Set `MONITOR_INTERVAL_HOURS` and `MONITOR_PRIORITY_HOURS` to adjust them. Attempts to slow destinations and backlogs can delay checks. Paused, archived, expired, and future links are skipped during scheduled runs. Exact destinations share a probe when they are in the same batch. Spaced checks and a capped retry backoff limit traffic. Link-health notifications do not have a durable delivery queue.
+
+## Client addresses and request limits
+
+Configure `TRUSTED_PROXIES` as a comma-separated list of individual IP addresses or CIDR networks for actual proxy peers. The empty default uses the TCP peer. ShortCircuit uses one bounded `X-Forwarded-For` chain from a trusted peer and walks it right to left to the first untrusted address. Malformed or ambiguous inputs use the direct TCP peer. Forwarded host and scheme headers do not set either listener's trusted origin.
+
+The variables below use `per-peer,global` counts per minute. A blank variable selects the default. Budget exhaustion returns HTTP 429.
+
+| Variable | Default | Scope |
+|---|---:|---|
+| `RATE_LIMIT_LOGIN` | `8,60` | Account setup, sign-in, and recovery |
+| `RATE_LIMIT_SENSITIVE` | `8,60` | Password changes, key rotation, and browser backup and restore authorization |
+| `RATE_LIMIT_API` | `240,4000` | Admin API, including session status |
+| `RATE_LIMIT_PUBLIC_PASSWORD` | `8,60` | Protected-link confirmation requests |
+| `RATE_LIMIT_PUBLIC` | Off | Optional combined public listener limit, including lookup misses |
+
+The latest 1,000 administrative audit entries are available in **Audit log**. Account actions, key changes, monitor enrollment, and browser backup and restore events use fixed action identifiers and numeric object IDs. Audit entries exclude credentials, destination URLs, visitor addresses, and request headers.

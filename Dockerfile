@@ -16,7 +16,8 @@ COPY migrations/ ./migrations/
 COPY docs/openapi.json ./docs/openapi.json
 COPY assets/branding/favicon.svg assets/branding/favicon.png ./assets/branding/
 COPY --from=frontend /web/dist ./frontend/dist
-RUN cargo build --locked --release
+ARG SHORTCIRCUIT_BUILD_REVISION=""
+RUN SHORTCIRCUIT_BUILD_REVISION="$SHORTCIRCUIT_BUILD_REVISION" cargo build --locked --release
 RUN mkdir -p /notices/rust && cd /usr/local/cargo/registry/src && \
     find . -type f \( -iname 'license*' -o -iname 'copying*' -o -iname 'notice*' -o -iname 'copyright*' \) \
     -exec cp --parents --target-directory=/notices/rust {} +
@@ -27,7 +28,9 @@ LABEL org.opencontainers.image.title="ShortCircuit" \
       org.opencontainers.image.source="https://github.com/Buffer379x/shortcircuit" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="0.6.0-preview.2"
-RUN install -d -m 0700 -o 10001 -g 10001 /data
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && install -d -m 0700 -o 10001 -g 10001 /data
 COPY --from=build /build/target/release/shortcircuit /usr/local/bin/shortcircuit
 COPY LICENSE /usr/share/doc/shortcircuit/LICENSE
 COPY --from=build /notices/rust /usr/share/doc/shortcircuit/licenses/rust

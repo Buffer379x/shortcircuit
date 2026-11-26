@@ -15,9 +15,13 @@
   import Icon from './Icon.svelte';
   import TagMark from './TagMark.svelte';
   import type { Language, Messages } from './i18n';
+  import { useTimeZone } from './timezone';
 
-  let { t, language, api, domains }: { t: Messages; language: Language; api: Api; domains: Domains } = $props();
+  let { t, language, api, domains, createRequested = $bindable(false) }: {
+    t: Messages; language: Language; api: Api; domains: Domains; createRequested?: boolean;
+  } = $props();
 
+  const readTimeZone = useTimeZone();
   const maxSelection = 50;
   let items = $state<CatalogLink[]>([]);
   let selected = $state.raw(new Set<string>());
@@ -101,6 +105,13 @@
   onMount(() => {
     void loadTags();
     return () => tagRequests.abort();
+  });
+
+  $effect(() => {
+    if (createRequested) {
+      createRequested = false;
+      openForm();
+    }
   });
 
   $effect(() => {
@@ -594,7 +605,7 @@
                 </div>
               </td>
               <td role="cell"><span class="cell-label" aria-hidden="true">{t.status}</span><span class:active={link.enabled} class="status"><span class="dot"></span>{link.enabled ? t.enabled : t.disabled}</span></td>
-              <td role="cell"><span class="cell-label" aria-hidden="true">{t.created}</span><time datetime={link.created_at}>{formatDate(link.created_at, language)}</time></td>
+              <td role="cell"><span class="cell-label" aria-hidden="true">{t.created}</span><time datetime={link.created_at}>{formatDate(link.created_at, language, false, readTimeZone())}</time></td>
               <td role="cell">
                 <span class="cell-label" aria-hidden="true">{t.recordedRedirects}</span>
                 <span title={t.recordedRedirectsHint}>{limit.format(link.recorded_redirects)}</span>
@@ -602,7 +613,7 @@
               <td role="cell">
                 <span class="cell-label" aria-hidden="true">{t.lastUsed}</span>
                 {#if lastTime}
-                  <time datetime={lastTime}>{formatDate(lastTime, language, true)}</time>
+                  <time datetime={lastTime}>{formatDate(lastTime, language, true, readTimeZone())}</time>
                 {:else if link.last_redirect_date}
                   <time datetime={link.last_redirect_date} title={t.lastUsedDayHint}>{formatDate(link.last_redirect_date, language, false, 'UTC')}</time>
                 {:else}

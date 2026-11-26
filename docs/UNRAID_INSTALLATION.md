@@ -49,5 +49,13 @@ For rollback, use preview.1 with the pre-upgrade preview.1 backup in a separate 
 | `ADMIN_ORIGIN` | Exact external origin for administration. Use HTTPS outside loopback. |
 | `LOG_LEVEL` | Default `info`. |
 | `SHORTCODE_LENGTH` | Generated shortcode length from 8 to 32. Defaults to 10. Added after preview.2. |
+| `SQLITE_BUSY_TIMEOUT_MS` | SQLite writer wait in milliseconds from 1 to 10,000. Defaults to 2,000. |
+| `TRUSTED_PROXIES` | Comma-separated trusted proxy IP addresses or CIDR networks. Empty by default. |
+| `MONITOR_ENABLED` | Set `true` to allow explicit monitor enrollment. Defaults to `false`. |
+| `MONITOR_INTERVAL_HOURS` | Target interval for stable links, 1–720 hours. Defaults to 24. |
+| `MONITOR_PRIORITY_HOURS` | Target interval for priority links. Defaults to 6 hours or the regular interval if shorter. |
+| `MONITOR_WEBHOOK_URL_FILE` | Optional read-only file with an HTTPS webhook URL. Use this or `MONITOR_WEBHOOK_URL`. |
 | `BACKUP_INTERVAL_HOURS` and `BACKUP_KEEP` | Optional backup interval and number of scheduled copies to keep. Default scheduling is disabled. |
 
+
+These monitor and proxy settings apply to source builds after preview.2. [Monitoring and rate limits](SECURITY.md#implemented-outbound-monitoring-policy)
