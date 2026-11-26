@@ -1,6 +1,6 @@
 # Decisions and open questions
 
-Architecture and design are approved for implementation. Existing links are recreated manually as needed. Production verification and public release approval are pending.
+Architecture and design are approved for implementation. Existing links are recreated manually as needed. The owner approved container previews. Production verification and stable release approval are pending.
 
 | ID | Status | Area | Decision or open question |
 |---|---|---|---|

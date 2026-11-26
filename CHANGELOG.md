@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0-preview.2
+
 - Apply status or tag changes to selected links, export the selection as JSON or CSV, or confirm atomic deletion.
 - Search, filter, and sort all links in the catalog with stable cursor pagination and keep search terms in the request body.
 - Add optional PNG logos to the QR dialog with verified output in PNG and SVG.
