@@ -259,9 +259,7 @@ async function verify() {
     await protectedRow.getByRole('button', { name: 'Duplicate link', exact: true }).click();
     const duplicate = page.getByRole('dialog', { name: 'Duplicate link', exact: true });
     assert.equal(await duplicate.getByLabel('Destination URL', { exact: true }).inputValue(), protectedTarget);
-    const duplicateSlug = duplicate.getByLabel('Slug (optional)', { exact: true });
-    assert.equal(await duplicateSlug.inputValue(), '');
-    await duplicateSlug.fill('protected-copy');
+    assert.equal(await duplicate.getByLabel('Slug (optional)', { exact: true }).count(), 0);
     await duplicate.getByLabel('Description (optional)', { exact: true }).fill('Reviewed test description');
     const duplicateCreated = page.waitForResponse(response =>
       response.url().endsWith('/api/v1/links') && response.request().method() === 'POST');
@@ -269,10 +267,17 @@ async function verify() {
     const duplicateResponse = await duplicateCreated;
     assert.equal(duplicateResponse.status(), 201);
     assert.equal(duplicateResponse.request().postDataJSON().protection, undefined);
-    assert.equal((await duplicateResponse.json()).enabled, false);
+    assert.equal(duplicateResponse.request().postDataJSON().slug, undefined);
+    const copied = await duplicateResponse.json();
+    assert.equal(copied.enabled, false);
+    assert.match(copied.slug, /^[a-zA-Z0-9_-]{10}$/);
     await duplicate.waitFor({ state: 'hidden' });
-    assert.equal((await page.request.get(publicOrigin + '/protected-copy', { maxRedirects: 0 })).status(), 404);
-    await page.getByText('Reviewed test description', { exact: true }).waitFor();
+    assert.equal((await page.request.get(publicOrigin + '/' + copied.slug, { maxRedirects: 0 })).status(), 404);
+    await page.getByRole('row').filter({ hasText: 'localhost/' + copied.slug })
+      .getByRole('button', { name: 'Delete link', exact: true }).click();
+    const deleteCopy = page.getByRole('dialog', { name: 'Delete link', exact: true });
+    await deleteCopy.getByRole('button', { name: 'Delete', exact: true }).click();
+    await deleteCopy.waitFor({ state: 'hidden' });
 
     await protectedRow.getByRole('button', { name: 'Link protection', exact: true }).click();
     const protection = page.getByRole('dialog', { name: 'Link protection', exact: true });

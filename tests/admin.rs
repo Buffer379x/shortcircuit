@@ -468,40 +468,97 @@ async fn link_descriptions_are_searchable_versioned_and_optional() {
     assert_eq!(link["enabled"], false);
     assert_eq!(link["analytics_enabled"], false);
     let redirect = request(
-        &app.public, Method::GET, "/notes", &[("host", "go.example")], None,
+        &app.public,
+        Method::GET,
+        "/notes",
+        &[("host", "go.example")],
+        None,
     )
     .await;
     assert_eq!(redirect.status(), StatusCode::NOT_FOUND);
 
     let found = request(
-        &app.admin, Method::POST, "/api/v1/links/search", &headers, Some(json!({"query":"übergabe"})),
+        &app.admin,
+        Method::POST,
+        "/api/v1/links/search",
+        &headers,
+        Some(json!({"query":"übergabe"})),
     )
     .await;
     assert_eq!(response_body(found).await["items"][0]["id"], link["id"]);
     let endpoint = format!("/api/v1/links/{}", link["id"]);
     let invalid = request(
-        &app.admin, Method::PATCH, &endpoint, &headers, Some(json!({"description":"ü".repeat(501)})),
+        &app.admin,
+        Method::PATCH,
+        &endpoint,
+        &headers,
+        Some(json!({"description":"ü".repeat(501)})),
     )
     .await;
     assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(response_body(invalid).await["code"], "invalid_description");
     let cleared = request(
-        &app.admin, Method::PATCH, &endpoint, &headers, Some(json!({"description":""})),
+        &app.admin,
+        Method::PATCH,
+        &endpoint,
+        &headers,
+        Some(json!({"description":""})),
     )
     .await;
     assert_eq!(response_body(cleared).await["description"], "");
     let history_path = format!("{endpoint}/history");
     let history = request(&app.admin, Method::GET, &history_path, &headers, None).await;
     let history = response_body(history).await;
-    assert_eq!(history["items"][0]["previous"]["value"]["description"], "Übergabe\nTeam");
+    assert_eq!(
+        history["items"][0]["previous"]["value"]["description"],
+        "Übergabe\nTeam"
+    );
     let restore_path = format!("{history_path}/{}/restore", history["items"][0]["id"]);
     let restored = request(&app.admin, Method::POST, &restore_path, &headers, None).await;
     assert_eq!(restored.status(), StatusCode::NO_CONTENT);
     let matching = request(
-        &app.admin, Method::POST, "/api/v1/links/search", &headers, Some(json!({"query":"übergabe"})),
+        &app.admin,
+        Method::POST,
+        "/api/v1/links/search",
+        &headers,
+        Some(json!({"query":"übergabe"})),
     )
     .await;
-    assert_eq!(response_body(matching).await["items"][0]["description"], "Übergabe\nTeam");
+    assert_eq!(
+        response_body(matching).await["items"][0]["description"],
+        "Übergabe\nTeam"
+    );
+    let legacy = json!({"kind":"metadata","value":{
+        "target":"https://example.test/guide","title":"Legacy title","tags":[],
+        "enabled":false,"analytics_enabled":false
+    }});
+    let legacy_id: i64 = sqlx::query_scalar(
+        "INSERT INTO link_history(link_id, actor_kind, actor_label, action, previous)
+         VALUES (?, 'admin', 'Owner', 'metadata', ?) RETURNING id",
+    )
+    .bind(link["id"].as_i64().unwrap())
+    .bind(legacy.to_string())
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    let restored = request(
+        &app.admin,
+        Method::POST,
+        &format!("{history_path}/{legacy_id}/restore"),
+        &headers,
+        None,
+    )
+    .await;
+    assert_eq!(restored.status(), StatusCode::NO_CONTENT);
+    let current: (String, String) =
+        sqlx::query_as("SELECT title, description FROM links WHERE slug = 'notes'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        current,
+        ("Legacy title".to_owned(), "Übergabe\nTeam".to_owned())
+    );
 }
 
 #[tokio::test]
@@ -532,7 +589,11 @@ async fn catalog_usage_counts_retained_redirects_and_reports_last_available_prec
     .await
     .unwrap();
     let page = request(
-        &app.admin, Method::POST, "/api/v1/links/search", &headers, Some(json!({"sort":"slug_asc"})),
+        &app.admin,
+        Method::POST,
+        "/api/v1/links/search",
+        &headers,
+        Some(json!({"sort":"slug_asc"})),
     )
     .await;
     assert_eq!(page.status(), StatusCode::OK);

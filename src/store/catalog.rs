@@ -303,7 +303,10 @@ async fn load_usage(pool: &SqlitePool, items: &mut [SearchItem]) -> Result<(), s
          FROM recent",
     );
     let rows = query.build_query_as::<UsageRow>().fetch_all(pool).await?;
-    let mut by_link: HashMap<_, _> = rows.into_iter().map(|row| (row.link_id, row.usage)).collect();
+    let mut by_link: HashMap<_, _> = rows
+        .into_iter()
+        .map(|row| (row.link_id, row.usage))
+        .collect();
     for item in items {
         if let Some(usage) = by_link.remove(&item.link.id) {
             item.usage = usage;
@@ -314,10 +317,16 @@ async fn load_usage(pool: &SqlitePool, items: &mut [SearchItem]) -> Result<(), s
 
 fn matches_query(link: &Link, origin: Option<&str>, text: &str) -> bool {
     let contains = |value: &str| value.contains(text) || value.to_lowercase().contains(text);
-    [link.title.as_str(), &link.description, &link.slug, &link.host, &link.target]
-        .into_iter()
-        .chain(link.tags.iter().map(String::as_str))
-        .any(contains)
+    [
+        link.title.as_str(),
+        &link.description,
+        &link.slug,
+        &link.host,
+        &link.target,
+    ]
+    .into_iter()
+    .chain(link.tags.iter().map(String::as_str))
+    .any(contains)
         || contains(&format!("{}/{}", link.host, link.slug))
         || origin.is_some_and(|base| contains(&format!("{base}/{}", link.slug)))
 }

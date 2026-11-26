@@ -46,7 +46,7 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--font); }
-button, input, select { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
 button, select { cursor: pointer; }
 button:disabled, button[aria-disabled='true'] { cursor: default; opacity: .65; }
 a { color: var(--accent-text); text-underline-offset: 3px; }

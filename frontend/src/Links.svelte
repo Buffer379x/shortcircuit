@@ -662,11 +662,13 @@
             {#each domains.hosts as value (value)}<option value={value}>{value}</option>{/each}
           </select>
         </label>
-        <label class="field">
-          <span id="slug-label">{t.slug}</span>
-          <input name="slug" maxlength="200" autocapitalize="none" spellcheck="false" bind:value={slug} disabled={saving} aria-labelledby="slug-label" aria-describedby="slug-hint" aria-invalid={formError === 'invalidSlug' || formError === 'slugInUse'} />
-          <small id="slug-hint">{t.slugHint}</small>
-        </label>
+        {#if !duplicating}
+          <label class="field">
+            <span id="slug-label">{t.slug}</span>
+            <input name="slug" maxlength="200" autocapitalize="none" spellcheck="false" bind:value={slug} disabled={saving} aria-labelledby="slug-label" aria-describedby="slug-hint" aria-invalid={formError === 'invalidSlug' || formError === 'slugInUse'} />
+            <small id="slug-hint">{t.slugHint}</small>
+          </label>
+        {/if}
       {/if}
       <label class="field">
         <span id="tags-label">{t.tags}</span>

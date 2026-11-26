@@ -58,8 +58,26 @@ pub(super) fn parse(input: &[u8]) -> Result<Vec<LinkMetadata>, CsvError> {
 }
 
 pub(super) fn page(rows: Vec<(i64, LinkMetadata)>) -> Result<(Vec<u8>, Option<i64>), CsvError> {
+    let first_description = rows
+        .iter()
+        .take(MAX_ITEMS)
+        .position(|(_, item)| !item.description.is_empty());
+    let (mut bytes, mut count) = encode_page(&rows, first_description.is_some())?;
+    // Keep the legacy header when the first description did not fit on this page.
+    if let Some(index) = first_description
+        && count <= index
+    {
+        (bytes, count) = encode_page(&rows[..index], false)?;
+    }
+    let cursor = (count < rows.len()).then(|| rows[count - 1].0);
+    Ok((bytes, cursor))
+}
+
+fn encode_page(
+    rows: &[(i64, LinkMetadata)],
+    has_descriptions: bool,
+) -> Result<(Vec<u8>, usize), CsvError> {
     let mut header = HEADER.join(",").into_bytes();
-    let has_descriptions = rows.iter().any(|(_, item)| !item.description.is_empty());
     if has_descriptions {
         header.extend_from_slice(b",description");
     }
@@ -70,13 +88,8 @@ pub(super) fn page(rows: Vec<(i64, LinkMetadata)>) -> Result<(Vec<u8>, Option<i6
         .quote_style(csv::QuoteStyle::Always)
         .from_writer(header);
     let version = EXCHANGE_VERSION.to_string();
-    let mut last_id = None;
-    let mut cursor = None;
-    for (count, (id, item)) in rows.into_iter().enumerate() {
-        if count == MAX_ITEMS {
-            cursor = last_id;
-            break;
-        }
+    let mut count = 0;
+    for (_, item) in rows.iter().take(MAX_ITEMS) {
         let tags = serde_json::to_string(&item.tags).map_err(|_| CsvError)?;
         let fields = [
             Cow::Borrowed(version.as_str()),
@@ -86,7 +99,11 @@ pub(super) fn page(rows: Vec<(i64, LinkMetadata)>) -> Result<(Vec<u8>, Option<i6
             protect(&item.title),
             protect(&tags),
             Cow::Borrowed(if item.enabled { "true" } else { "false" }),
-            Cow::Borrowed(if item.analytics_enabled { "true" } else { "false" }),
+            Cow::Borrowed(if item.analytics_enabled {
+                "true"
+            } else {
+                "false"
+            }),
             protect(&item.description),
         ];
         writer
@@ -96,15 +113,17 @@ pub(super) fn page(rows: Vec<(i64, LinkMetadata)>) -> Result<(Vec<u8>, Option<i6
 
         let encoded_bytes = writer.get_ref().len();
         if encoded_bytes > BODY_LIMIT {
-            cursor = Some(last_id.ok_or(CsvError)?);
+            if count == 0 {
+                return Err(CsvError);
+            }
             break;
         }
         included_bytes = encoded_bytes;
-        last_id = Some(id);
+        count += 1;
     }
     let mut output = writer.into_inner().map_err(|_| CsvError)?;
     output.truncate(included_bytes);
-    Ok((output, cursor))
+    Ok((output, count))
 }
 
 fn parse_bool(value: &str) -> Result<bool, CsvError> {
@@ -180,6 +199,32 @@ mod tests {
         let raw = reader.records().next().unwrap().unwrap();
         assert_eq!(raw.get(8), Some("'=1+2\nSecond line"));
         assert_eq!(parse(&bytes).unwrap()[0].description, "=1+2\nSecond line");
+    }
+
+    #[test]
+    fn description_header_depends_on_rows_in_the_encoded_page() {
+        for (count, long) in [(MAX_ITEMS, false), (8, true)] {
+            let mut rows: Vec<_> = (0..count)
+                .map(|index| {
+                    let mut item = link("Title");
+                    if long {
+                        item.target.push_str(&"q".repeat(3900));
+                    }
+                    (index as i64 + 1, item)
+                })
+                .collect();
+            let mut next = link("Next page");
+            next.description = "Note on the next page".to_owned();
+            if long {
+                next.target.push_str(&"q".repeat(3900));
+            }
+            rows.push((count as i64 + 1, next));
+            let (bytes, cursor) = page(rows).unwrap();
+            assert_eq!(cursor, Some(count as i64));
+            assert_eq!(parse(&bytes).unwrap().len(), count);
+            let mut reader = csv::Reader::from_reader(bytes.as_slice());
+            assert_eq!(reader.headers().unwrap().len(), HEADER.len());
+        }
     }
 
     #[test]

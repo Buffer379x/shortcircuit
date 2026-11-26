@@ -408,7 +408,9 @@ fn validate(input: &mut ImportPage) -> Result<(), Problem> {
         for tag in &mut item.tags {
             *tag = tag_name(tag).ok_or_else(invalid)?.to_owned();
         }
-        item.description = link_description(&item.description).ok_or_else(invalid)?.to_owned();
+        item.description = link_description(&item.description)
+            .ok_or_else(invalid)?
+            .to_owned();
         item.tags.sort_unstable();
         item.tags.dedup();
     }
