@@ -4,6 +4,10 @@ ShortCircuit is a self-hosted URL shortener and link manager. It uses Rust and S
 
 **0.6.0 is in development.** ShortCircuit is licensed under the [MIT License](LICENSE). See the [project plan](docs/PROJECT_PLAN.md) and [verification status](docs/PROJECT_STATUS.md).
 
+## Install on Unraid
+
+Download `my-shortcircuit.xml` from the [GitHub prerelease](https://github.com/Buffer379x/shortcircuit/releases/tag/v0.6.0-preview.1) and select it in Unraid Docker Manager. Docker Manager pulls the versioned amd64 image from GitHub Container Registry and initializes its data volume automatically. [Install and configure](docs/UNRAID_INSTALLATION.md)
+
 ## Start the local container
 
 ```sh
@@ -15,7 +19,7 @@ Open `http://localhost:8081` and enter the one-time token, a username, and a pas
 
 The Analytics page shows UTC daily counts, period comparisons, and privacy settings. QR codes are available from the link list.
 
-Compose builds the local `shortcircuit:0.6.0` image used by the Unraid template. The Compose profile publishes both ports on loopback and runs as UID/GID 10001. The application uses one persistent Docker volume. For a reverse proxy, set `ADMIN_ORIGIN` to the external HTTPS origin and keep the cleartext admin backend reachable only by the proxy. Use a dedicated admin hostname. [Network setup](docs/REVERSE_PROXY.md) · [Unraid](docs/UNRAID_INSTALLATION.md)
+Compose builds the development image `shortcircuit:0.6.0`, publishes both ports on loopback, and runs as UID/GID 10001. The application uses one persistent Docker volume. For a reverse proxy, set `ADMIN_ORIGIN` to the external HTTPS origin and keep the cleartext admin backend reachable only by the proxy. Use a dedicated admin hostname. [Network setup](docs/REVERSE_PROXY.md)
 
 Upgrading an existing development instance applies the schema updates and preserves its link IDs, hosts, slugs, and destinations. Remove `ADMIN_TOKEN_FILE` and use `setup-token` to create the first administrator. Issue new scoped keys from the admin interface. For account recovery, use `docker compose exec -T shortcircuit shortcircuit recovery-token` and choose **Reset password** on the sign-in screen.
 
