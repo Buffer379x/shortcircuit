@@ -28,7 +28,7 @@ pub(crate) async fn read_selected(
         values.push_bind(item.id).push_bind(&item.key);
     });
     query.push(
-        ") SELECT links.id, host, slug, target, created_at, title, enabled, analytics_enabled,
+        ") SELECT links.id, host, slug, target, created_at, title, description, enabled, analytics_enabled,
                   (SELECT json_group_array(tag ORDER BY tag) FROM link_tags WHERE link_id = links.id) AS tags_json,
                   EXISTS (
                       SELECT 1 FROM link_protection WHERE link_id = links.id

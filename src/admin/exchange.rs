@@ -18,7 +18,7 @@ use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
 
 use crate::{
     domains,
-    input::{PublicHosts, normalize_host, valid_slug, valid_target},
+    input::{PublicHosts, link_description, normalize_host, valid_slug, valid_target},
     store::Link,
 };
 
@@ -53,6 +53,7 @@ pub(super) fn export_selected(
                 slug: link.slug,
                 target: link.target,
                 title: link.title,
+                description: link.description,
                 tags: link.tags,
                 enabled: link.enabled && !protected,
                 analytics_enabled: link.analytics_enabled,
@@ -126,6 +127,8 @@ struct LinkMetadata {
     slug: String,
     target: String,
     title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    description: String,
     #[sqlx(skip)]
     tags: Vec<String>,
     enabled: bool,
@@ -196,7 +199,7 @@ async fn export_rows(
     }
     let rows = sqlx::query_as::<_, TaggedLink>(
         "WITH page AS (
-             SELECT id, host, slug, target, title, analytics_enabled,
+             SELECT id, host, slug, target, title, description, analytics_enabled,
                  (enabled AND NOT EXISTS (
                      SELECT 1 FROM link_protection AS protection WHERE protection.link_id = links.id
                      AND (protection.one_time = 1 OR protection.password_hash IS NOT NULL)
@@ -405,6 +408,7 @@ fn validate(input: &mut ImportPage) -> Result<(), Problem> {
         for tag in &mut item.tags {
             *tag = tag_name(tag).ok_or_else(invalid)?.to_owned();
         }
+        item.description = link_description(&item.description).ok_or_else(invalid)?.to_owned();
         item.tags.sort_unstable();
         item.tags.dedup();
     }
@@ -428,7 +432,7 @@ async fn compare_existing(
         values.push_bind(&item.host).push_bind(&item.slug);
     });
     query.push(
-        ") SELECT links.id, links.host, links.slug, links.target, links.title,
+        ") SELECT links.id, links.host, links.slug, links.target, links.title, links.description,
                   links.enabled, links.analytics_enabled, link_tags.tag
            FROM requested
            JOIN links ON links.host = requested.host AND links.slug = requested.slug
@@ -475,13 +479,14 @@ async fn insert_link(
     item: &LinkMetadata,
 ) -> Result<(), sqlx::Error> {
     let id = sqlx::query(
-        "INSERT INTO links (host, slug, target, title, enabled, analytics_enabled)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO links (host, slug, target, title, description, enabled, analytics_enabled)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&item.host)
     .bind(&item.slug)
     .bind(&item.target)
     .bind(&item.title)
+    .bind(&item.description)
     .bind(item.enabled)
     .bind(item.analytics_enabled)
     .execute(&mut *connection)

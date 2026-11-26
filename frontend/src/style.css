@@ -217,7 +217,7 @@ time { font-variant-numeric: tabular-nums; }
 }
 
 .text-button:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
-input:not([type='checkbox']), select {
+input:not([type='checkbox']), select, textarea {
   min-width: 0;
   min-height: var(--hit);
   padding: 8px 10px;
@@ -230,7 +230,8 @@ input[type='checkbox'] { width: 18px; height: 18px; margin: 0; accent-color: var
 input::placeholder { color: var(--muted); opacity: 1; }
 input[aria-invalid='true'] { border-color: var(--danger); }
 .field { display: grid; gap: 6px; min-width: 0; font-size: 13px; font-weight: 620; }
-.field input, .field select { width: 100%; font-weight: 450; }
+.field input, .field select, .field textarea { width: 100%; font-weight: 450; }
+.field textarea { resize: vertical; }
 .field small { font-weight: 400; }
 .notice { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); color: var(--ink); overflow-wrap: anywhere; }
 .notice.error { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); }
@@ -265,11 +266,13 @@ th:first-child, td:first-child { padding-left: 16px; }
 th:last-child, td:last-child { padding-right: 16px; }
 td { min-height: 60px; }
 .align-right { text-align: right; }
-.links-table th:nth-child(1) { width: 32%; }
+.links-table th:nth-child(1) { width: 28%; }
 .links-table th:nth-child(2) { width: auto; }
 .links-table th:nth-child(3) { width: 90px; }
 .links-table th:nth-child(4) { width: 94px; }
-.links-table th:nth-child(5) { width: clamp(245px, 27vw, 370px); }
+.links-table th:nth-child(5) { width: 68px; }
+.links-table th:nth-child(6) { width: 124px; }
+.links-table th:nth-child(7) { width: clamp(128px, 22vw, 310px); }
 .keys-table th:nth-child(1) { width: 18%; }
 .keys-table th:nth-child(2) { width: auto; }
 .keys-table th:nth-child(3) { width: 18%; }
@@ -281,6 +284,15 @@ td { min-height: 60px; }
 .link-symbol { background: var(--accent-soft); color: var(--accent-text); }
 .link-text { min-width: 0; }
 .link-text strong, .link-short, .link-target { display: block; overflow-wrap: anywhere; }
+.link-description {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  color: var(--sub);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .link-short { color: var(--accent-text); }
 .link-target { font-size: 12px; color: var(--muted); }
 .row-actions { justify-content: flex-end; flex-wrap: wrap; gap: 0; }

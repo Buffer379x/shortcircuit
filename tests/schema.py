@@ -10,6 +10,7 @@ QR_TEMPLATES = MIGRATION.with_name("0009_qr_templates.sql")
 QR_FRAMES = MIGRATION.with_name("0010_qr_frames.sql")
 LINK_SELECTION = MIGRATION.with_name("0011_link_selection.sql")
 LINK_ORGANIZATION = MIGRATION.with_name("0012_link_organization.sql")
+LINK_DESCRIPTION = MIGRATION.with_name("0013_link_description.sql")
 
 
 class LinkSchemaTests(unittest.TestCase):
@@ -183,6 +184,23 @@ class LinkSchemaTests(unittest.TestCase):
         for field in ("favorite", "archived"):
             with self.subTest(field=field), self.assertRaises(sqlite3.IntegrityError):
                 db.execute(f"UPDATE links SET {field} = 2")
+
+
+    def test_description_upgrade_preserves_target_and_defaults_to_empty(self):
+        db = self.database()
+        for migration in sorted(MIGRATION.parent.glob("*.sql")):
+            if MIGRATION < migration < LINK_DESCRIPTION:
+                db.executescript(migration.read_text())
+        target = "https://example.test/file?Signature=A%2f#original"
+        self.insert(db, "go.example", "Team/Docs", target)
+        self.assertTrue(LINK_DESCRIPTION.is_file(), "expected a versioned description migration")
+        db.executescript(LINK_DESCRIPTION.read_text())
+        self.assertEqual(db.execute("SELECT target, description FROM links").fetchone(), (target, ""))
+        db.execute("UPDATE links SET description = ?", ("ü" * 500,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute("UPDATE links SET description = ?", ("ü" * 501,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute("UPDATE links SET description = ?", ("with\x00NUL",))
 
 
 if __name__ == "__main__":

@@ -89,6 +89,9 @@
       const next = current.metadata;
       add(t.target, old.target, next.target, String);
       add(t.historyLinkTitle, old.title, next.title, (value) => value || t.historyNoValue);
+      if (old.description !== undefined) {
+        add(t.linkDescription, old.description, next.description ?? '', (value) => value || t.historyNoValue);
+      }
       add(t.tags, old.tags, next.tags, (value) => value.join('\n') || t.historyNoValue);
       add(t.status, old.enabled, next.enabled, status);
       add(t.countLinkVisits, old.analytics_enabled, next.analytics_enabled, status);

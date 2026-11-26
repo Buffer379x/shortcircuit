@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{QueryBuilder, SqliteConnection, SqlitePool};
 
 use crate::{
-    input::{link_tags, link_title, valid_target},
+    input::{link_description, link_tags, link_title, valid_target},
     redirect::{self, Policy, PolicyError},
     store::{self, Link, LinkUpdate, push_host_scope},
 };
@@ -54,6 +54,8 @@ impl Action {
 pub(crate) struct Metadata {
     target: String,
     title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
     tags: Vec<String>,
     enabled: bool,
     analytics_enabled: bool,
@@ -64,6 +66,7 @@ impl From<&Link> for Metadata {
         Self {
             target: link.target.clone(),
             title: link.title.clone(),
+            description: Some(link.description.clone()),
             tags: link.tags.clone(),
             enabled: link.enabled,
             analytics_enabled: link.analytics_enabled,
@@ -77,10 +80,20 @@ impl Metadata {
             return Err(RestoreError::Invalid("invalid_target"));
         }
         let title = link_title(&self.title).ok_or(RestoreError::Invalid("invalid_title"))?;
+        let description = self
+            .description
+            .as_deref()
+            .map(|value| {
+                link_description(value)
+                    .map(str::to_owned)
+                    .ok_or(RestoreError::Invalid("invalid_description"))
+            })
+            .transpose()?;
         let tags = link_tags(self.tags).ok_or(RestoreError::Invalid("invalid_tags"))?;
         Ok(LinkUpdate {
             target: Some(self.target),
             title: Some(title.to_owned()),
+            description,
             enabled: Some(self.enabled),
             analytics_enabled: Some(self.analytics_enabled),
             tags: Some(tags),
@@ -365,6 +378,9 @@ mod tests {
                 slug: "history".to_owned(),
                 target: "https://example.test/".to_owned(),
                 title: "Initial title".to_owned(),
+                description: String::new(),
+                enabled: true,
+                analytics_enabled: true,
                 tags: Vec::new(),
             },
             None,

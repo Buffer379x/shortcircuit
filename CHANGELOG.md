@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add link descriptions to the catalog, revision history, and native JSON and CSV exchange.
+- Create disabled duplicates from the catalog with editable metadata and a fresh shortcode.
+- Show recorded redirects and the last recorded use in the catalog.
+
 - Add favorites and an archive view to the link catalog. Archiving preserves the public redirect and its access settings.
 - Filter the link catalog by up to 20 tags, matching all or any of them.
 - Set the length of automatically generated shortcodes with `SHORTCODE_LENGTH`.

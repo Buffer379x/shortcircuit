@@ -37,17 +37,19 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `GET` or `HEAD /{slug}` | Resolves the link's redirect policy. The default is `302` with the stored `Location` and `Cache-Control: no-store`. A protected link returns a confirmation page for GET or an empty response for HEAD. |
 | `POST /{slug}` | Accepts a protected-link confirmation from the exact public origin. A successful confirmation returns `303` to continue with GET. |
 
-Link objects contain `id`, `host`, `slug`, `target`, `created_at`, `title`, `enabled`, `analytics_enabled`, and `tags`. Slugs use case-sensitive ASCII letters, digits, hyphens, underscores, and segment separators. Their maximum is 200 bytes. With no custom slug, the server uses its configured generated length (10 by default). Destinations are absolute HTTP or HTTPS URIs up to 4,096 bytes, with valid percent encoding and credentials excluded. A link can carry up to 20 tags. Titles and tags use limits of 160 and 40 Unicode characters respectively.
+Link objects contain `id`, `host`, `slug`, `target`, `created_at`, `title`, `description`, `enabled`, `analytics_enabled`, and `tags`. Slugs use case-sensitive ASCII letters, digits, hyphens, underscores, and segment separators. Their maximum is 200 bytes. With no custom slug, the server uses its configured generated length (10 by default). Destinations are absolute HTTP or HTTPS URIs up to 4,096 bytes, with valid percent encoding and credentials excluded. A link can carry up to 20 tags. Titles and tags use limits of 160 and 40 Unicode characters respectively. Descriptions support up to 500 Unicode characters and line feeds after trimming. Send an empty string to clear a description. Link creation accepts optional `enabled` and `analytics_enabled` flags that default to true.
 
 An API key uses `Authorization: Bearer <token>`. A key can hold `read` for list operations, `write` for creation and edits, and `delete` for link deletion. An optional host restriction applies to both reads and changes. The browser supplies an exact `Origin` and `X-CSRF-Token` for session-authenticated changes. Errors use `application/problem+json` with `status`, `title`, and `code`. [Security design](SECURITY.md)
 
 ### Catalog search
 
-The search body accepts optional `query`, `host`, `enabled`, `view`, `tags`, `tag_match`, `sort`, and `after` fields. The query is a case-insensitive Unicode substring up to 4,096 bytes and matches titles, slugs, domains, short URLs, destinations, and tag names. The domain, enabled, view, and tag conditions all apply together.
+The search body accepts optional `query`, `host`, `enabled`, `view`, `tags`, `tag_match`, `sort`, and `after` fields. The query is a case-insensitive Unicode substring up to 4,096 bytes and matches titles, descriptions, slugs, domains, short URLs, destinations, and tag names. The domain, enabled, view, and tag conditions all apply together.
 
 Use `tags` for up to 20 exact tag names. The `tag_match` value is `all` by default. Use `any` to require at least one of the selected tags. The legacy `tag` field still accepts one tag. Supply either `tag` or a nonempty `tags` array.
 
 The `view` value is `all` by default. The browser uses `unarchived` for its main list. Use `archived` for the archive or `favorites` for unarchived favorites. Search items include the `favorite` and `archived` flags and a `selection_key`.
+
+Search items also report `recorded_redirects` from retained daily analytics, `last_redirect_date` as a UTC date, and `last_redirect_at` in Unix seconds if detail is available for that date. A link with no recorded redirects has a count of zero and null dates. Tracking preferences, retention, and deletion apply to these values.
 
 `PATCH /api/v1/links/{id}/organization` accepts a browser administrator session, the `key` from the search item's `selection_key`, and one or both Boolean flags. The response returns both flags. A missing or replaced row returns `409`. Archived links continue to resolve according to their current redirect policy. A full SQLite backup preserves the organization flags.
 
@@ -65,7 +67,7 @@ The export body uses `links` and `format` (`json` or `csv`). Exports use the nat
 
 Each revision includes an actor, a UTC timestamp in Unix seconds, an action, and the previous configuration for that category. The actor identifies the administrator username or the numeric ID of a scoped API key. Direct link edits record metadata, tags, and redirect policy changes. Protection changes record an informational entry. Catalog-wide tag operations apply to the catalog. The administration interface exports the fetched history as JSON.
 
-A restore applies only the selected category. Metadata includes destination, title, tags, enabled state, and analytics preference. A policy restore keeps the current visit counter and revalidates the configuration against current protection. A successful restore that changes settings records the previous state. The short URL and access protection persist across these operations.
+A restore applies only the selected category. Metadata includes destination, title, description, tags, enabled state, and analytics preference. An older revision with no description field preserves the current description. A policy restore keeps the current visit counter and revalidates the configuration against current protection. A successful restore that changes settings records the previous state. The short URL and access protection persist across these operations.
 
 ### Styled QR codes
 
@@ -104,13 +106,13 @@ Analytics endpoints require a browser administrator session. Changes require the
 
 ### Native link exchange
 
-`GET /api/v1/exchange/links` returns version 1, a bounded page of items, and `next_after_id`. Use that value as `after_id` to continue. The exported link fields are `host`, `slug`, `target`, `title`, `tags`, `enabled`, and `analytics_enabled`. Native JSON and CSV exports mark protected links as disabled. Restore their protection settings from a database backup or configure protection on the imported copy before enabling it.
+`GET /api/v1/exchange/links` returns version 1, a bounded page of items, and `next_after_id`. Use that value as `after_id` to continue. The exported link fields are `host`, `slug`, `target`, `title`, `tags`, `enabled`, and `analytics_enabled`. A nonempty `description` is included as an optional extension to version 1. Import treats an absent description as empty. Native JSON and CSV exports mark protected links as disabled. Restore their protection settings from a database backup or configure protection on the imported copy before enabling it.
 
 `POST /api/v1/exchange/links` accepts `version: 1`, a Boolean `preview`, and up to 100 `items` within the request size limit. Existing domains must be active. The server returns per-link `create`, `unchanged`, or `conflict` results. An apply rechecks conflicts in the same transaction as the insert. If any item conflicts, the response is `409` and all existing links remain intact. This format transfers basic link data. A full snapshot includes settings, policies, and visit history.
 
 `GET /api/v1/exchange/links.csv` downloads one CSV page. Send `after_id` with the value from the previous response's `X-Next-After-Id` header to continue. The same authenticated endpoint accepts POST with `Content-Type: text/csv` and defaults to preview. Pass `preview=false` to apply an import. Responses to POST use the same JSON report as the native JSON endpoint.
 
-CSV uses the columns `version,host,slug,target,title,tags,enabled,analytics_enabled`. Each row uses version 1, a JSON array in the tags column, and lowercase Boolean values. The export quotes fields and prefixes spreadsheet-sensitive values. Use the original export for an exact round trip and use JSON for data exchange through tools that resave spreadsheets. [OWASP CSV injection guidance](https://community.owasp.org/attacks/CSV_Injection)
+CSV uses the columns `version,host,slug,target,title,tags,enabled,analytics_enabled`. It accepts a final `description` column and exports it on pages containing descriptions. Each row uses version 1, a JSON array in the tags column, and lowercase Boolean values. The export quotes fields and prefixes spreadsheet-sensitive values. Use the original export for an exact round trip and use JSON for data exchange through tools that resave spreadsheets. [OWASP CSV injection guidance](https://community.owasp.org/attacks/CSV_Injection)
 
 ### Public redirect behavior
 

@@ -1833,7 +1833,8 @@
               "default": 0
             }
           }
-        ]
+        ],
+        "description": "Each page retains the version 1 header and appends a description column when the selected rows contain descriptions."
       },
       "post": {
         "operationId": "importLinksCsv",
@@ -1923,7 +1924,7 @@
             }
           }
         },
-        "description": "Preview writes no links. Apply rechecks conflicts and inserts the whole page atomically. Existing links are never overwritten.",
+        "description": "Preview writes no links. Apply rechecks conflicts and inserts the whole page atomically. Existing links are never overwritten. The original eight columns and an optional final description column are supported.",
         "parameters": [
           {
             "name": "preview",
@@ -2844,7 +2845,7 @@
       "post": {
         "operationId": "searchLinkCatalog",
         "summary": "Search, filter, and sort all links",
-        "description": "Read-only, browser-session search. Reuse the response cursor with the same filters and sort. The cursor stores the sort key so paging can continue after the anchor is deleted.",
+        "description": "Read-only, browser-session search. Reuse the response cursor with the same filters and sort. The cursor stores the sort key so paging can continue after the anchor is deleted. Search matches link descriptions and the result includes retained redirect counts.",
         "tags": [
           "Links"
         ],
@@ -5452,6 +5453,11 @@
         "maxLength": 32768,
         "description": "UTF-8 CSV up to 32,768 bytes, with up to 100 data rows. Columns in order are version, host, slug, target, title, tags, enabled, and analytics_enabled. Use version 1 per row, a JSON array of strings for tags, and lowercase true or false for Boolean cells. Native exports quote data cells and protect spreadsheet-sensitive values with a reversible apostrophe prefix."
       },
+      "CatalogDescription": {
+        "type": "string",
+        "maxLength": 500,
+        "description": "Administrator-only plain text. Leading and trailing whitespace is removed. Line feeds are allowed."
+      },
       "CatalogDomain": {
         "type": "object",
         "additionalProperties": false,
@@ -5816,6 +5822,9 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "description": {
+            "$ref": "#/components/schemas/CatalogDescription"
           }
         },
         "required": [
@@ -5827,7 +5836,8 @@
           "tags",
           "enabled",
           "analytics_enabled",
-          "created_at"
+          "created_at",
+          "description"
         ]
       },
       "CatalogLinkCreate": {
@@ -5885,6 +5895,30 @@
           },
           "protection": {
             "$ref": "#/components/schemas/CatalogLinkProtectionCreate"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogDescription"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": true
+          },
+          "analytics_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": true
           }
         },
         "required": [
@@ -5922,6 +5956,9 @@
           },
           "analytics_enabled": {
             "type": "boolean"
+          },
+          "description": {
+            "$ref": "#/components/schemas/CatalogDescription"
           }
         },
         "required": [
@@ -6021,6 +6058,16 @@
                 "maxItems": 20
               }
             }
+          },
+          {
+            "required": [
+              "description"
+            ],
+            "properties": {
+              "description": {
+                "$ref": "#/components/schemas/CatalogDescription"
+              }
+            }
           }
         ],
         "type": "object",
@@ -6076,6 +6123,16 @@
                   "description": "Nonempty tag up to 40 Unicode characters after trimming, with no commas or control characters."
                 },
                 "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogDescription"
               },
               {
                 "type": "null"
@@ -6624,6 +6681,32 @@
           },
           "archived": {
             "type": "boolean"
+          },
+          "description": {
+            "$ref": "#/components/schemas/CatalogDescription"
+          },
+          "recorded_redirects": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Successful redirects in the retained daily analytics."
+          },
+          "last_redirect_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "UTC date of the latest retained successful redirect."
+          },
+          "last_redirect_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0,
+            "description": "Unix seconds when detail for the latest date is available."
           }
         },
         "required": [
@@ -6638,7 +6721,11 @@
           "created_at",
           "selection_key",
           "favorite",
-          "archived"
+          "archived",
+          "description",
+          "recorded_redirects",
+          "last_redirect_date",
+          "last_redirect_at"
         ]
       },
       "CatalogSearchPage": {
@@ -6914,6 +7001,9 @@
           },
           "analytics_enabled": {
             "type": "boolean"
+          },
+          "description": {
+            "$ref": "#/components/schemas/CatalogDescription"
           }
         }
       },

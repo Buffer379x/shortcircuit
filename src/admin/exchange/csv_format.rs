@@ -21,7 +21,12 @@ pub(super) fn parse(input: &[u8]) -> Result<Vec<LinkMetadata>, CsvError> {
         return Err(CsvError);
     }
     let mut reader = csv::Reader::from_reader(input);
-    if !reader.headers().map_err(|_| CsvError)?.iter().eq(HEADER) {
+    let header = reader.headers().map_err(|_| CsvError)?;
+    let field_count = header.len();
+    if !header.iter().take(HEADER.len()).eq(HEADER)
+        || !(field_count == HEADER.len()
+            || (field_count == HEADER.len() + 1 && header.get(HEADER.len()) == Some("description")))
+    {
         return Err(CsvError);
     }
 
@@ -30,7 +35,7 @@ pub(super) fn parse(input: &[u8]) -> Result<Vec<LinkMetadata>, CsvError> {
     for record in reader.records() {
         let record = record.map_err(|_| CsvError)?;
         if items.len() == MAX_ITEMS
-            || record.len() != HEADER.len()
+            || record.len() != field_count
             || record.get(0) != Some(version.as_str())
         {
             return Err(CsvError);
@@ -40,6 +45,7 @@ pub(super) fn parse(input: &[u8]) -> Result<Vec<LinkMetadata>, CsvError> {
             slug: unprotect(&record[2]).to_owned(),
             target: unprotect(&record[3]).to_owned(),
             title: unprotect(&record[4]).to_owned(),
+            description: record.get(8).map(unprotect).unwrap_or_default().to_owned(),
             tags: serde_json::from_str(unprotect(&record[5])).map_err(|_| CsvError)?,
             enabled: parse_bool(&record[6])?,
             analytics_enabled: parse_bool(&record[7])?,
@@ -53,6 +59,11 @@ pub(super) fn parse(input: &[u8]) -> Result<Vec<LinkMetadata>, CsvError> {
 
 pub(super) fn page(rows: Vec<(i64, LinkMetadata)>) -> Result<(Vec<u8>, Option<i64>), CsvError> {
     let mut header = HEADER.join(",").into_bytes();
+    let has_descriptions = rows.iter().any(|(_, item)| !item.description.is_empty());
+    if has_descriptions {
+        header.extend_from_slice(b",description");
+    }
+    let field_count = HEADER.len() + usize::from(has_descriptions);
     header.push(b'\n');
     let mut included_bytes = header.len();
     let mut writer = csv::WriterBuilder::new()
@@ -67,21 +78,19 @@ pub(super) fn page(rows: Vec<(i64, LinkMetadata)>) -> Result<(Vec<u8>, Option<i6
             break;
         }
         let tags = serde_json::to_string(&item.tags).map_err(|_| CsvError)?;
+        let fields = [
+            Cow::Borrowed(version.as_str()),
+            protect(&item.host),
+            protect(&item.slug),
+            protect(&item.target),
+            protect(&item.title),
+            protect(&tags),
+            Cow::Borrowed(if item.enabled { "true" } else { "false" }),
+            Cow::Borrowed(if item.analytics_enabled { "true" } else { "false" }),
+            protect(&item.description),
+        ];
         writer
-            .write_record([
-                version.as_str(),
-                protect(&item.host).as_ref(),
-                protect(&item.slug).as_ref(),
-                protect(&item.target).as_ref(),
-                protect(&item.title).as_ref(),
-                protect(&tags).as_ref(),
-                if item.enabled { "true" } else { "false" },
-                if item.analytics_enabled {
-                    "true"
-                } else {
-                    "false"
-                },
-            ])
+            .write_record(fields.iter().take(field_count).map(|field| field.as_ref()))
             .map_err(|_| CsvError)?;
         writer.flush().map_err(|_| CsvError)?;
 
@@ -140,6 +149,7 @@ mod tests {
             slug: "-Team/Docs".into(),
             target: "https://files.example/A%2fB?x=A+B&x=C#Keep".into(),
             title: title.into(),
+            description: String::new(),
             tags: vec!["Group \"A\"".into(), "@friends".into()],
             enabled: false,
             analytics_enabled: true,
@@ -158,6 +168,18 @@ mod tests {
         assert!(text.contains("\"Reports, \"\"May\"\"\""));
         assert!(text.contains("https://files.example/A%2fB?x=A+B&x=C#Keep"));
         assert!(parse(&bytes).unwrap() == [link("Reports, \"May\"")]);
+    }
+
+    #[test]
+    fn description_is_optional_and_spreadsheet_safe() {
+        let mut item = link("Title");
+        item.description = "=1+2\nSecond line".to_owned();
+        let (bytes, _) = page(vec![(1, item)]).unwrap();
+        let mut reader = csv::Reader::from_reader(bytes.as_slice());
+        assert_eq!(reader.headers().unwrap().get(8), Some("description"));
+        let raw = reader.records().next().unwrap().unwrap();
+        assert_eq!(raw.get(8), Some("'=1+2\nSecond line"));
+        assert_eq!(parse(&bytes).unwrap()[0].description, "=1+2\nSecond line");
     }
 
     #[test]

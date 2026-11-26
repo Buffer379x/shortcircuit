@@ -17,7 +17,7 @@ use crate::{
     auth::{Auth, AuthError},
     domains,
     history::{self, LinkHistory, RestoreError},
-    input::{link_tags, link_title, normalize_host, valid_slug, valid_target},
+    input::{link_description, link_tags, link_title, normalize_host, valid_slug, valid_target},
     protection::{self, PasswordChange, ProtectionDetails, ProtectionDraft, ProtectionError},
     qr::{self, Format},
     redirect::{self, Policy, PolicyDetails, PolicyError},
@@ -121,6 +121,9 @@ struct NewLink {
     slug: Option<String>,
     target: String,
     title: Option<String>,
+    description: Option<String>,
+    enabled: Option<bool>,
+    analytics_enabled: Option<bool>,
     tags: Option<Vec<String>>,
     protection: Option<NewProtection>,
 }
@@ -159,6 +162,9 @@ async fn create_link(
         host,
         slug: String::new(),
         title: title(input.title.unwrap_or_default())?,
+        description: description(input.description.unwrap_or_default())?,
+        enabled: input.enabled.unwrap_or(true),
+        analytics_enabled: input.analytics_enabled.unwrap_or(true),
         tags: tags(input.tags.unwrap_or_default())?,
         target: input.target,
     };
@@ -209,6 +215,12 @@ fn title(value: String) -> Result<String, Problem> {
     link_title(&value)
         .map(str::to_owned)
         .ok_or_else(|| Problem::invalid("invalid_title"))
+}
+
+fn description(value: String) -> Result<String, Problem> {
+    link_description(&value)
+        .map(str::to_owned)
+        .ok_or_else(|| Problem::invalid("invalid_description"))
 }
 
 fn tags(values: Vec<String>) -> Result<Vec<String>, Problem> {
@@ -272,6 +284,7 @@ async fn list_links(
 struct PatchLink {
     target: Option<String>,
     title: Option<String>,
+    description: Option<String>,
     enabled: Option<bool>,
     analytics_enabled: Option<bool>,
     tags: Option<Vec<String>>,
@@ -286,6 +299,7 @@ async fn update_link(
     let input = json_payload(body)?;
     if input.target.is_none()
         && input.title.is_none()
+        && input.description.is_none()
         && input.enabled.is_none()
         && input.analytics_enabled.is_none()
         && input.tags.is_none()
@@ -302,6 +316,7 @@ async fn update_link(
     let update = LinkUpdate {
         target: input.target,
         title: input.title.map(title).transpose()?,
+        description: input.description.map(description).transpose()?,
         enabled: input.enabled,
         analytics_enabled: input.analytics_enabled,
         tags: input.tags.map(tags).transpose()?,
