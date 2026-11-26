@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ApiError } from './api';
   import type { Api, QrStyle, QrTemplate } from './api';
+  import Dialog from './Dialog.svelte';
   import { problemMessage } from './format';
   import type { Messages } from './i18n';
 
@@ -20,6 +21,7 @@
   let busy = $state(false);
   let error = $state<keyof Messages | null>(null);
   let notice = $state<keyof Messages | null>(null);
+  let pendingRemoval = $state.raw<QrTemplate | null>(null);
   const selected = $derived(items?.find((item) => item.id === selectedId));
   const locked = $derived(disabled || busy);
 
@@ -63,9 +65,21 @@
     onapply(selected);
   }
 
+  function beginRemoval() {
+    if (locked || !selected) return;
+    pendingRemoval = selected;
+    error = null;
+    notice = null;
+  }
+
+  function cancelRemoval() {
+    pendingRemoval = null;
+    error = null;
+  }
+
   async function remove() {
-    if (locked || !selected || !items) return;
-    const id = selected.id;
+    if (locked || !pendingRemoval || !items) return;
+    const id = pendingRemoval.id;
     error = null;
     notice = null;
     busy = true;
@@ -81,6 +95,7 @@
     }
     items = items.filter((item) => item.id !== id);
     selectedId = null;
+    pendingRemoval = null;
     notice = 'qrTemplateDeleted';
   }
 </script>
@@ -101,7 +116,7 @@
             </select>
           </label>
           <button class="button" type="button" disabled={locked || !selected} onclick={apply}>{t.qrApplyTemplate}</button>
-          <button class="button" type="button" disabled={locked || !selected} onclick={remove}>{t.qrDeleteTemplate}</button>
+          <button class="button" type="button" disabled={locked || !selected} onclick={beginRemoval}>{t.qrDeleteTemplate}</button>
         </div>
       {/if}
       <form class="row template-row" onsubmit={save}>
@@ -116,10 +131,23 @@
     {:else if error}
       <button class="button" type="button" onclick={load}>{t.retry}</button>
     {/if}
-    {#if error}<p class="notice error" role="alert">{t[error]}</p>{/if}
+    {#if error && !pendingRemoval}<p class="notice error" role="alert">{t[error]}</p>{/if}
     {#if notice}<p class="notice" role="status">{t[notice]}</p>{/if}
   </div>
 </details>
+
+<Dialog {t} title={t.qrDeleteTemplateTitle} open={pendingRemoval !== null} busy={busy} onclose={cancelRemoval}>
+  {#if pendingRemoval}
+    <div class="dialog-body stack">
+      <p class="template-name">{pendingRemoval.name}</p>
+      {#if error}<p class="notice error" role="alert">{t[error]}</p>{/if}
+    </div>
+    <footer class="dialog-foot row">
+      <button class="button" type="button" disabled={busy} onclick={cancelRemoval}>{t.cancel}</button>
+      <button class="button danger" type="button" disabled={busy} onclick={remove}>{t.qrDeleteTemplate}</button>
+    </footer>
+  {/if}
+</Dialog>
 
 <style>
   summary {
@@ -137,5 +165,9 @@
   .template-row .field {
     flex: 1 1 10rem;
     min-inline-size: 0;
+  }
+
+  .template-name {
+    overflow-wrap: anywhere;
   }
 </style>

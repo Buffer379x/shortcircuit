@@ -134,7 +134,15 @@ async function verify() {
     await styledPreview.waitFor({ state: 'visible' });
     assert.equal(await styledPreview.getAttribute('src'), previewUrl.pathname + previewUrl.search);
     assert.equal(await qr.evaluate(dialog => dialog.scrollWidth > dialog.clientWidth), false);
-    await qr.getByRole('button', { name: 'Delete template', exact: true }).click();
+    const removeTemplate = qr.getByRole('button', { name: 'Delete template', exact: true });
+    const confirmTemplate = page.getByRole('dialog', { name: 'Delete this QR template?', exact: true });
+    await removeTemplate.click();
+    await confirmTemplate.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await confirmTemplate.waitFor({ state: 'hidden' });
+    assert.equal(await template.getByRole('option', { name: 'Print style' }).count(), 1);
+    await removeTemplate.click();
+    await confirmTemplate.getByRole('button', { name: 'Delete template', exact: true }).click();
+    await confirmTemplate.waitFor({ state: 'hidden' });
     await qr.getByText('Template deleted.', { exact: true }).waitFor();
     assert.equal(await template.getByRole('option', { name: 'Print style' }).count(), 0);
     assert.equal(await styledPreview.getAttribute('src'), previewUrl.pathname + previewUrl.search);
