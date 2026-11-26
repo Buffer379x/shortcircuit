@@ -4,6 +4,7 @@ use std::{
     io::{self, Read, Seek, SeekFrom},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
@@ -13,6 +14,10 @@ use sqlx::{
 };
 
 use crate::backup::MAX_SNAPSHOT_BYTES;
+mod pending;
+
+pub use pending::apply_pending_restore;
+pub(crate) use pending::{PendingUpload, RestoreStatus, cancel_pending_restore, restore_status};
 const MARKER_NAME: &str = "shortcircuit_backup_metadata";
 const MARKER_SQL: &str = "CREATE TABLE shortcircuit_backup_metadata (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -79,7 +84,21 @@ pub async fn restore_snapshot(
     database: &Path,
     source: &Path,
 ) -> Result<RestoreOutcome, RestoreError> {
-    let lock = data_lock(database, true)?;
+    let lock = Arc::new(data_lock(database, true)?);
+    if pending::has_pending_work(database)? {
+        return Err(invalid_input(
+            "a browser restore is pending; start ShortCircuit to process it or discard it in the admin interface",
+        )
+        .into());
+    }
+    restore_snapshot_locked(database, source, lock).await
+}
+
+async fn restore_snapshot_locked(
+    database: &Path,
+    source: &Path,
+    lock: Arc<File>,
+) -> Result<RestoreOutcome, RestoreError> {
     let directory = fs::canonicalize(parent(database))?;
     let filename = database
         .file_name()
@@ -138,29 +157,10 @@ impl Stage {
         }
         let mut source_file = open_regular(source)?;
         let metadata = source_file.metadata()?;
-        if !(100..=MAX_SNAPSHOT_BYTES).contains(&metadata.len()) {
-            return Err(invalid_data(
-                "snapshot size is outside the supported bounds",
-            ));
-        }
-        let mut header = [0; 100];
-        source_file.read_exact(&mut header)?;
-        if &header[..16] != b"SQLite format 3\0" || header[18..20] != [1, 1] {
-            return Err(invalid_data("snapshot is not a standalone SQLite backup"));
-        }
+        check_snapshot_header(&mut source_file, &metadata)?;
         source_file.seek(SeekFrom::Start(0))?;
 
-        let mut bytes = [0; 16];
-        getrandom::fill(&mut bytes)
-            .map_err(|_| io::Error::other("restore staging name generation failed"))?;
-        let nonce = u128::from_ne_bytes(bytes);
-        let directory = directory.join(format!(".restore-{nonce:032x}"));
-        DirBuilder::new().mode(0o700).create(&directory)?;
-        let stage = Self {
-            incoming: directory.join("incoming.sqlite"),
-            directory,
-            nonce,
-        };
+        let stage = Self::reserve(directory)?;
         copy_private(&mut source_file, &metadata, &stage.incoming)?;
         if sidecars_present(source)? {
             return Err(invalid_data(
@@ -168,6 +168,20 @@ impl Stage {
             ));
         }
         Ok(stage)
+    }
+
+    fn reserve(directory: &Path) -> io::Result<Self> {
+        let mut bytes = [0; 16];
+        getrandom::fill(&mut bytes)
+            .map_err(|_| io::Error::other("restore staging name generation failed"))?;
+        let nonce = u128::from_ne_bytes(bytes);
+        let directory = directory.join(format!(".restore-{nonce:032x}"));
+        DirBuilder::new().mode(0o700).create(&directory)?;
+        Ok(Self {
+            incoming: directory.join("incoming.sqlite"),
+            directory,
+            nonce,
+        })
     }
 
     fn activate(
@@ -184,31 +198,29 @@ impl Stage {
         File::open(&self.incoming)?.sync_all()?;
 
         let preserved = self.directory.join("previous.sqlite");
-        let rollback = match previous {
-            Some(metadata) => {
-                let mut original = open_regular(database)?;
-                if !unchanged(metadata, &original.metadata()?) {
-                    return Err(invalid_data("live database changed during restore"));
-                }
-                original.sync_all()?;
-                fs::hard_link(database, &preserved)?;
-                if !same_file(metadata, &checked_metadata(&original, &preserved)?) {
-                    return Err(invalid_data("live database changed during restore"));
-                }
-
-                let rollback = sibling(database, &format!(".rollback-{:032x}.sqlite", self.nonce))?;
-                if let Some(snapshot) = rollback_snapshot {
-                    fs::hard_link(snapshot, &rollback)?;
-                } else {
-                    let copy = self.directory.join("rollback.sqlite");
-                    copy_private(&mut original, metadata, &copy)?;
-                    fs::hard_link(&copy, &rollback)?;
-                }
-                directory.sync_all()?;
-                Some(rollback)
+        let mut rollback = RollbackFile(None);
+        if let Some(metadata) = previous {
+            let mut original = open_regular(database)?;
+            if !unchanged(metadata, &original.metadata()?) {
+                return Err(invalid_data("live database changed during restore"));
             }
-            None => None,
-        };
+            original.sync_all()?;
+            fs::hard_link(database, &preserved)?;
+            if !same_file(metadata, &checked_metadata(&original, &preserved)?) {
+                return Err(invalid_data("live database changed during restore"));
+            }
+
+            let path = sibling(database, &format!(".rollback-{:032x}.sqlite", self.nonce))?;
+            if let Some(snapshot) = rollback_snapshot {
+                fs::hard_link(snapshot, &path)?;
+            } else {
+                let copy = self.directory.join("rollback.sqlite");
+                copy_private(&mut original, metadata, &copy)?;
+                fs::hard_link(&copy, &path)?;
+            }
+            rollback.0 = Some(path);
+            directory.sync_all()?;
+        }
         staging_directory.sync_all()?;
 
         let live_unchanged = match (previous, regular_metadata(database)?.as_ref()) {
@@ -221,12 +233,13 @@ impl Stage {
         }
         fs::rename(&self.incoming, database)?;
         if let Err(error) = directory.sync_all() {
-            let revert = if rollback.is_some() {
+            let revert = if rollback.0.is_some() {
                 fs::rename(&preserved, database)
             } else {
                 fs::remove_file(database)
             };
             if let Err(revert_error) = revert.and_then(|()| directory.sync_all()) {
+                let rollback = rollback.0.take();
                 return Err(io::Error::other(format!(
                     "restore activation could not be synced ({error}). \
                      Automatic rollback could not be confirmed ({revert_error}). \
@@ -235,8 +248,31 @@ impl Stage {
             }
             return Err(error);
         }
-        Ok(rollback)
+        Ok(rollback.0.take())
     }
+}
+
+struct RollbackFile(Option<PathBuf>);
+
+impl Drop for RollbackFile {
+    fn drop(&mut self) {
+        if let Some(path) = &self.0 {
+            let _ = fs::remove_file(path);
+            let _ = File::open(parent(path)).and_then(|directory| directory.sync_all());
+        }
+    }
+}
+
+fn check_snapshot_header(file: &mut File, metadata: &Metadata) -> io::Result<()> {
+    if !(100..=MAX_SNAPSHOT_BYTES).contains(&metadata.len()) {
+        return Err(invalid_data("snapshot size is outside the supported bounds"));
+    }
+    let mut header = [0; 100];
+    file.read_exact(&mut header)?;
+    if &header[..16] != b"SQLite format 3\0" || header[18..20] != [1, 1] {
+        return Err(invalid_data("snapshot is not a standalone SQLite backup"));
+    }
+    Ok(())
 }
 
 async fn rollback_snapshot(

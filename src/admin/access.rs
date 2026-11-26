@@ -10,7 +10,7 @@ use url::{Host, Url};
 use crate::{
     history::Actor,
     input::{normalize_host, request_host_port},
-    rate_limit::peer,
+    rate_limit::{RateLimit, TrustedProxies},
 };
 
 use super::{AppState, Problem};
@@ -29,6 +29,10 @@ pub struct AdminConfig {
     secure: bool,
     pub(super) local_port: u16,
     pub(super) shortcode_length: usize,
+    proxies: TrustedProxies,
+    pub(super) entry_limit: RateLimit,
+    pub(super) sensitive_limit: RateLimit,
+    pub(super) api_limit: RateLimit,
 }
 
 impl AdminConfig {
@@ -60,7 +64,25 @@ impl AdminConfig {
             secure,
             local_port,
             shortcode_length: DEFAULT_SHORTCODE_LENGTH,
+            proxies: TrustedProxies::default(),
+            entry_limit: RateLimit::PASSWORD_DEFAULT,
+            sensitive_limit: RateLimit::SENSITIVE_DEFAULT,
+            api_limit: RateLimit::ADMIN_DEFAULT,
         })
+    }
+
+    pub fn with_access_controls(
+        mut self,
+        proxies: TrustedProxies,
+        entry_limit: RateLimit,
+        sensitive_limit: RateLimit,
+        api_limit: RateLimit,
+    ) -> Self {
+        self.proxies = proxies;
+        self.entry_limit = entry_limit;
+        self.sensitive_limit = sensitive_limit;
+        self.api_limit = api_limit;
+        self
     }
 
     pub fn with_shortcode_length(mut self, length: usize) -> Result<Self, &'static str> {
@@ -129,7 +151,24 @@ pub(super) async fn entry_access(
     next: Next,
 ) -> Result<Response, Problem> {
     require_origin(request.headers(), &state.config)?;
-    state.attempts.allow(peer(&request)).map_err(rate_error)?;
+    state
+        .attempts
+        .allow(state.config.proxies.client(&request))
+        .map_err(rate_error)?;
+    Ok(next.run(request).await)
+}
+
+pub(super) async fn api_limit(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, Problem> {
+    if request.uri().path().starts_with("/api/v1/") {
+        state
+            .api_attempts
+            .allow(state.config.proxies.client(&request))
+            .map_err(rate_error)?;
+    }
     Ok(next.run(request).await)
 }
 
@@ -145,8 +184,19 @@ pub(super) async fn browser_access(
         session_token(request.headers(), &state.config)?.ok_or_else(Problem::unauthorized)?;
     let session = state.auth.session(&token).await?;
     require_csrf(&request, &state.config, &session.csrf)?;
-    if request.uri().path() == "/api/v1/auth/password" {
-        state.attempts.allow(peer(&request)).map_err(rate_error)?;
+    let path = request.uri().path();
+    if request.method() == Method::POST
+        && (matches!(
+            path,
+            "/api/v1/auth/password"
+                | "/api/v1/system/backup/authorize"
+                | "/api/v1/system/restore/authorize"
+        ) || (path.starts_with("/api/v1/keys/") && path.ends_with("/rotate")))
+    {
+        state
+            .sensitive_attempts
+            .allow(state.config.proxies.client(&request))
+            .map_err(rate_error)?;
     }
     request.extensions_mut().insert(BrowserToken(token));
     request

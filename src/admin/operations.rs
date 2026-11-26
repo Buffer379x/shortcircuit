@@ -1,0 +1,573 @@
+use std::{
+    io,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+use axum::{
+    Extension, Json, Router,
+    body::{Body, Bytes},
+    extract::{Request, State, rejection::JsonRejection},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use futures_util::{StreamExt, stream};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::{OwnedSemaphorePermit, Semaphore},
+    time::{Instant, timeout, timeout_at},
+};
+
+use crate::{
+    auth::AuthError,
+    backup::{MAX_SNAPSHOT_BYTES, StagedSnapshot, verified_snapshot},
+    restore::{PendingUpload, RestoreStatus, cancel_pending_restore, restore_status},
+};
+
+use super::{
+    AppState, Problem,
+    access::BrowserToken,
+    admin_security::{AuditAction, AuditActor, AuditOutcome, audit_event},
+    json_payload,
+};
+
+const AUTHORIZATION_TTL: Duration = Duration::from_secs(120);
+const TRANSFER_TIMEOUT: Duration = Duration::from_secs(1800);
+const SNAPSHOT_MEDIA_TYPE: &str = "application/octet-stream";
+
+#[derive(Clone)]
+pub struct Operations(Arc<OperationsState>);
+
+struct OperationsState {
+    database: PathBuf,
+    scheduled_backups: bool,
+    grants: Mutex<[Option<Grant>; 2]>,
+    transfer: Arc<Semaphore>,
+}
+
+struct Grant {
+    session: [u8; 32],
+    expires_at: Instant,
+}
+
+#[derive(Clone, Copy)]
+enum Action {
+    Backup,
+    Restore,
+}
+
+impl Operations {
+    pub fn new(database: PathBuf, scheduled_backups: bool) -> Self {
+        Self(Arc::new(OperationsState {
+            database,
+            scheduled_backups,
+            grants: Mutex::new([None, None]),
+            transfer: Arc::new(Semaphore::new(1)),
+        }))
+    }
+
+    pub async fn record_startup_restore(pool: &sqlx::SqlitePool, applied: bool) {
+        let outcome = if applied {
+            AuditOutcome::Success
+        } else {
+            AuditOutcome::Failed
+        };
+        if audit_event(pool, AuditAction::RestoreApply, AuditActor::System, None, outcome)
+            .await
+            .is_err()
+        {
+            tracing::warn!("could not record startup restore audit event");
+        }
+    }
+
+    fn grant(&self, action: Action, token: &str) -> Result<(), Problem> {
+        let mut grants = self.0.grants.lock().map_err(|_| Problem::unavailable())?;
+        grants[action as usize] = Some(Grant {
+            session: Sha256::digest(token.as_bytes()).into(),
+            expires_at: Instant::now() + AUTHORIZATION_TTL,
+        });
+        Ok(())
+    }
+
+    fn consume(&self, action: Action, token: &str) -> Result<(), Problem> {
+        let mut grants = self.0.grants.lock().map_err(|_| Problem::unavailable())?;
+        let session: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+        grants[action as usize]
+            .take_if(|grant| {
+                Instant::now() < grant.expires_at && bool::from(grant.session.ct_eq(&session))
+            })
+            .map(|_| ())
+            .ok_or(Problem(
+                StatusCode::FORBIDDEN,
+                "operation_authorization_required",
+            ))
+    }
+
+    fn start_transfer(&self) -> Result<OwnedSemaphorePermit, Problem> {
+        self.0.transfer.clone().try_acquire_owned().map_err(|_| {
+            Problem(StatusCode::CONFLICT, "system_operation_in_progress")
+        })
+    }
+}
+
+pub(super) fn routes(operations: Operations) -> Router<AppState> {
+    Router::new()
+        .route("/api/v1/system", get(diagnostics))
+        .route("/api/v1/system/backup/authorize", post(authorize_backup))
+        .route("/api/v1/system/restore/authorize", post(authorize_restore))
+        .route("/api/v1/system/backup", get(download))
+        .route("/api/v1/system/restore", post(upload).delete(cancel))
+        .layer(Extension(operations))
+}
+
+#[derive(Serialize)]
+struct Diagnostics {
+    version: &'static str,
+    sqlite_version: String,
+    schema_version: i64,
+    database_bytes: i64,
+    scheduled_backups: bool,
+    restore_status: RestoreStatus,
+    max_snapshot_bytes: u64,
+}
+
+async fn diagnostics(
+    State(state): State<AppState>,
+    Extension(operations): Extension<Operations>,
+) -> Result<Json<Diagnostics>, Problem> {
+    let (sqlite_version, schema_version, database_bytes): (String, i64, i64) = sqlx::query_as(
+        "SELECT sqlite_version(),
+             (SELECT max(version) FROM _sqlx_migrations WHERE success = 1),
+             (SELECT page_count FROM pragma_page_count()) * (SELECT page_size FROM pragma_page_size())",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|_| Problem::unavailable())?;
+    Ok(Json(Diagnostics {
+        version: env!("CARGO_PKG_VERSION"),
+        sqlite_version,
+        schema_version,
+        database_bytes,
+        scheduled_backups: operations.0.scheduled_backups,
+        restore_status: restore_status(&operations.0.database),
+        max_snapshot_bytes: MAX_SNAPSHOT_BYTES,
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Reauthentication {
+    password: String,
+}
+
+async fn authorize_backup(
+    State(state): State<AppState>,
+    Extension(operations): Extension<Operations>,
+    Extension(token): Extension<BrowserToken>,
+    input: Result<Json<Reauthentication>, JsonRejection>,
+) -> Result<StatusCode, Problem> {
+    authorize(state, operations, token, json_payload(input)?, Action::Backup).await
+}
+
+async fn authorize_restore(
+    State(state): State<AppState>,
+    Extension(operations): Extension<Operations>,
+    Extension(token): Extension<BrowserToken>,
+    input: Result<Json<Reauthentication>, JsonRejection>,
+) -> Result<StatusCode, Problem> {
+    authorize(state, operations, token, json_payload(input)?, Action::Restore).await
+}
+
+async fn authorize(
+    state: AppState,
+    operations: Operations,
+    token: BrowserToken,
+    input: Reauthentication,
+    action: Action,
+) -> Result<StatusCode, Problem> {
+    let audit_action = match action {
+        Action::Backup => AuditAction::BackupAuthorize,
+        Action::Restore => AuditAction::RestoreAuthorize,
+    };
+    match state.auth.reauthenticate(&token.0, &input.password).await {
+        Ok(()) => {
+            audit_event(&state.pool, audit_action, AuditActor::Admin, None, AuditOutcome::Success)
+                .await
+                .map_err(|_| Problem::unavailable())?;
+            operations.grant(action, &token.0)?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Err(AuthError::Unauthorized | AuthError::Invalid) => {
+            audit(&state, audit_action, AuditOutcome::Rejected).await;
+            Err(Problem(StatusCode::FORBIDDEN, "invalid_current_password"))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn download(
+    State(state): State<AppState>,
+    Extension(operations): Extension<Operations>,
+    Extension(token): Extension<BrowserToken>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, Problem> {
+    if method != Method::GET {
+        return Err(Problem(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed"));
+    }
+    // Native same-origin downloads can stream without holding the full file in browser memory.
+    if headers.get("sec-fetch-site").is_some_and(|site| site != "same-origin") {
+        return Err(Problem(StatusCode::FORBIDDEN, "invalid_origin"));
+    }
+    let permit = operations.start_transfer()?;
+    operations.consume(Action::Backup, &token.0)?;
+    let directory = operations.0.database.with_file_name("backups");
+    let snapshot = match verified_snapshot(&state.pool, &directory).await {
+        Ok(snapshot) => snapshot,
+        Err(_) => {
+            audit(&state, AuditAction::BackupDownload, AuditOutcome::Failed).await;
+            return Err(Problem(StatusCode::SERVICE_UNAVAILABLE, "backup_failed"));
+        }
+    };
+    let (file, length) = snapshot.open().map_err(|_| Problem::unavailable())?;
+    audit_event(
+        &state.pool,
+        AuditAction::BackupDownload,
+        AuditActor::Admin,
+        None,
+        AuditOutcome::Success,
+    )
+    .await
+    .map_err(|_| Problem::unavailable())?;
+
+    let body = Body::from_stream(stream::try_unfold(
+        Download {
+            _snapshot: snapshot,
+            _permit: permit,
+            file: File::from_std(file),
+            remaining: length,
+            deadline: Instant::now() + TRANSFER_TIMEOUT,
+        },
+        download_chunk,
+    ));
+    let mut response = (
+        [
+            (header::CONTENT_TYPE, SNAPSHOT_MEDIA_TYPE),
+            (header::CONTENT_DISPOSITION, "attachment; filename=\"shortcircuit-backup.sqlite\""),
+        ],
+        body,
+    )
+        .into_response();
+    response.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(length));
+    Ok(response)
+}
+
+struct Download {
+    _snapshot: StagedSnapshot,
+    _permit: OwnedSemaphorePermit,
+    file: File,
+    remaining: u64,
+    deadline: Instant,
+}
+
+async fn download_chunk(mut transfer: Download) -> io::Result<Option<(Bytes, Download)>> {
+    if transfer.remaining == 0 {
+        return Ok(None);
+    }
+    let mut bytes = vec![0; transfer.remaining.min(64 * 1024) as usize];
+    timeout_at(transfer.deadline, transfer.file.read_exact(&mut bytes))
+        .await
+        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
+    transfer.remaining -= bytes.len() as u64;
+    Ok(Some((Bytes::from(bytes), transfer)))
+}
+
+#[derive(Serialize)]
+struct StagedRestore {
+    schema_version: i64,
+    created_at: i64,
+}
+
+async fn upload(
+    State(state): State<AppState>,
+    Extension(operations): Extension<Operations>,
+    Extension(token): Extension<BrowserToken>,
+    request: Request,
+) -> Result<(StatusCode, Json<StagedRestore>), Problem> {
+    let permit = operations.start_transfer()?;
+    operations.consume(Action::Restore, &token.0)?;
+    let (parts, body) = request.into_parts();
+    let result = receive_snapshot(&operations, &parts.headers, body).await;
+    let pending = match result {
+        Ok(pending) => pending,
+        Err(error) => {
+            audit(&state, AuditAction::RestoreValidate, error_outcome(&error)).await;
+            return Err(error);
+        }
+    };
+    let (schema_version, created_at) = match pending.validate().await {
+        Ok(details) => details,
+        Err(_) => {
+            audit(&state, AuditAction::RestoreValidate, AuditOutcome::Rejected).await;
+            return Err(Problem::invalid("invalid_snapshot"));
+        }
+    };
+    audit(&state, AuditAction::RestoreValidate, AuditOutcome::Success).await;
+    // Revoking the session during a slow upload prevents publishing the pending restore.
+    state.auth.session(&token.0).await?;
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        pending.publish()
+    })
+    .await
+    .map_err(|_| Problem::unavailable())?;
+    if let Err(error) = result {
+        let problem = stage_problem(error);
+        audit(&state, AuditAction::RestoreStage, error_outcome(&problem)).await;
+        return Err(problem);
+    }
+    audit(&state, AuditAction::RestoreStage, AuditOutcome::Success).await;
+    Ok((StatusCode::CREATED, Json(StagedRestore { schema_version, created_at })))
+}
+
+async fn receive_snapshot(
+    operations: &Operations,
+    headers: &HeaderMap,
+    body: Body,
+) -> Result<PendingUpload, Problem> {
+    if headers.get(header::CONTENT_TYPE).is_none_or(|value| value != SNAPSHOT_MEDIA_TYPE)
+        || headers.contains_key(header::CONTENT_ENCODING)
+    {
+        return Err(Problem(StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported_snapshot_media_type"));
+    }
+    if headers.get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|size| size > MAX_SNAPSHOT_BYTES)
+    {
+        return Err(snapshot_too_large());
+    }
+    let database = operations.0.database.clone();
+    let pending = tokio::task::spawn_blocking(move || PendingUpload::reserve(&database))
+        .await
+        .map_err(|_| Problem::unavailable())?
+        .map_err(stage_problem)?;
+    let mut file = File::options().write(true).open(pending.path()).await
+        .map_err(|_| Problem::unavailable())?;
+    timeout(TRANSFER_TIMEOUT, write_snapshot(&mut file, body))
+        .await
+        .map_err(|_| Problem(StatusCode::REQUEST_TIMEOUT, "snapshot_upload_timed_out"))??;
+    Ok(pending)
+}
+
+async fn write_snapshot(file: &mut File, body: Body) -> Result<(), Problem> {
+    let mut size = 0_u64;
+    let mut stream = body.into_data_stream();
+    while let Some(item) = stream.next().await {
+        let bytes = item.map_err(|_| Problem(StatusCode::BAD_REQUEST, "invalid_snapshot_upload"))?;
+        size = size.saturating_add(bytes.len() as u64);
+        if size > MAX_SNAPSHOT_BYTES {
+            return Err(snapshot_too_large());
+        }
+        file.write_all(&bytes).await.map_err(|_| Problem::unavailable())?;
+    }
+    file.flush().await.map_err(|_| Problem::unavailable())
+}
+
+async fn cancel(
+    State(state): State<AppState>,
+    Extension(operations): Extension<Operations>,
+    Extension(token): Extension<BrowserToken>,
+) -> Result<StatusCode, Problem> {
+    let permit = operations.start_transfer()?;
+    operations.consume(Action::Restore, &token.0)?;
+    let database = operations.0.database.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        cancel_pending_restore(&database)
+    })
+    .await
+    .map_err(|_| Problem::unavailable())?;
+    if let Err(error) = result {
+        let problem = if error.kind() == io::ErrorKind::NotFound {
+            Problem(StatusCode::NOT_FOUND, "no_pending_restore")
+        } else {
+            Problem::unavailable()
+        };
+        audit(&state, AuditAction::RestoreCancel, error_outcome(&problem)).await;
+        return Err(problem);
+    }
+    audit(&state, AuditAction::RestoreCancel, AuditOutcome::Success).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn stage_problem(error: io::Error) -> Problem {
+    if error.kind() == io::ErrorKind::AlreadyExists {
+        Problem(StatusCode::CONFLICT, "restore_already_pending")
+    } else {
+        Problem::unavailable()
+    }
+}
+
+fn snapshot_too_large() -> Problem {
+    Problem(StatusCode::PAYLOAD_TOO_LARGE, "snapshot_too_large")
+}
+
+fn error_outcome(error: &Problem) -> AuditOutcome {
+    if error.0.is_client_error() {
+        AuditOutcome::Rejected
+    } else {
+        AuditOutcome::Failed
+    }
+}
+
+async fn audit(state: &AppState, action: AuditAction, outcome: AuditOutcome) {
+    if audit_event(&state.pool, action, AuditActor::Admin, None, outcome).await.is_err() {
+        tracing::warn!("could not record system operation audit event");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::to_bytes,
+        http::Request,
+    };
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
+
+    use crate::{AdminConfig, Auth, BootstrapKind, PublicHosts, open_database};
+
+    use super::*;
+
+    #[test]
+    fn authorization_is_one_use_and_bound_to_the_browser_session_and_action() {
+        let operations = Operations::new(PathBuf::from("unused.sqlite"), false);
+        assert!(operations.grant(Action::Backup, "synthetic-session-a").is_ok());
+        assert!(operations.consume(Action::Backup, "synthetic-session-b").is_err());
+        assert!(operations.consume(Action::Restore, "synthetic-session-a").is_err());
+        assert!(operations.consume(Action::Backup, "synthetic-session-a").is_ok());
+        assert!(operations.consume(Action::Backup, "synthetic-session-a").is_err());
+    }
+
+    #[test]
+    fn expired_grants_cannot_be_consumed() {
+        let operations = Operations::new(PathBuf::from("unused.sqlite"), false);
+        operations.0.grants.lock().unwrap()[Action::Backup as usize] = Some(Grant {
+            session: Sha256::digest("synthetic-session").into(),
+            expires_at: Instant::now(),
+        });
+        assert!(operations.consume(Action::Backup, "synthetic-session").is_err());
+    }
+
+    #[tokio::test]
+    async fn browser_backup_round_trips_through_checked_staging_and_discard() {
+        let work = tempfile::tempdir().unwrap();
+        let database = work.path().join("live.sqlite");
+        let pool = open_database(&database).await.unwrap();
+        let auth = Auth::new(pool.clone());
+        let setup = auth.issue_bootstrap(BootstrapKind::Setup).await.unwrap();
+        let password = "synthetic-test-password";
+        let account = auth.setup(&setup, "owner", password).await.unwrap();
+        let cookie = format!("__Host-shortcircuit_session={}", account.token);
+        let router = super::super::build_admin_router(
+            pool,
+            PublicHosts::parse("go.example").unwrap(),
+            AdminConfig::new("https://admin.example", 8080).unwrap(),
+            None,
+            Some(Operations::new(database.clone(), false)),
+            None,
+        );
+
+        let request = |method: Method, path: &str| {
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header(header::HOST, "admin.example")
+                .header(header::ORIGIN, "https://admin.example")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &account.session.csrf)
+        };
+        let send = |request| router.clone().oneshot(request);
+        let authorizing = |path| {
+            request(Method::POST, path)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({"password": password}).to_string()))
+                .unwrap()
+        };
+
+        let backup_path = "/api/v1/system/backup";
+        let restore_path = "/api/v1/system/restore";
+        let before = send(request(Method::GET, backup_path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(before.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            send(authorizing("/api/v1/system/backup/authorize"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let head = send(request(Method::HEAD, backup_path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(head.status(), StatusCode::METHOD_NOT_ALLOWED);
+        let response = send(request(Method::GET, backup_path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(response.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().contains("attachment"));
+        let snapshot = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert!(snapshot.starts_with(b"SQLite format 3\0"));
+        assert_eq!(fs_entries(&database.with_file_name("backups")), 0);
+
+        assert_eq!(
+            send(authorizing("/api/v1/system/restore/authorize"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let uploaded = send(request(Method::POST, restore_path)
+            .header(header::CONTENT_TYPE, SNAPSHOT_MEDIA_TYPE)
+            .body(Body::from(snapshot))
+            .unwrap())
+            .await
+            .unwrap();
+        assert_eq!(uploaded.status(), StatusCode::CREATED);
+        assert_eq!(restore_status(&database), RestoreStatus::PendingRestart);
+        let diagnostics = send(request(Method::GET, "/api/v1/system").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(diagnostics.status(), StatusCode::OK);
+        let contents = to_bytes(diagnostics.into_body(), 4096).await.unwrap();
+        let report: Value = serde_json::from_slice(&contents).unwrap();
+        assert_eq!(report["restore_status"], "pending_restart");
+        assert!(!String::from_utf8_lossy(&contents).contains("live.sqlite"));
+
+        assert_eq!(
+            send(authorizing("/api/v1/system/restore/authorize"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let discarded = send(request(Method::DELETE, restore_path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(discarded.status(), StatusCode::NO_CONTENT);
+        assert_eq!(restore_status(&database), RestoreStatus::None);
+    }
+
+    fn fs_entries(path: &std::path::Path) -> usize {
+        std::fs::read_dir(path).unwrap().count()
+    }
+}

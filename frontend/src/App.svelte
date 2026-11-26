@@ -14,16 +14,22 @@
   import Keys from './Keys.svelte';
   import Links from './Links.svelte';
   import Preferences from './Preferences.svelte';
+  import Monitoring from './Monitoring.svelte';
+  import Operations from './Operations.svelte';
+  import Audit from './Audit.svelte';
 
-  type Page = 'links' | 'exchange' | 'analytics' | 'domains' | 'tags' | 'apiKeys' | 'account';
+  type Page = 'links' | 'exchange' | 'analytics' | 'domains' | 'tags' | 'apiKeys' | 'account' | 'operations' | 'monitoring' | 'auditLog';
   const pages = [
     { id: 'links', icon: 'link' },
     { id: 'analytics', icon: 'analytics' },
+    { id: 'monitoring', icon: 'rule' },
     { id: 'domains', icon: 'globe' },
     { id: 'tags', icon: 'tag' },
     { id: 'exchange', icon: 'exchange' },
     { id: 'apiKeys', icon: 'key' },
     { id: 'account', icon: 'account' },
+    { id: 'operations', icon: 'archive' },
+    { id: 'auditLog', icon: 'history' },
   ] as const;
 
   let language = $state<Language>('en');
@@ -50,7 +56,7 @@
     } catch (error) {
       if (activeUser && activeUser === user && error instanceof ApiError && error.status === 401) {
         if (path === '/auth/password') void refreshSession();
-        else resetSession('sessionExpired');
+        else if (error.code !== 'invalid_credentials') resetSession('sessionExpired');
       }
       throw error;
     }
@@ -192,6 +198,12 @@
         {#if signOutError}<p class="notice error page-notice" role="alert">{t[signOutError]}</p>{/if}
         {#if page === 'account'}
           <Account {t} {user} {api} onPasswordChanged={passwordChanged} />
+        {:else if page === 'operations'}
+          <Operations {language} {api} />
+        {:else if page === 'auditLog'}
+          <Audit {t} {language} {api} />
+        {:else if page === 'monitoring'}
+          <Monitoring {t} {language} {api} {domains} />
         {:else if page === 'exchange'}
           <Exchange {t} {api} {language} />
         {:else if page === 'analytics'}

@@ -1,16 +1,22 @@
+use std::collections::BTreeMap;
+
 use axum::{
     Json, Router,
     extract::{
         Path, Query, State,
         rejection::{JsonRejection, PathRejection, QueryRejection},
     },
-    http::StatusCode,
+    http::{StatusCode, header},
+    response::IntoResponse,
     routing::{delete, get},
 };
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 
-use crate::analytics::{Analytics, Settings};
+use crate::{
+    analytics::{Analytics, Settings},
+    input::normalize_host,
+};
 
 use super::{Problem, json_payload, resource_id};
 
@@ -23,6 +29,7 @@ struct MetricsState {
 pub(super) fn routes(pool: SqlitePool, analytics: Analytics) -> Router {
     Router::new()
         .route("/api/v1/analytics/summary", get(summary))
+        .route("/api/v1/analytics/export", get(export))
         .route(
             "/api/v1/analytics/settings",
             get(settings).patch(save_settings),
@@ -33,10 +40,13 @@ pub(super) fn routes(pool: SqlitePool, analytics: Analytics) -> Router {
         .with_state(MetricsState { analytics, pool })
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Period {
     days: Option<u16>,
+    start: Option<String>,
+    end: Option<String>,
+    host: Option<String>,
 }
 
 #[derive(Serialize, sqlx::FromRow, Default)]
@@ -64,15 +74,54 @@ struct RankedLink {
     total: i64,
 }
 
+#[derive(Serialize, sqlx::FromRow)]
+struct RankedDomain {
+    host: String,
+    total: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct RankedTag {
+    tag: String,
+    total: i64,
+}
+
+#[derive(Serialize)]
+struct RankedCategory {
+    category: String,
+    total: i64,
+}
+
+#[derive(Serialize)]
+struct Breakdowns {
+    browser: Vec<RankedCategory>,
+    os: Vec<RankedCategory>,
+    device: Vec<RankedCategory>,
+    traffic_source: Vec<RankedCategory>,
+}
+
 #[derive(Serialize)]
 struct Summary {
     days: u16,
     today: i64,
+    start_day: i64,
+    end_day: i64,
+    host: Option<String>,
     totals: Totals,
     previous_redirects: i64,
     daily: Vec<Day>,
     top_links: Vec<RankedLink>,
+    top_domains: Vec<RankedDomain>,
+    top_tags: Vec<RankedTag>,
+    breakdowns: Breakdowns,
     dropped: u64,
+}
+
+#[derive(Serialize)]
+struct SummaryExport {
+    version: u8,
+    granularity: &'static str,
+    report: Summary,
 }
 
 async fn summary(
@@ -80,22 +129,83 @@ async fn summary(
     period: Result<Query<Period>, QueryRejection>,
 ) -> Result<Json<Summary>, Problem> {
     let Query(period) = period.map_err(|error| Problem(error.status(), "invalid_query"))?;
-    let days = period.days.unwrap_or(30);
-    if !(1..=365).contains(&days) {
-        return Err(Problem::invalid("invalid_period"));
-    }
-    read_summary(&state.pool, days, state.analytics.dropped())
+    read_summary(&state.pool, period, state.analytics.dropped())
         .await
         .map(Json)
-        .map_err(|_| Problem::unavailable())
 }
 
-async fn read_summary(pool: &SqlitePool, days: u16, dropped: u64) -> Result<Summary, sqlx::Error> {
-    let mut transaction = pool.begin().await?;
-    let today: i64 = sqlx::query_scalar("SELECT unixepoch() / 86400")
-        .fetch_one(&mut *transaction)
-        .await?;
-    let first = today - i64::from(days) + 1;
+async fn export(
+    State(state): State<MetricsState>,
+    period: Result<Query<Period>, QueryRejection>,
+) -> Result<impl IntoResponse, Problem> {
+    let Query(period) = period.map_err(|error| Problem(error.status(), "invalid_query"))?;
+    let report = read_summary(&state.pool, period, state.analytics.dropped()).await?;
+    Ok((
+        [(
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"shortcircuit-analytics-v1.json\"",
+        )],
+        Json(SummaryExport {
+            version: 1,
+            granularity: "utc_day",
+            report,
+        }),
+    ))
+}
+
+async fn read_summary(pool: &SqlitePool, period: Period, dropped: u64) -> Result<Summary, Problem> {
+    let host = period
+        .host
+        .as_deref()
+        .map(|host| normalize_host(host).ok_or_else(|| Problem::invalid("invalid_host")))
+        .transpose()?;
+
+    let mut transaction = pool.begin().await.map_err(|_| Problem::unavailable())?;
+    // The modifier normalizes invalid calendar dates, so only canonical UTC dates compare equal.
+    let (today, start, end): (i64, Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT unixepoch() / 86400,
+                CASE WHEN date(?1, '+0 days') = ?1 THEN unixepoch(?1) / 86400 END,
+                CASE WHEN date(?2, '+0 days') = ?2 THEN unixepoch(?2) / 86400 END",
+    )
+    .bind(period.start.as_deref())
+    .bind(period.end.as_deref())
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|_| Problem::unavailable())?;
+
+    let invalid_period = || Problem::invalid("invalid_period");
+    let (first, last) = match (period.days, period.start, period.end) {
+        (days, None, None) => (today - i64::from(days.unwrap_or(30)) + 1, today),
+        (None, Some(_), Some(_)) => (
+            start.ok_or_else(invalid_period)?,
+            end.ok_or_else(invalid_period)?,
+        ),
+        _ => return Err(invalid_period()),
+    };
+    let length = last - first + 1;
+    if first < 0 || last > today || !(1..=365).contains(&length) {
+        return Err(invalid_period());
+    }
+
+    let report = query_summary(&mut transaction, first, last, today, host, dropped)
+        .await
+        .map_err(|_| Problem::unavailable())?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| Problem::unavailable())?;
+    Ok(report)
+}
+
+async fn query_summary(
+    connection: &mut SqliteConnection,
+    first: i64,
+    last: i64,
+    today: i64,
+    host: Option<String>,
+    dropped: u64,
+) -> Result<Summary, sqlx::Error> {
+    let days = (last - first + 1) as u16;
     let totals = sqlx::query_as(
         "SELECT COALESCE(SUM(total) FILTER (WHERE kind = 'redirect'), 0) AS redirect,
                 COALESCE(SUM(total) FILTER (WHERE kind = 'missing'), 0) AS missing,
@@ -103,58 +213,124 @@ async fn read_summary(pool: &SqlitePool, days: u16, dropped: u64) -> Result<Summ
                 COALESCE(SUM(total) FILTER (WHERE kind = 'redirect' AND visit_class = 'human'), 0) AS human,
                 COALESCE(SUM(total) FILTER (WHERE kind = 'redirect' AND visit_class = 'bot'), 0) AS bot,
                 COALESCE(SUM(total) FILTER (WHERE kind = 'redirect' AND visit_class = 'unknown'), 0) AS unknown
-         FROM analytics_daily WHERE day BETWEEN ? AND ?",
+         FROM analytics_daily WHERE day BETWEEN ?1 AND ?2 AND (?3 IS NULL OR host = ?3)",
     )
     .bind(first)
-    .bind(today)
-    .fetch_one(&mut *transaction)
+    .bind(last)
+    .bind(host.as_deref())
+    .fetch_one(&mut *connection)
     .await?;
     let previous_redirects = sqlx::query_scalar(
         "SELECT COALESCE(SUM(total), 0) FROM analytics_daily
-         WHERE day >= ? AND day < ? AND kind = 'redirect'",
+         WHERE day >= ?1 AND day < ?2 AND kind = 'redirect' AND (?3 IS NULL OR host = ?3)",
     )
     .bind(first - i64::from(days))
     .bind(first)
-    .fetch_one(&mut *transaction)
+    .bind(host.as_deref())
+    .fetch_one(&mut *connection)
     .await?;
     let daily = sqlx::query_as(
         "WITH RECURSIVE days(day) AS (
-            SELECT ? UNION ALL SELECT day + 1 FROM days WHERE day < ?
+            SELECT ?1 UNION ALL SELECT day + 1 FROM days WHERE day < ?2
          ), counts AS (
             SELECT day, SUM(total) AS total FROM analytics_daily
-            WHERE day BETWEEN ? AND ? AND kind = 'redirect' GROUP BY day
+            WHERE day BETWEEN ?1 AND ?2 AND kind = 'redirect' AND (?3 IS NULL OR host = ?3)
+            GROUP BY day
          )
          SELECT days.day, COALESCE(counts.total, 0) AS redirect
          FROM days LEFT JOIN counts USING (day) ORDER BY days.day",
     )
     .bind(first)
-    .bind(today)
-    .bind(first)
-    .bind(today)
-    .fetch_all(&mut *transaction)
+    .bind(last)
+    .bind(host.as_deref())
+    .fetch_all(&mut *connection)
     .await?;
     let top_links = sqlx::query_as(
         "SELECT links.id, links.host, links.slug, links.title, counts.total
          FROM (
             SELECT link_id, SUM(total) AS total FROM analytics_daily
-            WHERE day BETWEEN ? AND ? AND kind = 'redirect' AND link_id > 0
+            WHERE day BETWEEN ?1 AND ?2 AND kind = 'redirect' AND link_id > 0
+              AND (?3 IS NULL OR host = ?3)
             GROUP BY link_id ORDER BY total DESC, link_id ASC LIMIT 10
          ) AS counts
          JOIN links ON links.id = counts.link_id
          ORDER BY counts.total DESC, links.id ASC",
     )
     .bind(first)
-    .bind(today)
-    .fetch_all(&mut *transaction)
+    .bind(last)
+    .bind(host.as_deref())
+    .fetch_all(&mut *connection)
     .await?;
-    transaction.commit().await?;
+    let top_domains = sqlx::query_as(
+        "SELECT host, SUM(total) AS total FROM analytics_daily
+         WHERE day BETWEEN ?1 AND ?2 AND kind = 'redirect' AND (?3 IS NULL OR host = ?3)
+         GROUP BY host ORDER BY total DESC, host ASC LIMIT 10",
+    )
+    .bind(first)
+    .bind(last)
+    .bind(host.as_deref())
+    .fetch_all(&mut *connection)
+    .await?;
+    let top_tags = sqlx::query_as(
+        "WITH counts AS (
+            SELECT link_id, SUM(total) AS total FROM analytics_daily
+            WHERE day BETWEEN ?1 AND ?2 AND kind = 'redirect' AND link_id > 0
+              AND (?3 IS NULL OR host = ?3)
+            GROUP BY link_id
+         )
+         SELECT link_tags.tag, SUM(counts.total) AS total
+         FROM counts JOIN link_tags USING (link_id)
+         GROUP BY link_tags.tag ORDER BY total DESC, link_tags.tag ASC LIMIT 10",
+    )
+    .bind(first)
+    .bind(last)
+    .bind(host.as_deref())
+    .fetch_all(&mut *connection)
+    .await?;
+    let dimension_rows = sqlx::query_as::<_, (String, String, String, String, i64)>(
+        "SELECT browser, os, device, traffic_source, SUM(total) AS total FROM analytics_daily
+         WHERE day BETWEEN ?1 AND ?2 AND kind = 'redirect' AND (?3 IS NULL OR host = ?3)
+         GROUP BY browser, os, device, traffic_source",
+    )
+    .bind(first)
+    .bind(last)
+    .bind(host.as_deref())
+    .fetch_all(&mut *connection)
+    .await?;
+
+    let mut groups: [BTreeMap<String, i64>; 4] = std::array::from_fn(|_| BTreeMap::new());
+    for (browser, os, device, traffic_source, total) in dimension_rows {
+        for (group, category) in groups.iter_mut().zip([browser, os, device, traffic_source]) {
+            *group.entry(category).or_insert(0) += total;
+        }
+    }
+    let [browser, os, device, traffic_source] = groups.map(|group| {
+        let mut ranking: Vec<_> = group
+            .into_iter()
+            .map(|(category, total)| RankedCategory { category, total })
+            .collect();
+        ranking.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.category.cmp(&b.category)));
+        ranking
+    });
+
     Ok(Summary {
         days,
         today,
+        start_day: first,
+        end_day: last,
+        host,
         totals,
         previous_redirects,
         daily,
         top_links,
+        top_domains,
+        top_tags,
+        breakdowns: Breakdowns {
+            browser,
+            os,
+            device,
+            traffic_source,
+        },
         dropped,
     })
 }
@@ -206,6 +382,10 @@ struct VisitEvent {
     visit_class: String,
     source: String,
     referrer: Option<String>,
+    browser: String,
+    os: String,
+    device: String,
+    traffic_source: String,
 }
 
 #[derive(Serialize)]
@@ -224,7 +404,8 @@ async fn list_events(
         return Err(Problem::invalid("invalid_event_cursor"));
     }
     let mut items = sqlx::query_as::<_, VisitEvent>(
-        "SELECT id, occurred_at, link_id, host, kind, visit_class, source, referrer
+        "SELECT id, occurred_at, link_id, host, kind, visit_class, source, referrer,
+                browser, os, device, traffic_source
          FROM analytics_events WHERE id < ? ORDER BY id DESC LIMIT 101",
     )
     .bind(before)
@@ -251,6 +432,10 @@ struct Bucket {
     host: String,
     kind: String,
     visit_class: String,
+    browser: String,
+    os: String,
+    device: String,
+    traffic_source: String,
 }
 
 async fn delete_event_row(pool: &SqlitePool, id: i64) -> Result<bool, sqlx::Error> {
@@ -258,7 +443,7 @@ async fn delete_event_row(pool: &SqlitePool, id: i64) -> Result<bool, sqlx::Erro
     let rows = sqlx::query_as::<_, Bucket>(
         "DELETE FROM analytics_events WHERE id = ?
          RETURNING occurred_at / 86400 AS day, COALESCE(link_id, 0) AS link_id,
-                   host, kind, visit_class",
+                   host, kind, visit_class, browser, os, device, traffic_source",
     )
     .bind(id)
     .fetch_all(&mut *transaction)
@@ -268,26 +453,36 @@ async fn delete_event_row(pool: &SqlitePool, id: i64) -> Result<bool, sqlx::Erro
     };
     let deleted = sqlx::query(
         "DELETE FROM analytics_daily
-         WHERE day = ? AND link_id = ? AND host = ? AND kind = ? AND visit_class = ? AND total = 1",
+         WHERE day = ? AND link_id = ? AND host = ? AND kind = ? AND visit_class = ?
+           AND browser = ? AND os = ? AND device = ? AND traffic_source = ? AND total = 1",
     )
     .bind(bucket.day)
     .bind(bucket.link_id)
     .bind(&bucket.host)
     .bind(&bucket.kind)
     .bind(&bucket.visit_class)
+    .bind(&bucket.browser)
+    .bind(&bucket.os)
+    .bind(&bucket.device)
+    .bind(&bucket.traffic_source)
     .execute(&mut *transaction)
     .await?
     .rows_affected();
     if deleted == 0 {
         sqlx::query(
             "UPDATE analytics_daily SET total = total - 1
-             WHERE day = ? AND link_id = ? AND host = ? AND kind = ? AND visit_class = ? AND total > 1",
+             WHERE day = ? AND link_id = ? AND host = ? AND kind = ? AND visit_class = ?
+               AND browser = ? AND os = ? AND device = ? AND traffic_source = ? AND total > 1",
         )
         .bind(bucket.day)
         .bind(bucket.link_id)
         .bind(&bucket.host)
         .bind(&bucket.kind)
         .bind(&bucket.visit_class)
+        .bind(&bucket.browser)
+        .bind(&bucket.os)
+        .bind(&bucket.device)
+        .bind(&bucket.traffic_source)
         .execute(&mut *transaction)
         .await?;
     }
@@ -336,7 +531,11 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let summary = read_summary(&pool, 7, 2).await.unwrap();
+        let week = || Period {
+            days: Some(7),
+            ..Period::default()
+        };
+        let summary = read_summary(&pool, week(), 2).await.ok().unwrap();
         assert_eq!(summary.totals.redirect, 6);
         assert_eq!(summary.totals.human, 5);
         assert_eq!(summary.totals.bot, 1);
@@ -359,7 +558,7 @@ mod tests {
         .unwrap();
         assert!(delete_event_row(&pool, event).await.unwrap());
         assert!(!delete_event_row(&pool, event).await.unwrap());
-        let updated = read_summary(&pool, 7, 2).await.unwrap();
+        let updated = read_summary(&pool, week(), 2).await.ok().unwrap();
         assert_eq!(updated.totals.redirect, 5);
         assert_eq!(updated.totals.human, 4);
     }

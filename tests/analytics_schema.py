@@ -141,6 +141,56 @@ class AnalyticsSchemaTests(unittest.TestCase):
         self.db.execute(insert, ("[::1]",))
         self.db.execute(insert, (None,))
 
+    def test_dimensions_upgrade_preserves_history_and_its_link_deletion(self):
+        self.record(7, "go.example", TODAY, increment=8)
+        self.record(None, "s.example", TODAY, kind="missing")
+        self.db.executescript((MIGRATIONS / "0016_analytics_dimensions.sql").read_text())
+        self.assertEqual(
+            self.db.execute(
+                "SELECT source, browser, os, device, traffic_source FROM analytics_events "
+                "WHERE link_id = 7"
+            ).fetchone(),
+            ("browser", "unknown", "unknown", "unknown", "unknown"),
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT total, browser, os, device, traffic_source FROM analytics_daily "
+                "WHERE link_id = 7"
+            ).fetchone(),
+            (8, "unknown", "unknown", "unknown", "unknown"),
+        )
+        for category, total in [("referral", 3), ("direct", 6)]:
+            self.db.execute(
+                """INSERT INTO analytics_daily
+                       (day, host, link_id, kind, visit_class, total,
+                        browser, os, device, traffic_source)
+                   VALUES (?, 'go.example', 7, 'redirect', 'human', ?,
+                           'chrome', 'android', 'mobile', ?)""",
+                (TODAY, total, category),
+            )
+        self.assertEqual(
+            self.db.execute("SELECT SUM(total) FROM analytics_daily WHERE link_id = 7").fetchone(),
+            (17,),
+        )
+        self.db.execute("DELETE FROM links WHERE id = 7")
+        self.assertEqual(self.db.execute("SELECT link_id FROM analytics_daily").fetchall(), [(0,)])
+        self.assertEqual(self.db.execute("SELECT link_id FROM analytics_events").fetchall(), [(None,)])
+        self.assertEqual(self.db.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_dimensions_accept_only_coarse_categories_in_both_tables(self):
+        self.db.executescript((MIGRATIONS / "0016_analytics_dimensions.sql").read_text())
+        for field, value in [("browser", "Mozilla/5.0"), ("os", "Android 14"),
+                             ("device", "Pixel 8"), ("traffic_source", "192.0.2.16")]:
+            for table, columns, row in [
+                ("analytics_events", "occurred_at, host, kind, visit_class, source",
+                 "1000, 'go.example', 'missing', 'unknown', 'unknown'"),
+                ("analytics_daily", "day, host, kind, visit_class, link_id, total",
+                 "1, 'go.example', 'missing', 'unknown', 0, 1"),
+            ]:
+                with self.subTest(table=table, field=field), self.assertRaises(sqlite3.IntegrityError):
+                    self.db.execute(f"INSERT INTO {table} ({columns}, {field}) VALUES ({row}, ?)",
+                                    (value,))
+
 
     def test_retention_and_filtered_aggregates_use_range_indexes(self):
         queries = [

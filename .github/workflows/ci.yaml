@@ -38,6 +38,21 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo fmt --all -- --check
         if: always()
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.22.3
+      - run: rustup toolchain install 1.100.0 --profile minimal
+      - run: cargo install cargo-deny --version 0.22.1 --locked
+      - run: cargo deny --locked check advisories licenses sources
+      - run: npm audit --omit=dev --audit-level=high --prefix frontend
+        if: always()
   container:
     needs: rust
     runs-on: ubuntu-latest
@@ -67,6 +82,7 @@ jobs:
           printf '::add-mask::%s\n' "$setup_token"
           SHORTCIRCUIT_SETUP_TOKEN="$setup_token" SHORTCIRCUIT_PLAYWRIGHT="$browser_deps/node_modules/playwright" node tests/admin-browser.cjs
       - name: Exercise backup and offline restore
+        id: smoke
         run: |
           snapshot=$(docker compose exec -T shortcircuit shortcircuit backup)
           case "$snapshot" in /data/backups/shortcircuit-*.sqlite) ;; *) exit 1 ;; esac
@@ -77,7 +93,20 @@ jobs:
           docker compose run --rm --no-deps -T shortcircuit restore "$snapshot" --confirm
           docker compose up --detach --wait --wait-timeout 90
           test "$(curl --silent --output /dev/null --write-out '%{redirect_url}' http://localhost:8080/backup-check)" = "https://example.test/backup-check"
+      - name: Record the local image size
+        run: docker image inspect "$(docker compose config --images)" --format 'Image bytes {{.Size}}'
+      - name: Scan the candidate container
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: shortcircuit:0.6.0-preview.2
+          version: v0.76.2
+          scanners: vuln
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
       - name: Measure loopback redirect latency
+        if: ${{ !cancelled() && steps.smoke.outcome == 'success' }}
         run: |
           uname -m
           getconf _NPROCESSORS_ONLN

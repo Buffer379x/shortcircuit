@@ -6,9 +6,11 @@ use argon2::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use sqlx::{SqliteConnection, SqlitePool};
+use sqlx::{Sqlite, SqliteConnection, SqlitePool};
 use subtle::ConstantTimeEq;
 use tokio::{sync::Semaphore, task};
+
+use crate::admin::admin_security::{AuditAction, AuditActor, AuditOutcome, record_audit};
 
 pub const BOOTSTRAP_LIFETIME_SECONDS: i64 = 15 * 60;
 const SESSION_IDLE_SECONDS: i64 = 30 * 60;
@@ -125,6 +127,12 @@ impl KeyAccess {
 }
 
 type KeyRow = (i64, String, i64, Option<String>, Option<i64>, i64);
+type RotationSource = (String, i64, Option<String>, Option<i64>, i64);
+
+struct VerifiedSession {
+    digest: [u8; TOKEN_BYTES],
+    password_hash: String,
+}
 
 impl From<KeyRow> for KeyMeta {
     fn from((id, name, scopes, host, expires_at, created_at): KeyRow) -> Self {
@@ -162,6 +170,7 @@ impl Auth {
     pub async fn issue_bootstrap(&self, kind: BootstrapKind) -> Result<String, AuthError> {
         let token = new_token()?;
         let digest = token_hash(kind.domain(), &token);
+        let mut transaction = self.pool.begin().await?;
         let result = sqlx::query(
             "INSERT INTO admin_bootstrap (kind, token_hash, expires_at)
              SELECT ?, ?, unixepoch() + ?
@@ -173,11 +182,24 @@ impl Auth {
         .bind(digest.as_slice())
         .bind(BOOTSTRAP_LIFETIME_SECONDS)
         .bind(matches!(kind, BootstrapKind::Recovery))
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
         if result.rows_affected() != 1 {
             return Err(AuthError::Conflict);
         }
+        let action = match kind {
+            BootstrapKind::Setup => AuditAction::SetupTokenIssued,
+            BootstrapKind::Recovery => AuditAction::RecoveryTokenIssued,
+        };
+        record_audit(
+            &mut transaction,
+            action,
+            AuditActor::System,
+            None,
+            AuditOutcome::Success,
+        )
+        .await?;
+        transaction.commit().await?;
         Ok(token)
     }
 
@@ -205,6 +227,14 @@ impl Auth {
             return Err(AuthError::Conflict);
         }
         let session = insert_session(&mut transaction, &hash).await?;
+        record_audit(
+            &mut transaction,
+            AuditAction::AccountSetup,
+            AuditActor::Admin,
+            None,
+            AuditOutcome::Success,
+        )
+        .await?;
         transaction.commit().await?;
         Ok(session)
     }
@@ -247,6 +277,14 @@ impl Auth {
         .bind(SESSION_ABSOLUTE_SECONDS)
         .execute(&mut *transaction)
         .await?;
+        record_audit(
+            &mut transaction,
+            AuditAction::Login,
+            AuditActor::Admin,
+            None,
+            AuditOutcome::Success,
+        )
+        .await?;
         transaction.commit().await?;
         Ok(session)
     }
@@ -265,6 +303,14 @@ impl Auth {
             return Err(AuthError::Unauthorized);
         }
         let session = replace_sessions(&mut transaction, &hash).await?;
+        record_audit(
+            &mut transaction,
+            AuditAction::AccountRecovery,
+            AuditActor::Admin,
+            None,
+            AuditOutcome::Success,
+        )
+        .await?;
         transaction.commit().await?;
         Ok(session)
     }
@@ -304,20 +350,7 @@ impl Auth {
         current: &str,
         password: &str,
     ) -> Result<IssuedSession, AuthError> {
-        let digest = credential_hash(SESSION_DOMAIN, token)?;
-        let stored: String = sqlx::query_scalar(
-            "SELECT account.password_hash FROM admin_accounts AS account
-             JOIN admin_sessions AS session ON session.account_id = account.id
-             WHERE session.token_hash = ? AND session.last_seen_at > unixepoch() - ?
-                 AND session.created_at > unixepoch() - ?",
-        )
-        .bind(digest.as_slice())
-        .bind(SESSION_IDLE_SECONDS)
-        .bind(SESSION_ABSOLUTE_SECONDS)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(AuthError::Unauthorized)?;
-        self.verify_password(current, &stored, false).await?;
+        let verified = self.verify_current_session(token, current).await?;
         let hash = self.hash_password(password).await?;
         let mut transaction = self.pool.begin().await?;
         let result = sqlx::query(
@@ -328,8 +361,8 @@ impl Auth {
              )",
         )
         .bind(&hash)
-        .bind(&stored)
-        .bind(digest.as_slice())
+        .bind(verified.password_hash)
+        .bind(verified.digest.as_slice())
         .bind(SESSION_IDLE_SECONDS)
         .bind(SESSION_ABSOLUTE_SECONDS)
         .execute(&mut *transaction)
@@ -338,8 +371,35 @@ impl Auth {
             return Err(AuthError::Unauthorized);
         }
         let session = replace_sessions(&mut transaction, &hash).await?;
+        record_audit(
+            &mut transaction,
+            AuditAction::PasswordChange,
+            AuditActor::Admin,
+            None,
+            AuditOutcome::Success,
+        )
+        .await?;
         transaction.commit().await?;
         Ok(session)
+    }
+
+    pub(crate) async fn reauthenticate(&self, token: &str, current: &str) -> Result<(), AuthError> {
+        let verified = self.verify_current_session(token, current).await?;
+        verified.require_current(&self.pool).await
+    }
+
+    async fn verify_current_session(
+        &self,
+        token: &str,
+        current: &str,
+    ) -> Result<VerifiedSession, AuthError> {
+        let digest = credential_hash(SESSION_DOMAIN, token)?;
+        let password_hash = session_password_hash(&self.pool, &digest).await?;
+        self.verify_password(current, &password_hash, false).await?;
+        Ok(VerifiedSession {
+            digest,
+            password_hash,
+        })
     }
 
     pub async fn list_keys(&self) -> Result<Vec<KeyMeta>, AuthError> {
@@ -372,7 +432,8 @@ impl Auth {
             .transpose()?;
         let secret = new_token()?;
         let digest = token_hash(KEY_DOMAIN, &secret);
-        let rows = sqlx::query_as::<_, KeyRow>(
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, KeyRow>(
             "INSERT INTO admin_api_keys (account_id, token_hash, name, scopes, host, expires_at, created_at)
              SELECT 1, ?, ?, ?, ?, ?, unixepoch() WHERE coalesce(? > unixepoch(), 1)
              RETURNING id, name, scopes, host, expires_at, created_at",
@@ -383,12 +444,69 @@ impl Auth {
         .bind(host)
         .bind(expires_at)
         .bind(expires_at)
-        .fetch_all(&self.pool)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AuthError::Invalid)?;
+        record_audit(
+            &mut transaction,
+            AuditAction::KeyCreate,
+            AuditActor::Admin,
+            Some(row.0),
+            AuditOutcome::Success,
+        )
         .await?;
-        let row = rows.into_iter().next().ok_or(AuthError::Invalid)?;
-        let key = KeyMeta::from(row);
-        let token = format!("{}.{secret}", key.id);
-        Ok(IssuedKey { key, token })
+        transaction.commit().await?;
+        Ok(issued_key(row, &secret))
+    }
+
+    pub async fn rotate_key(
+        &self,
+        id: i64,
+        token: &str,
+        current: &str,
+    ) -> Result<IssuedKey, AuthError> {
+        let verified = self.verify_current_session(token, current).await?;
+        let secret = new_token()?;
+        let digest = token_hash(KEY_DOMAIN, &secret);
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        verified.require_current(&mut *transaction).await?;
+        let (name, scopes, host, expires_at, now) = sqlx::query_as::<_, RotationSource>(
+            "SELECT name, scopes, host, expires_at, unixepoch() FROM admin_api_keys WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AuthError::NotFound)?;
+        if expires_at.is_some_and(|expiry| expiry <= now) {
+            return Err(AuthError::Conflict);
+        }
+        let row = sqlx::query_as::<_, KeyRow>(
+            "INSERT INTO admin_api_keys (account_id, token_hash, name, scopes, host, expires_at, created_at)
+             VALUES (1, ?, ?, ?, ?, ?, ?)
+             RETURNING id, name, scopes, host, expires_at, created_at",
+        )
+        .bind(digest.as_slice())
+        .bind(name)
+        .bind(scopes)
+        .bind(host)
+        .bind(expires_at)
+        .bind(now)
+        .fetch_one(&mut *transaction)
+        .await?;
+        sqlx::query("DELETE FROM admin_api_keys WHERE id = ?")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
+        record_audit(
+            &mut transaction,
+            AuditAction::KeyRotate,
+            AuditActor::Admin,
+            Some(id),
+            AuditOutcome::Success,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(issued_key(row, &secret))
     }
 
     pub async fn key(&self, token: &str) -> Result<KeyAccess, AuthError> {
@@ -414,13 +532,23 @@ impl Auth {
     }
 
     pub async fn revoke_key(&self, id: i64) -> Result<(), AuthError> {
+        let mut transaction = self.pool.begin().await?;
         let result = sqlx::query("DELETE FROM admin_api_keys WHERE id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *transaction)
             .await?;
         if result.rows_affected() == 0 {
             return Err(AuthError::NotFound);
         }
+        record_audit(
+            &mut transaction,
+            AuditAction::KeyRevoke,
+            AuditActor::Admin,
+            Some(id),
+            AuditOutcome::Success,
+        )
+        .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -502,6 +630,44 @@ impl Auth {
         .await
         .map_err(|_| AuthError::Unavailable)?
     }
+}
+
+impl VerifiedSession {
+    async fn require_current<'e>(
+        &self,
+        executor: impl sqlx::Executor<'e, Database = Sqlite>,
+    ) -> Result<(), AuthError> {
+        let current = session_password_hash(executor, &self.digest).await?;
+        if current == self.password_hash {
+            Ok(())
+        } else {
+            Err(AuthError::Unauthorized)
+        }
+    }
+}
+
+async fn session_password_hash<'e>(
+    executor: impl sqlx::Executor<'e, Database = Sqlite>,
+    digest: &[u8; TOKEN_BYTES],
+) -> Result<String, AuthError> {
+    sqlx::query_scalar(
+        "SELECT account.password_hash FROM admin_accounts AS account
+         JOIN admin_sessions AS session ON session.account_id = account.id
+         WHERE session.token_hash = ? AND session.last_seen_at > unixepoch() - ?
+             AND session.created_at > unixepoch() - ?",
+    )
+    .bind(digest.as_slice())
+    .bind(SESSION_IDLE_SECONDS)
+    .bind(SESSION_ABSOLUTE_SECONDS)
+    .fetch_optional(executor)
+    .await?
+    .ok_or(AuthError::Unauthorized)
+}
+
+fn issued_key(row: KeyRow, secret: &str) -> IssuedKey {
+    let key = KeyMeta::from(row);
+    let token = format!("{}.{secret}", key.id);
+    IssuedKey { key, token }
 }
 
 async fn consume_bootstrap(
@@ -850,5 +1016,61 @@ mod tests {
         assert!(auth.key(&active.token).await.is_ok());
         auth.revoke_key(active.key.id).await.unwrap();
         assert!(auth.key(&active.token).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn key_rotation_replaces_only_the_selected_active_key() {
+        let (_directory, auth) = database().await;
+        let session = account(&auth).await;
+        let expiry: i64 = sqlx::query_scalar("SELECT unixepoch() + 3600")
+            .fetch_one(&auth.pool)
+            .await
+            .unwrap();
+        let old = auth
+            .create_key("reader", vec!["read".into()], Some("go.example".into()), Some(expiry))
+            .await
+            .unwrap();
+        assert!(matches!(
+            auth.rotate_key(old.key.id, &session.token, NEW_PASSWORD).await,
+            Err(AuthError::Unauthorized)
+        ));
+        assert!(auth.key(&old.token).await.is_ok());
+        let (first, second) = tokio::join!(
+            auth.rotate_key(old.key.id, &session.token, PASSWORD),
+            auth.rotate_key(old.key.id, &session.token, PASSWORD),
+        );
+        assert_ne!(first.is_ok(), second.is_ok());
+        let rotated = first.ok().or_else(|| second.ok()).unwrap();
+        assert_ne!(rotated.key.id, old.key.id);
+        assert_eq!(rotated.key.name, old.key.name);
+        assert_eq!(rotated.key.scopes, old.key.scopes);
+        assert_eq!(rotated.key.host, old.key.host);
+        assert_eq!(rotated.key.expires_at, old.key.expires_at);
+        assert!(auth.key(&old.token).await.is_err());
+        assert!(auth.key(&rotated.token).await.is_ok());
+        assert_eq!(auth.list_keys().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn key_rotation_rolls_back_when_audit_insertion_fails() {
+        let (_directory, auth) = database().await;
+        let session = account(&auth).await;
+        let old = auth
+            .create_key("reader", vec!["read".into()], None, None)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER fail_rotation_audit BEFORE INSERT ON admin_audit
+             WHEN NEW.action = 'key_rotate' BEGIN SELECT RAISE(ABORT, 'test audit failure'); END",
+        )
+        .execute(&auth.pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            auth.rotate_key(old.key.id, &session.token, PASSWORD).await,
+            Err(AuthError::Unavailable)
+        ));
+        assert!(auth.key(&old.token).await.is_ok());
+        assert_eq!(auth.list_keys().await.unwrap().len(), 1);
     }
 }

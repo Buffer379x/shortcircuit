@@ -27,7 +27,9 @@ LABEL org.opencontainers.image.title="ShortCircuit" \
       org.opencontainers.image.source="https://github.com/Buffer379x/shortcircuit" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="0.6.0-preview.2"
-RUN install -d -m 0700 -o 10001 -g 10001 /data
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && install -d -m 0700 -o 10001 -g 10001 /data
 COPY --from=build /build/target/release/shortcircuit /usr/local/bin/shortcircuit
 COPY LICENSE /usr/share/doc/shortcircuit/LICENSE
 COPY --from=build /notices/rust /usr/share/doc/shortcircuit/licenses/rust

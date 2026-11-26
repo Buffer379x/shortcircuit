@@ -20,6 +20,14 @@ pub async fn create_snapshot(
     pool: &SqlitePool,
     backups_dir: &Path,
 ) -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
+    let staged = verified_snapshot(pool, backups_dir).await?;
+    Ok(tokio::task::spawn_blocking(move || staged.publish()).await??)
+}
+
+pub(crate) async fn verified_snapshot(
+    pool: &SqlitePool,
+    backups_dir: &Path,
+) -> Result<StagedSnapshot, Box<dyn Error + Send + Sync>> {
     let backups_dir = backups_dir.to_owned();
     let staged =
         tokio::task::spawn_blocking(move || StagedSnapshot::reserve(&backups_dir)).await??;
@@ -34,9 +42,7 @@ pub async fn create_snapshot(
         .execute(pool)
         .await?;
 
-    if fs::metadata(&staged.database)?.len() > MAX_SNAPSHOT_BYTES {
-        return Err(io::Error::other("backup exceeds the supported snapshot size").into());
-    }
+    staged.checked_size()?;
     let mut snapshot = SqliteConnection::connect_with(
         &SqliteConnectOptions::new()
             .filename(&staged.database)
@@ -51,8 +57,8 @@ pub async fn create_snapshot(
     verify_snapshot(&mut snapshot).await?;
     snapshot.close().await?;
 
-    let published = tokio::task::spawn_blocking(move || staged.publish()).await??;
-    Ok(published)
+    staged.checked_size()?;
+    Ok(staged)
 }
 
 async fn annotate_snapshot(
@@ -125,13 +131,25 @@ async fn verify_snapshot(
     Ok(())
 }
 
-struct StagedSnapshot {
+pub(crate) struct StagedSnapshot {
     directory: PathBuf,
     database: PathBuf,
     target: PathBuf,
 }
 
 impl StagedSnapshot {
+    fn checked_size(&self) -> io::Result<u64> {
+        let bytes = fs::metadata(&self.database)?.len();
+        if bytes > MAX_SNAPSHOT_BYTES {
+            return Err(io::Error::other("backup exceeds the supported snapshot size"));
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn open(&self) -> io::Result<(File, u64)> {
+        Ok((File::open(&self.database)?, self.checked_size()?))
+    }
+
     fn reserve(backups_dir: &Path) -> io::Result<Self> {
         let backups_dir = prepare_directory(backups_dir)?;
         let created_at = SystemTime::now()

@@ -1,4 +1,5 @@
 mod access;
+pub(crate) mod admin_security;
 mod assets;
 mod bulk;
 mod catalog;
@@ -7,6 +8,8 @@ mod duplicates;
 mod exchange;
 mod links;
 mod metrics;
+mod monitoring;
+mod operations;
 mod qr_templates;
 
 use std::sync::Arc;
@@ -31,10 +34,12 @@ use crate::{
     domains,
     http::response_headers,
     input::{PublicHosts, normalize_host},
+    monitor::Monitor,
     rate_limit::AttemptLimiter,
 };
 
 pub use access::AdminConfig;
+pub use operations::Operations;
 
 const BODY_LIMIT: usize = 32_768;
 
@@ -45,10 +50,12 @@ struct AppState {
     hosts: PublicHosts,
     config: Arc<AdminConfig>,
     attempts: Arc<AttemptLimiter>,
+    sensitive_attempts: Arc<AttemptLimiter>,
+    api_attempts: Arc<AttemptLimiter>,
 }
 
 pub fn admin_router(pool: SqlitePool, hosts: PublicHosts, config: AdminConfig) -> Router {
-    build_admin_router(pool, hosts, config, None)
+    build_admin_router(pool, hosts, config, None, None, None)
 }
 
 pub fn admin_router_with_analytics(
@@ -57,7 +64,18 @@ pub fn admin_router_with_analytics(
     config: AdminConfig,
     analytics: Analytics,
 ) -> Router {
-    build_admin_router(pool, hosts, config, Some(analytics))
+    build_admin_router(pool, hosts, config, Some(analytics), None, None)
+}
+
+pub fn admin_router_with_services(
+    pool: SqlitePool,
+    hosts: PublicHosts,
+    config: AdminConfig,
+    analytics: Analytics,
+    operations: Operations,
+    monitor: Monitor,
+) -> Router {
+    build_admin_router(pool, hosts, config, Some(analytics), Some(operations), Some(monitor))
 }
 
 fn build_admin_router(
@@ -65,13 +83,17 @@ fn build_admin_router(
     hosts: PublicHosts,
     config: AdminConfig,
     analytics: Option<Analytics>,
+    operations: Option<Operations>,
+    monitor: Option<Monitor>,
 ) -> Router {
     let state = AppState {
         pool: pool.clone(),
         auth: Auth::new(pool.clone()),
         hosts,
+        attempts: Arc::new(AttemptLimiter::with_limit(config.entry_limit)),
+        sensitive_attempts: Arc::new(AttemptLimiter::with_limit(config.sensitive_limit)),
+        api_attempts: Arc::new(AttemptLimiter::with_limit(config.api_limit)),
         config: Arc::new(config),
-        attempts: Arc::new(AttemptLimiter::new()),
     };
 
     let sign_in = Router::new()
@@ -88,6 +110,10 @@ fn build_admin_router(
         .route("/api/v1/auth/password", post(change_password))
         .route("/api/v1/keys", get(list_keys).post(create_key))
         .route("/api/v1/keys/{id}", delete(revoke_key))
+        .route("/api/v1/keys/{id}/rotate", post(admin_security::rotate_key))
+        .route("/api/v1/audit", get(admin_security::list_audit))
+        .merge(operations.map_or_else(Router::new, operations::routes))
+        .merge(monitor.map_or_else(Router::new, monitoring::routes))
         .merge(qr_templates::routes())
         .merge(links::qr_logo_routes())
         .merge(catalog_search::routes())
@@ -127,6 +153,7 @@ fn build_admin_router(
         .merge(exchange_routes)
         .merge(duplicate_routes)
         .merge(assets::routes())
+        .route_layer(middleware::from_fn_with_state(state.clone(), access::api_limit))
         .route_layer(middleware::from_fn_with_state(state, access::admin_host));
 
     Router::new()

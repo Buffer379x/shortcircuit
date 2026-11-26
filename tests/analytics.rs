@@ -39,6 +39,13 @@ async fn analytics_respects_request_and_link_privacy() {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO link_tags (link_id, tag)
+         SELECT id, 'Previous tag' FROM links WHERE slug = 'tracked'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let auth = Auth::new(pool.clone());
     let setup = auth.issue_bootstrap(BootstrapKind::Setup).await.unwrap();
     let session = auth
@@ -125,6 +132,87 @@ async fn analytics_respects_request_and_link_privacy() {
     .unwrap();
     assert_eq!(report["totals"]["redirect"], 1);
     assert_eq!(report["totals"]["missing"], 1);
+    assert_eq!(
+        report["breakdowns"]["traffic_source"],
+        serde_json::json!([{"category": "preview", "total": 1}]),
+    );
+    assert_eq!(
+        report["top_domains"],
+        serde_json::json!([{"host": "go.example", "total": 1}]),
+    );
+    assert_eq!(
+        report["top_tags"],
+        serde_json::json!([{"tag": "Previous tag", "total": 1}]),
+    );
+
+    let export = "/api/v1/analytics/export";
+    assert_eq!(
+        send(&admin, "GET", export, &[("host", "admin.example")])
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED,
+    );
+    let response = send(&admin, "GET", export, &authenticated).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-disposition"],
+        "attachment; filename=\"shortcircuit-analytics-v1.json\"",
+    );
+    let exported: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 100_000).await.unwrap()).unwrap();
+    assert_eq!(exported["version"], 1);
+    assert_eq!(exported["granularity"], "utc_day");
+    assert_eq!(exported["report"], report);
+
+    let response = send(&admin, "GET", "/api/v1/analytics/events", &authenticated).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let details = to_bytes(response.into_body(), 100_000).await.unwrap();
+    let visits: Value = serde_json::from_slice(&details).unwrap();
+    assert_eq!(visits["items"][0]["traffic_source"], "preview");
+    assert_eq!(visits["items"][0]["browser"], "unknown");
+    assert_eq!(visits["items"][0]["referrer"], "referrer.example");
+    assert!(!String::from_utf8_lossy(&details).contains("sensitive"));
+
+    sqlx::query("UPDATE link_tags SET tag = 'Current tag' WHERE tag = 'Previous tag'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let date: String = sqlx::query_scalar("SELECT date(? * 86400, 'unixepoch')")
+        .bind(report["end_day"].as_i64().unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let custom = format!("{summary}?start={date}&end={date}&host=GO.EXAMPLE");
+    let response = send(&admin, "GET", &custom, &authenticated).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let custom: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 100_000).await.unwrap()).unwrap();
+    assert_eq!(custom["host"], "go.example");
+    assert_eq!(custom["start_day"], report["end_day"]);
+    assert_eq!(custom["end_day"], report["end_day"]);
+    assert_eq!(custom["days"], 1);
+    assert_eq!(custom["totals"]["redirect"], 1);
+    assert_eq!(custom["daily"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        custom["top_tags"],
+        serde_json::json!([{"tag": "Current tag", "total": 1}]),
+    );
+
+    for query in [
+        "days=366",
+        "start=2024-01-01",
+        "start=2024-02-30&end=2024-03-01",
+        "start=2024-03-01&end=2024-02-01",
+        "start=2023-01-01&end=2024-01-01",
+        "start=2024-03-01&end=2024-03-01&days=7",
+        "start=9999-12-31&end=9999-12-31",
+    ] {
+        let response = send(&admin, "GET", &format!("{summary}?{query}"), &authenticated).await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY, "{query}");
+        let body = to_bytes(response.into_body(), 10_000).await.unwrap();
+        let problem: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(problem["code"], "invalid_period", "{query}");
+    }
 
     assert_eq!(
         send(

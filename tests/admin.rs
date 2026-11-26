@@ -6,7 +6,8 @@ use axum::{
 };
 use serde_json::{Value, json};
 use shortcircuit::{
-    AdminConfig, Auth, BootstrapKind, PublicHosts, admin_router, open_database, public_router,
+    AdminConfig, Auth, BootstrapKind, PublicHosts, RateLimit, TrustedProxies, admin_router,
+    open_database, public_router,
 };
 use sqlx::SqlitePool;
 use tower::ServiceExt;
@@ -1457,6 +1458,145 @@ async fn scoped_api_keys_cannot_manage_keys_or_access_another_domain() {
             .status(),
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn rotation_requires_browser_reauthentication_and_replaces_the_key_once() {
+    let app = App::start().await;
+    let (cookie, csrf) = app.setup().await;
+    let browser = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    let expires_at: i64 = sqlx::query_scalar("SELECT unixepoch() + 3600")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    let old_key = app
+        .auth
+        .create_key(
+            "Scoped key",
+            vec!["read".into()],
+            Some("go.example".into()),
+            Some(expires_at),
+        )
+        .await
+        .unwrap();
+    let id = old_key.key.id;
+    let path = format!("/api/v1/keys/{id}/rotate");
+    let password = json!({"current_password": PASSWORD});
+    let old_bearer = format!("Bearer {}", old_key.token);
+    for headers in [&[][..], &[("authorization", old_bearer.as_str())][..]] {
+        assert_eq!(
+            request(&app.admin, Method::POST, &path, headers, Some(password.clone()))
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request(&app.admin, Method::GET, "/api/v1/audit", headers, None)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    assert_eq!(
+        request(
+            &app.admin,
+            Method::POST,
+            &path,
+            &browser[..2],
+            Some(password.clone()),
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    let rejected = request(
+        &app.admin,
+        Method::POST,
+        &path,
+        &browser,
+        Some(json!({"current_password": "synthetic-wrong-password"})),
+    )
+    .await;
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response_body(rejected).await["code"], "invalid_credentials");
+    assert!(app.auth.key(&old_key.token).await.is_ok());
+
+    let (first, second) = tokio::join!(
+        request(&app.admin, Method::POST, &path, &browser, Some(password.clone())),
+        request(&app.admin, Method::POST, &path, &browser, Some(password)),
+    );
+    let (created, absent) = if first.status() == StatusCode::CREATED {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(absent.status(), StatusCode::NOT_FOUND);
+    assert_eq!(created.headers()[header::CACHE_CONTROL], "no-store");
+    let replacement = response_body(created).await;
+    let replacement_token = replacement["token"].as_str().unwrap();
+    assert_ne!(replacement["key"]["id"], id);
+    assert_eq!(replacement["key"]["name"], "Scoped key");
+    assert_eq!(replacement["key"]["host"], "go.example");
+    assert_eq!(replacement["key"]["scopes"], json!(["read"]));
+    assert_eq!(replacement["key"]["expires_at"], expires_at);
+    assert!(app.auth.key(&old_key.token).await.is_err());
+    assert!(app.auth.key(replacement_token).await.is_ok());
+    assert_eq!(app.auth.list_keys().await.unwrap().len(), 1);
+
+    let audit = request(
+        &app.admin,
+        Method::GET,
+        "/api/v1/audit",
+        &browser[..1],
+        None,
+    )
+    .await;
+    assert_eq!(audit.status(), StatusCode::OK);
+    let audit = response_body(audit).await;
+    let rows = audit["items"].as_array().unwrap();
+    for outcome in ["success", "rejected"] {
+        assert!(rows.iter().any(|row| {
+            row["action"] == "key_rotate"
+                && row["actor"] == "admin"
+                && row["actor_id"] == 1
+                && row["object_id"] == id
+                && row["outcome"] == outcome
+        }));
+    }
+    let text = audit.to_string();
+    for secret in [old_key.token.as_str(), replacement_token, PASSWORD] {
+        assert!(!text.contains(secret));
+    }
+}
+
+#[tokio::test]
+async fn admin_api_limit_covers_session_status_and_supplies_retry_after() {
+    let config = AdminConfig::new(ORIGIN, 8080).unwrap().with_access_controls(
+        TrustedProxies::default(),
+        RateLimit::PASSWORD_DEFAULT,
+        RateLimit::SENSITIVE_DEFAULT,
+        RateLimit::new(1, 10).unwrap(),
+    );
+    let app = App::start_configured(config).await;
+    let path = "/api/v1/auth/session";
+    let first = request(&app.admin, Method::GET, path, &[], None).await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let limited = request(
+        &app.admin,
+        Method::GET,
+        path,
+        &[("x-forwarded-for", "192.0.2.3")],
+        None,
+    )
+    .await;
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(limited.headers()[header::RETRY_AFTER], "60");
+    assert_eq!(response_body(limited).await["code"], "try_again_later");
 }
 
 #[tokio::test]
