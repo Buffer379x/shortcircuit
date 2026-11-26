@@ -10,8 +10,9 @@ use std::{
 };
 
 use shortcircuit::{
-    AdminConfig, Analytics, Auth, BackupSchedule, BootstrapKind, PublicHosts, admin_router_with_analytics,
-    create_snapshot, data_lock, open_database, public_router_with_analytics, restore_snapshot,
+    AdminConfig, Analytics, Auth, BackupSchedule, BootstrapKind, PublicHosts,
+    admin_router_with_analytics, create_snapshot, data_lock, open_database,
+    public_router_with_analytics, restore_snapshot,
 };
 use tokio::{net::TcpListener, sync::watch, time};
 use tracing_subscriber::EnvFilter;
@@ -122,7 +123,11 @@ async fn serve() -> Result<(), AppError> {
     let (analytics, mut writer) = Analytics::start(pool.clone()).await?;
     let (stop, receiver) = watch::channel(false);
     let scheduled = backup_schedule.map(|schedule| {
-        tokio::spawn(schedule.run(pool.clone(), database.with_file_name("backups"), receiver.clone()))
+        tokio::spawn(schedule.run(
+            pool.clone(),
+            database.with_file_name("backups"),
+            receiver.clone(),
+        ))
     });
     let public = axum::serve(
         public_socket,

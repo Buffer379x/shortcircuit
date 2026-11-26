@@ -54,7 +54,7 @@ impl BackupSchedule {
                 Ok(path) => {
                     tracing::info!("scheduled backup verified");
                     path
-                },
+                }
                 Err(_) => {
                     tracing::warn!("scheduled backup creation failed");
                     continue;
@@ -152,27 +152,39 @@ mod tests {
     #[tokio::test]
     async fn scheduled_job_publishes_a_snapshot_and_stops_on_signal() {
         let work = tempfile::tempdir().unwrap();
-        let pool = crate::open_database(&work.path().join("test.db")).await.unwrap();
+        let pool = crate::open_database(&work.path().join("test.db"))
+            .await
+            .unwrap();
         let target = work.path().join("backups");
         let (stop, signal) = watch::channel(false);
         let worker = tokio::spawn(
-            BackupSchedule { interval: Duration::from_millis(400), keep: 2 }
-                .run(pool, target.clone(), signal),
+            BackupSchedule {
+                interval: Duration::from_millis(400),
+                keep: 2,
+            }
+            .run(pool, target.clone(), signal),
         );
         let scheduled = target.join("scheduled");
         assert!(!scheduled.exists());
         time::timeout(Duration::from_secs(5), async {
             loop {
                 if fs::read_dir(&scheduled).is_ok_and(|mut names| {
-                    names.any(|entry| entry.is_ok_and(|entry| backup_timestamp(&entry.file_name()).is_some()))
+                    names.any(|entry| {
+                        entry.is_ok_and(|entry| backup_timestamp(&entry.file_name()).is_some())
+                    })
                 }) {
                     break;
                 }
                 time::sleep(Duration::from_millis(25)).await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         stop.send_replace(true);
-        time::timeout(Duration::from_secs(2), worker).await.unwrap().unwrap();
+        time::timeout(Duration::from_secs(2), worker)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[test]
