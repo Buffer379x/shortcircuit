@@ -366,6 +366,24 @@ async function verify() {
     await linkTable.getByRole('link', { name: 'localhost/test/guide', exact: true }).waitFor();
     assert.equal(await linkTable.locator('tbody tr').count(), 1);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    const searchFailure = page.getByRole('alert').filter({ hasText: 'The service is unavailable' });
+    const failNextSearch = () => page.route(admin + '/api/v1/links/search',
+      route => route.fulfill({ status: 503, json: { code: 'service_unavailable' } }), { times: 1 });
+    await failNextSearch();
+    await linkTable.getByRole('button', { name: 'Disable', exact: true }).click();
+    await searchFailure.waitFor();
+    await linkTable.getByRole('button', { name: 'Enable', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    await searchFailure.waitFor({ state: 'hidden' });
+    await linkTable.getByRole('button', { name: 'Enable', exact: true }).waitFor();
+
+    await failNextSearch();
+    await linkTable.getByRole('button', { name: 'Delete link', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Delete link', exact: true })
+      .getByRole('button', { name: 'Delete', exact: true }).click();
+    await searchFailure.waitFor();
+    assert.equal(await linkTable.count(), 0);
+    assert.equal(await page.getByRole('button', { name: 'Export shown links (JSON)', exact: true }).isDisabled(), true);
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { linkName, linkSorts, shortUrl } from './api';
-  import type { Api, Domains, Link, LinkCursor, LinkProtectionChange, LinkSearch, LinkSearchPage, LinkSort, Tag } from './api';
+  import type { Api, Domains, Link, LinkCursor, LinkMetadata, LinkProtectionChange, LinkSearch, LinkSearchPage, LinkSort, Tag } from './api';
   import Dialog from './Dialog.svelte';
   import { formatDate, passwordAllowed, problemMessage } from './format';
   import DuplicateLookup from './DuplicateLookup.svelte';
@@ -160,9 +160,30 @@
     if (!loading && pageRequest && cursor) void loadPages(currentQuery, cursor, pageRequest.signal);
   }
 
-  function refreshCatalog() {
+  function refreshCatalog(refreshTags = true) {
+    pageRequest?.abort();
     revision += 1;
-    void loadTags();
+    if (refreshTags) void loadTags();
+  }
+
+  function patchListedLink(id: number, changes: LinkMetadata) {
+    items = items.flatMap((link) => {
+      if (link.id !== id) return [link];
+      const updated = { ...link, ...changes };
+      const text = search.trim().toLowerCase();
+      const matching = (!domain || domain === updated.host)
+        && (!tag || updated.tags.includes(tag))
+        && (!status || updated.enabled === (status === 'enabled'))
+        && (!text || [updated.title, updated.slug, updated.host, updated.target,
+          `${updated.host}/${updated.slug}`, shortUrl(updated, domains), ...updated.tags]
+          .some((value) => value.toLowerCase().includes(text)));
+      return matching ? [updated] : [];
+    });
+  }
+
+  function restoreMetadata(id: number, metadata: LinkMetadata) {
+    patchListedLink(id, metadata);
+    refreshCatalog();
   }
 
   function clearFilters() {
@@ -228,7 +249,8 @@
           closeForm();
           return;
         }
-        await api<Link>(`/links/${editing.id}`, 'PATCH', changes);
+        const updated = await api<Link>(`/links/${editing.id}`, 'PATCH', changes);
+        patchListedLink(updated.id, updated);
         notice = 'linkUpdated';
       } else {
         const protection: Omit<LinkProtectionChange, 'remove_password'> | undefined = oneTime || linkPassword ? {
@@ -259,8 +281,9 @@
     actionError = null;
     notice = null;
     try {
-      await api<Link>(`/links/${link.id}`, 'PATCH', { enabled: !link.enabled });
-      revision += 1;
+      const updated = await api<Link>(`/links/${link.id}`, 'PATCH', { enabled: !link.enabled });
+      patchListedLink(updated.id, updated);
+      refreshCatalog(false);
       notice = 'linkUpdated';
     } catch (error) {
       actionError = problemMessage(error);
@@ -272,12 +295,14 @@
   async function remove(event: SubmitEvent) {
     event.preventDefault();
     if (!removing || saving) return;
+    const id = removing.id;
     saving = true;
     formError = null;
     actionError = null;
     notice = null;
     try {
-      await api<void>(`/links/${removing.id}`, 'DELETE');
+      await api<void>(`/links/${id}`, 'DELETE');
+      items = items.filter((item) => item.id !== id);
       refreshCatalog();
       removing = null;
       notice = 'linkDeleted';
@@ -424,7 +449,7 @@
 
 {#if qrLink}<LinkQr {api} link={qrLink} {t} onclose={() => qrLink = null} />{/if}
 {#if historyLink}
-  <LinkHistory link={historyLink} {api} {t} {language} onclose={() => historyLink = null} onrestore={refreshCatalog} />
+  <LinkHistory link={historyLink} {api} {t} {language} onclose={() => historyLink = null} onrestore={restoreMetadata} />
 {/if}
 {#if policyLink}
   <PolicyEditor link={policyLink} {api} {t} onclose={() => policyLink = null} onsaved={() => { policyLink = null; notice = 'linkUpdated'; }} />
