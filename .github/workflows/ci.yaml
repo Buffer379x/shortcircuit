@@ -79,7 +79,8 @@ jobs:
         run: |
           browser_deps="$RUNNER_TEMP/shortcircuit-browser"
           npm install --prefix "$browser_deps" --no-save --no-audit --no-fund playwright@1.65.0
-          "$browser_deps/node_modules/.bin/playwright" install --with-deps --only-shell chromium
+          # GitHub's Ubuntu runners already include Chromium's system libraries.
+          "$browser_deps/node_modules/.bin/playwright" install --only-shell chromium
           setup_token=$(docker compose exec -T shortcircuit shortcircuit setup-token)
           printf '::add-mask::%s\n' "$setup_token"
           SHORTCIRCUIT_SETUP_TOKEN="$setup_token" SHORTCIRCUIT_PLAYWRIGHT="$browser_deps/node_modules/playwright" node tests/admin-browser.cjs
