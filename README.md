@@ -21,7 +21,7 @@ The Analytics page shows UTC daily counts, period comparisons, and privacy setti
 
 Compose builds the development image `shortcircuit:0.6.0-preview.2`, publishes both ports on loopback, and runs as UID/GID 10001. The application uses one persistent Docker volume. For a reverse proxy, set `ADMIN_ORIGIN` to the external HTTPS origin and keep the cleartext admin backend reachable only by the proxy. Use a dedicated admin hostname. [Network setup](docs/REVERSE_PROXY.md)
 
-Upgrading an existing development instance applies the schema updates and preserves its link IDs, hosts, slugs, and destinations. Remove `ADMIN_TOKEN_FILE` and use `setup-token` to create the first administrator. Issue new scoped keys from the admin interface. For account recovery, use `docker compose exec -T shortcircuit shortcircuit recovery-token` and choose **Reset password** on the sign-in screen.
+Upgrading from preview.1 preserves the existing administrator and links. Follow the [upgrade instructions](docs/UNRAID_INSTALLATION.md#persistent-storage-and-updates). When upgrading from a development build that predates administrator accounts, remove `ADMIN_TOKEN_FILE` and use `setup-token` to claim the first account. Issue scoped keys from the admin interface. For account recovery, run `docker compose exec -T shortcircuit shortcircuit recovery-token` and choose **Reset password** on the sign-in screen.
 
 ## Build from source
 

@@ -21,7 +21,7 @@
 | GitHub | The owner approved public source development and container previews. The repository uses MIT. [Repository](https://github.com/Buffer379x/shortcircuit) · [Preview](https://github.com/Buffer379x/shortcircuit/releases/tag/v0.6.0-preview.2) |
 | UI and branding | The embedded Svelte admin interface includes account setup, authentication, links, and API keys with English and German UI text and dark, light, or system appearance. The separate design preview covers additional planned screens. |
 | Browser verification | CI exercises the integrated administration workflow in Chromium. The [capture instructions](../README.md) cover the separate design preview. |
-| Unraid | The project owner confirmed that the amd64 preview starts through Unraid and displays the Docker icon and browser favicon. The template supports a Docker-managed data volume and private administration through a reverse proxy. [Installation](UNRAID_INSTALLATION.md) |
+| Unraid | The project owner confirmed that preview.1 starts through Unraid and displays the Docker icon and browser favicon. The amd64 template supports a Docker-managed data volume and private administration through a reverse proxy. [Installation](UNRAID_INSTALLATION.md) |
 | Performance and release | The benchmark method and resource estimates are documented. Production measurements and operating approval are pending. |
 
 ## Open work
