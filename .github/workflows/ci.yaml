@@ -52,7 +52,7 @@ jobs:
       - run: rustup toolchain install 1.100.0 --profile minimal
       - run: cargo install cargo-deny --version 0.22.1 --locked
       - run: cargo deny --locked check advisories licenses sources
-      - run: npm audit --omit=dev --audit-level=high --prefix frontend
+      - run: npm audit --audit-level=high --prefix frontend
         if: always()
   container:
     needs: rust
