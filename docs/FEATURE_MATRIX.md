@@ -52,7 +52,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Liveness and readiness | Current | P0 | The admin listener serves minimal status-only probes for process and database readiness. |
 | Interactive setup and authentication | Current | P0 | A short-lived CLI setup token, revocable sessions, CSRF protection, and documented recovery are available. Keep the administration interface behind LAN or VPN access. |
 | Scoped API credentials | Current | P0 | Issue keys with named scopes, optional domain restrictions and expiry, and revocation. The API reveals the secret only at creation. |
-| OpenAPI and API diagnostics | Planned | P1 | Add a versioned schema, request IDs, and dedicated credential rotation. |
+| OpenAPI and API diagnostics | Current | P1 | The implemented API has an OpenAPI 3.1 document served through the admin interface. Request IDs and dedicated credential rotation are planned. |
 | Audit, diagnostics, and abuse controls | Planned | P0 | Audit sensitive operations, rate-limit protected endpoints, and make detailed diagnostics available to authorized administrators. |
 | Backup and restore | Current | P0 | The CLI creates a verified local snapshot and restores it offline with an independent rollback copy. An opt-in scheduler retains verified copies. Administration through the browser is planned. |
 | Native data exchange | Current | P1 | Import and export bounded versioned JSON and CSV pages, preview conflicts, and apply transactionally. Field mapping is planned. |

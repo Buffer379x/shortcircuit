@@ -7,6 +7,8 @@
 !src/**
 !migrations/
 !migrations/**
+!docs/
+!docs/openapi.json
 !frontend/
 !frontend/index.html
 !frontend/package.json

@@ -1,0 +1,4741 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ShortCircuit administration API",
+    "version": "v1",
+    "description": "Management operations on the configured administrative origin. Times are UTC. Browser changes require the configured Origin and a CSRF token."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "ShortCircuit administration origin"
+    }
+  ],
+  "paths": {
+    "/api/v1/analytics/data": {
+      "delete": {
+        "summary": "Clear analytics data",
+        "tags": [
+          "Analytics"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful operation"
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "Configured ShortCircuit administration origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/analytics/events": {
+      "get": {
+        "summary": "List retained analytics events",
+        "tags": [
+          "Analytics"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsEventPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "before_id",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/analytics/events/{id}": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      ],
+      "delete": {
+        "summary": "Delete a retained event and adjust its rollup",
+        "tags": [
+          "Analytics"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful operation"
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "Configured ShortCircuit administration origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/analytics/settings": {
+      "get": {
+        "summary": "Read analytics settings",
+        "tags": [
+          "Analytics"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Replace analytics settings",
+        "tags": [
+          "Analytics"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "Configured ShortCircuit administration origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalyticsSettings"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/summary": {
+      "get": {
+        "summary": "Read the analytics summary",
+        "tags": [
+          "Analytics"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsSummary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365,
+              "default": 30
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "operationId": "login",
+        "summary": "Sign in to administration",
+        "description": "Verify the administrator password and open a new browser session.",
+        "security": [],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthLoginInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "A new HttpOnly, SameSite=Strict session cookie with a 12-hour maximum age. HTTPS uses the Secure host-bound cookie.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The JSON body could not be parsed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The username or password is invalid.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request Origin is missing or invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The request authority does not match the configured admin host and port.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "A JSON Content-Type is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The JSON fields or their values are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many authentication requests or password verification is busy.",
+            "headers": {
+              "Retry-After": {
+                "description": "Delay in seconds before retrying.",
+                "schema": {
+                  "type": "integer",
+                  "const": 60
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The administration service is temporarily unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "operationId": "logout",
+        "summary": "Sign out of administration",
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The current session was revoked and its cookie expired.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "Expires the browser session cookie with Max-Age=0.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid browser session is required.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request Origin or X-CSRF-Token is missing or invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The request authority does not match the configured admin host and port.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The administration service is temporarily unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/password": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "operationId": "changePassword",
+        "summary": "Change the administrator password",
+        "description": "Verify the current password, set a new password, and revoke previous browser sessions and outstanding recovery claims.",
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthPasswordInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password changed and a replacement session issued.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "A new HttpOnly, SameSite=Strict session cookie with a 12-hour maximum age. HTTPS uses the Secure host-bound cookie.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The JSON body could not be parsed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The browser session or current password is invalid.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request Origin or X-CSRF-Token is missing or invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The request authority does not match the configured admin host and port.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "A JSON Content-Type is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The JSON fields or their values are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many authentication requests or password verification is busy.",
+            "headers": {
+              "Retry-After": {
+                "description": "Delay in seconds before retrying.",
+                "schema": {
+                  "type": "integer",
+                  "const": 60
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The administration service is temporarily unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/recover": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "operationId": "recoverAdmin",
+        "summary": "Recover administrator access",
+        "description": "Use a CLI recovery token to set a new password and revoke existing browser sessions. The token expires after 15 minutes and is consumed on success.",
+        "security": [],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthRecoveryInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password replaced and a new session issued.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "A new HttpOnly, SameSite=Strict session cookie with a 12-hour maximum age. HTTPS uses the Secure host-bound cookie.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The JSON body could not be parsed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The recovery token is invalid, expired, or consumed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request Origin is missing or invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The request authority does not match the configured admin host and port.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "A JSON Content-Type is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The JSON fields or their values are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many authentication requests or password verification is busy.",
+            "headers": {
+              "Retry-After": {
+                "description": "Delay in seconds before retrying.",
+                "schema": {
+                  "type": "integer",
+                  "const": 60
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The administration service is temporarily unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "operationId": "getSession",
+        "summary": "Check setup and session status",
+        "description": "This endpoint accepts anonymous requests. Supply the session cookie to retrieve the username and CSRF token and refresh the idle deadline.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Setup status and the current session, if active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request contains a malformed or duplicate session cookie.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The request authority does not match the configured admin host and port.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The administration service is temporarily unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/setup": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "operationId": "setupAdmin",
+        "summary": "Set up the administrator account",
+        "description": "Create the single administrator account using a CLI setup token. The token expires after 15 minutes and is consumed on success.",
+        "security": [],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthSetupInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Administrator created and signed in.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "A new HttpOnly, SameSite=Strict session cookie with a 12-hour maximum age. HTTPS uses the Secure host-bound cookie.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The JSON body could not be parsed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The setup token is invalid, expired, or consumed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request Origin is missing or invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The request authority does not match the configured admin host and port.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The administrator account already exists.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "A JSON Content-Type is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The JSON fields or their values are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many authentication requests or password verification is busy.",
+            "headers": {
+              "Retry-After": {
+                "description": "Delay in seconds before retrying.",
+                "schema": {
+                  "type": "integer",
+                  "const": 60
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The administration service is temporarily unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/domains": {
+      "get": {
+        "operationId": "listCatalogDomains",
+        "summary": "List managed and configured public domains",
+        "tags": [
+          "Domains"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The domain catalog includes disabled hosts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogDomainList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "saveCatalogDomain",
+        "summary": "Create or replace a public domain configuration",
+        "tags": [
+          "Domains"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved domain configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogDomain"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The managed domain limit was reached.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Host, origin, or fallback is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "The origin host must match the supplied domain. Omit a fallback or send null to clear it. Disabling a domain retains its links.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Exact configured admin origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogDomainInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/tags": {
+      "get": {
+        "operationId": "listCatalogTags",
+        "summary": "List assigned tags",
+        "tags": [
+          "Tags"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tag names and associated link counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogTagList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "renameCatalogTag",
+        "summary": "Rename or merge a tag",
+        "tags": [
+          "Tags"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Tag assignments updated."
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The source tag has no assignments.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A tag name is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "If the new name already exists, applicable assignments are merged.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Exact configured admin origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogTagRename"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCatalogTag",
+        "summary": "Remove a tag from every link",
+        "tags": [
+          "Tags"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Tag assignments removed."
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tag has no assignments.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The tag name is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Exact configured admin origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogTagDelete"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains": {
+      "get": {
+        "operationId": "listPublicDomains",
+        "summary": "List public domains visible to the caller",
+        "tags": [
+          "Domains"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Visible hosts, origins, and local port.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogDomainOptions"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Bearer API keys require the read scope and honor any configured host restriction."
+      }
+    },
+    "/api/v1/exchange/links": {
+      "get": {
+        "operationId": "exportLinksJson",
+        "summary": "Export one native JSON link page",
+        "tags": [
+          "Exchange"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Versioned link metadata in ascending ID order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogExchangePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query parameters are malformed or unknown.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The cursor must be nonnegative.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Each page is capped by item count and encoded size. Use next_after_id to continue.",
+        "parameters": [
+          {
+            "name": "after_id",
+            "in": "query",
+            "required": false,
+            "description": "Resume after the last link ID returned by the preceding page.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "importLinksJson",
+        "summary": "Preview or apply a native JSON link import",
+        "tags": [
+          "Exchange"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Preview or successful apply report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogImportReport"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Apply found conflicts and made no changes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogImportReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The exchange document is invalid or references an inactive host.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Validate the entire page against active domains. Apply rechecks conflicts and inserts atomically. Existing links are never overwritten.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Exact configured admin origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogImportInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/exchange/links.csv": {
+      "get": {
+        "operationId": "exportLinksCsv",
+        "summary": "Download one native CSV link page",
+        "tags": [
+          "Exchange"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV attachment with link metadata in ascending ID order.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "Suggested download filename.",
+                "schema": {
+                  "type": "string",
+                  "const": "attachment; filename=shortcircuit-links.csv"
+                }
+              },
+              "X-Next-After-Id": {
+                "description": "Present when a further page exists. Pass it as after_id.",
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
+                }
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCsvPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query parameters are malformed or unknown.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The cursor must be nonnegative.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "after_id",
+            "in": "query",
+            "required": false,
+            "description": "Resume after the last link ID returned by the preceding page.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "importLinksCsv",
+        "summary": "Preview or apply a native CSV link import",
+        "tags": [
+          "Exchange"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Preview or successful apply report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogImportReport"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Apply found conflicts and made no changes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogImportReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The exchange document is invalid or references an inactive host.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Preview writes no links. Apply rechecks conflicts and inserts the whole page atomically. Existing links are never overwritten.",
+        "parameters": [
+          {
+            "name": "preview",
+            "in": "query",
+            "required": false,
+            "description": "Defaults to preview. Pass false to apply.",
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Exact configured admin origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/csv": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogCsvPage"
+              }
+            }
+          },
+          "description": "CSV with 1 to 100 data rows."
+        }
+      }
+    },
+    "/api/v1/keys": {
+      "get": {
+        "tags": [
+          "API keys"
+        ],
+        "operationId": "listApiKeys",
+        "summary": "List API key metadata",
+        "description": "Lists current records, including expired keys that can still be revoked.",
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Key metadata in ascending ID order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid browser session is required.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The request authority does not match the configured admin host and port.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The administration service is temporarily unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "API keys"
+        ],
+        "operationId": "createApiKey",
+        "summary": "Create a scoped API key",
+        "description": "Issue a bearer credential with explicit link scopes. An optional host restricts its use to that public host.",
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiKeyInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Key metadata and its bearer token, which is shown once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The JSON body could not be parsed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid browser session is required.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request Origin or X-CSRF-Token is missing or invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The request authority does not match the configured admin host and port.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "A JSON Content-Type is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The JSON fields or their values are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The administration service is temporarily unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/keys/{id}": {
+      "delete": {
+        "tags": [
+          "API keys"
+        ],
+        "operationId": "revokeApiKey",
+        "summary": "Revoke an API key",
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The key was revoked."
+          },
+          "401": {
+            "description": "A valid browser session is required.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request Origin or X-CSRF-Token is missing or invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The key ID is invalid or unknown, or the request authority is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The administration service is temporarily unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/links": {
+      "get": {
+        "operationId": "listLinks",
+        "summary": "List links in ascending ID order",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of up to 100 visible links.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogLinkPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query parameters are malformed or unknown.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The cursor must be nonnegative.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Bearer API keys require the read scope and honor any configured host restriction.",
+        "parameters": [
+          {
+            "name": "after_id",
+            "in": "query",
+            "required": false,
+            "description": "Resume after the last link ID returned by the preceding page.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createLink",
+        "summary": "Create a short link",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That slug already exists on the selected host.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A link field or the selected active host is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Omit the host to use the first active host visible to the caller. Omit the slug to generate one. Bearer API keys require the write scope and honor any configured host restriction.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "description": "Exact configured admin origin, required with browser session authentication.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogLinkCreate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/links/duplicates": {
+      "post": {
+        "operationId": "findLinkDuplicates",
+        "summary": "Find links with an exact stored destination",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Up to ten matches in descending ID order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogDuplicatesResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Destination or exclusion ID is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Matches destination bytes across known domains, including disabled domains. Supply exclude_id to omit the link being edited.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Exact configured admin origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogDuplicatesInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/links/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Numeric link ID.",
+          "schema": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "updateLink",
+        "summary": "Update link metadata and destination",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Link ID is invalid, absent, or outside the caller's visible hosts.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No writable field was supplied or a link field is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "A link's host and slug are fixed. Bearer API keys require the write scope and honor any configured host restriction.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "description": "Exact configured admin origin, required with browser session authentication.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogLinkPatch"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteLink",
+        "summary": "Delete a link",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Link removed."
+          },
+          "404": {
+            "description": "Link ID is invalid, absent, or outside the caller's visible hosts.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Bearer API keys require the delete scope and honor any configured host restriction.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "description": "Exact configured admin origin, required with browser session authentication.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/links/{id}/policy": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Numeric link ID.",
+          "schema": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getLinkPolicy",
+        "summary": "Read a link's redirect policy",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redirect policy and visit counter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRedirectPolicyDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Link ID is invalid, absent, or outside the caller's visible hosts.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Bearer API keys require the read scope and honor any configured host restriction."
+      },
+      "patch": {
+        "operationId": "replaceLinkPolicy",
+        "summary": "Replace a link's redirect policy",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved policy and existing visit counter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRedirectPolicyDetails"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Link ID is invalid, absent, or outside the caller's visible hosts.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A redirect status, time window, visit limit, or rule is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Bearer API keys require the write scope and honor any configured host restriction.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "description": "Exact configured admin origin, required with browser session authentication.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogRedirectPolicy"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/links/{id}/qr": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Numeric link ID.",
+          "schema": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getLinkQr",
+        "summary": "Generate a QR code for a short URL",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "QR code encoding the configured public origin and exact slug.",
+            "content": {
+              "image/svg+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "image/png": {}
+            }
+          },
+          "400": {
+            "description": "Query parameters are malformed or unknown.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Link ID is invalid, absent, or outside the caller's visible hosts.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Format or size is invalid, or the encoded URL is too long.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "All QR generation workers are busy.",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds.",
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "const": 60
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Bearer API keys require the read scope and honor any configured host restriction.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Image format.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "svg",
+                "png"
+              ],
+              "default": "svg"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "description": "Image width and height in pixels.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 128,
+              "maximum": 1024,
+              "default": 384
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "summary": "Download the OpenAPI specification",
+        "tags": [
+          "System"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenAPI document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "summary": "Check process liveness",
+        "tags": [
+          "System"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Running"
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "summary": "Check database readiness",
+        "tags": [
+          "System"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Ready"
+          },
+          "503": {
+            "description": "Database unavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "browserSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-shortcircuit_session"
+      },
+      "localSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "shortcircuit_session"
+      },
+      "csrf": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-CSRF-Token"
+      },
+      "apiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A scoped ShortCircuit API key."
+      }
+    },
+    "schemas": {
+      "AnalyticsEventPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "occurred_at": {
+                  "type": "integer",
+                  "description": "UTC Unix seconds"
+                },
+                "link_id": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "host": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "redirect",
+                    "blocked",
+                    "missing"
+                  ]
+                },
+                "visit_class": {
+                  "enum": [
+                    "human",
+                    "bot",
+                    "unknown"
+                  ]
+                },
+                "source": {
+                  "type": "string"
+                },
+                "referrer": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "occurred_at",
+                "link_id",
+                "host",
+                "kind",
+                "visit_class",
+                "source",
+                "referrer"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next_before_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        },
+        "required": [
+          "items",
+          "next_before_id"
+        ],
+        "additionalProperties": false
+      },
+      "AnalyticsSettings": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "referrers": {
+            "type": "boolean"
+          },
+          "classify": {
+            "type": "boolean"
+          },
+          "honor_dnt": {
+            "type": "boolean"
+          },
+          "detail_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3650
+          },
+          "aggregate_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3650,
+            "description": "At least the configured detail period."
+          }
+        },
+        "required": [
+          "enabled",
+          "referrers",
+          "classify",
+          "honor_dnt",
+          "detail_days",
+          "aggregate_days"
+        ],
+        "additionalProperties": false
+      },
+      "AnalyticsSummary": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          },
+          "today": {
+            "type": "integer",
+            "description": "UTC epoch day"
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "redirect": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "blocked": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "missing": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "human": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "bot": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "unknown": {
+                "type": "integer",
+                "format": "int64"
+              }
+            },
+            "required": [
+              "redirect",
+              "blocked",
+              "missing",
+              "human",
+              "bot",
+              "unknown"
+            ],
+            "additionalProperties": false
+          },
+          "previous_redirects": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "daily": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "day": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "redirect": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              },
+              "required": [
+                "day",
+                "redirect"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "top_links": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "host": {
+                  "type": "string"
+                },
+                "slug": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "total": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              },
+              "required": [
+                "id",
+                "host",
+                "slug",
+                "title",
+                "total"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "dropped": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Dropped events since process startup."
+          }
+        },
+        "required": [
+          "days",
+          "today",
+          "totals",
+          "previous_redirects",
+          "daily",
+          "top_links",
+          "dropped"
+        ],
+        "additionalProperties": false
+      },
+      "ApiKey": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "scopes",
+          "host",
+          "expires_at",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "scopes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyScope"
+            },
+            "maxItems": 3,
+            "uniqueItems": true
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 253,
+            "description": "The normalized host restriction, or null for all hosts."
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Expiration in UTC Unix seconds, or null for no expiration."
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "UTC Unix seconds."
+          }
+        }
+      },
+      "ApiKeyCreated": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "token"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/ApiKey"
+          },
+          "token": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*\\.[a-f0-9]{64}$",
+            "description": "The bearer token. Save it securely when this response is received."
+          }
+        }
+      },
+      "ApiKeyInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "After trimming surrounding whitespace, use 1 to 64 Unicode characters without control characters."
+          },
+          "scopes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyScope"
+            }
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A configured public host. Omit or pass null to permit all hosts."
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "A future time in UTC Unix seconds. Omit or pass null for no expiration."
+          }
+        }
+      },
+      "ApiKeyList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiKey"
+            }
+          }
+        }
+      },
+      "ApiKeyScope": {
+        "type": "string",
+        "enum": [
+          "read",
+          "write",
+          "delete"
+        ],
+        "description": "Link permissions. Use read for retrieval, write for creation and editing, and delete for removal."
+      },
+      "AuthLoginInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "description": "After trimming surrounding whitespace, use 1 to 64 Unicode characters without control characters."
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "writeOnly": true,
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "The current password, up to 1,024 UTF-8 bytes."
+          }
+        }
+      },
+      "AuthPasswordInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "current_password",
+          "password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "format": "password",
+            "writeOnly": true,
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "The current password, up to 1,024 UTF-8 bytes."
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "writeOnly": true,
+            "minLength": 12,
+            "maxLength": 1024,
+            "description": "The new password, at least 12 Unicode characters and at most 1,024 UTF-8 bytes."
+          }
+        }
+      },
+      "AuthRecoveryInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token",
+          "password"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "format": "password",
+            "writeOnly": true,
+            "description": "The one-time token printed by the local CLI."
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "writeOnly": true,
+            "minLength": 12,
+            "maxLength": 1024,
+            "description": "The new password, at least 12 Unicode characters and at most 1,024 UTF-8 bytes."
+          }
+        }
+      },
+      "AuthSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "username",
+          "csrf"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "csrf": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "Send this value as X-CSRF-Token for session-authenticated mutations."
+          }
+        }
+      },
+      "AuthSessionStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "setup_required",
+          "user"
+        ],
+        "properties": {
+          "setup_required": {
+            "type": "boolean",
+            "description": "True until the administrator account exists."
+          },
+          "user": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuthSession"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "AuthSetupInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token",
+          "username",
+          "password"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "format": "password",
+            "writeOnly": true,
+            "description": "The one-time token printed by the local CLI."
+          },
+          "username": {
+            "type": "string",
+            "description": "After trimming surrounding whitespace, use 1 to 64 Unicode characters without control characters."
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "writeOnly": true,
+            "minLength": 12,
+            "maxLength": 1024,
+            "description": "The new password, at least 12 Unicode characters and at most 1,024 UTF-8 bytes."
+          }
+        }
+      },
+      "CatalogCsvPage": {
+        "type": "string",
+        "maxLength": 32768,
+        "description": "UTF-8 CSV up to 32,768 bytes, with up to 100 data rows. Columns in order are version, host, slug, target, title, tags, enabled, and analytics_enabled. Use version 1 per row, a JSON array of strings for tags, and lowercase true or false for Boolean cells. Native exports quote data cells and protect spreadsheet-sensitive values with a reversible apostrophe prefix."
+      },
+      "CatalogDomain": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/CatalogHost"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/CatalogOrigin"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "root_target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "missing_target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "host",
+          "origin",
+          "enabled",
+          "root_target",
+          "missing_target"
+        ]
+      },
+      "CatalogDomainInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/CatalogHost"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/CatalogOrigin"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "root_target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "missing_target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "host",
+          "origin",
+          "enabled"
+        ]
+      },
+      "CatalogDomainList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogDomain"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "CatalogDomainOptions": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "hosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogHost"
+            },
+            "description": "Active public hosts visible to the caller."
+          },
+          "origins": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CatalogOrigin"
+            },
+            "description": "Origins keyed by all visible configured hosts, including disabled hosts."
+          },
+          "local_port": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 65535
+          }
+        },
+        "required": [
+          "hosts",
+          "origins",
+          "local_port"
+        ]
+      },
+      "CatalogDuplicatesInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/CatalogTarget"
+          },
+          "exclude_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "CatalogDuplicatesResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
+                },
+                "host": {
+                  "$ref": "#/components/schemas/CatalogHost"
+                },
+                "slug": {
+                  "$ref": "#/components/schemas/CatalogSlug"
+                },
+                "title": {
+                  "type": "string",
+                  "maxLength": 160,
+                  "description": "Title with no control characters."
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "host",
+                "slug",
+                "title",
+                "enabled"
+              ]
+            },
+            "maxItems": 10
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "True when more than ten matching links remain after exclusion."
+          }
+        },
+        "required": [
+          "items",
+          "has_more"
+        ]
+      },
+      "CatalogExchangePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "const": 1
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogLinkMetadata"
+            },
+            "maxItems": 100
+          },
+          "next_after_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "items",
+          "next_after_id"
+        ]
+      },
+      "CatalogHost": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 253,
+        "description": "Public hostname or IP literal without a port. IPv6 literals use brackets."
+      },
+      "CatalogImportInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "const": 1
+          },
+          "preview": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogLinkMetadata"
+            },
+            "minItems": 1,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "version",
+          "preview",
+          "items"
+        ]
+      },
+      "CatalogImportReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "const": 1
+          },
+          "preview": {
+            "type": "boolean"
+          },
+          "applied": {
+            "type": "boolean",
+            "description": "True when an apply request finished without conflicts."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "host": {
+                  "$ref": "#/components/schemas/CatalogHost"
+                },
+                "slug": {
+                  "$ref": "#/components/schemas/CatalogSlug"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "create",
+                    "unchanged",
+                    "conflict"
+                  ]
+                }
+              },
+              "required": [
+                "host",
+                "slug",
+                "status"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "version",
+          "preview",
+          "applied",
+          "items"
+        ]
+      },
+      "CatalogLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "host": {
+            "$ref": "#/components/schemas/CatalogHost"
+          },
+          "slug": {
+            "$ref": "#/components/schemas/CatalogSlug"
+          },
+          "target": {
+            "$ref": "#/components/schemas/CatalogTarget"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 160,
+            "description": "Title with no control characters."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Nonempty tag up to 40 Unicode characters after trimming, with no commas or control characters."
+            },
+            "maxItems": 20
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "analytics_enabled": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "host",
+          "slug",
+          "target",
+          "title",
+          "tags",
+          "enabled",
+          "analytics_enabled",
+          "created_at"
+        ]
+      },
+      "CatalogLinkCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogHost"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogSlug"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target": {
+            "$ref": "#/components/schemas/CatalogTarget"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "Title of at most 160 Unicode characters after trimming. Control characters are rejected."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "Nonempty tag up to 40 Unicode characters after trimming, with no commas or control characters."
+                },
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "CatalogLinkMetadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/CatalogHost"
+          },
+          "slug": {
+            "$ref": "#/components/schemas/CatalogSlug"
+          },
+          "target": {
+            "$ref": "#/components/schemas/CatalogTarget"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 160,
+            "description": "Title with no control characters."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Nonempty tag up to 40 Unicode characters after trimming, with no commas or control characters."
+            },
+            "maxItems": 20
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "analytics_enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "host",
+          "slug",
+          "target",
+          "title",
+          "tags",
+          "enabled",
+          "analytics_enabled"
+        ]
+      },
+      "CatalogLinkPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogLink"
+            },
+            "maxItems": 100
+          },
+          "next_after_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_after_id"
+        ]
+      },
+      "CatalogLinkPatch": {
+        "description": "Supply at least one non-null field. A supplied tag list replaces the previous list.",
+        "anyOf": [
+          {
+            "required": [
+              "target"
+            ],
+            "properties": {
+              "target": {
+                "$ref": "#/components/schemas/CatalogTarget"
+              }
+            }
+          },
+          {
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string",
+                "description": "Title of at most 160 Unicode characters after trimming. Control characters are rejected."
+              }
+            }
+          },
+          {
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "required": [
+              "analytics_enabled"
+            ],
+            "properties": {
+              "analytics_enabled": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "required": [
+              "tags"
+            ],
+            "properties": {
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "Nonempty tag up to 40 Unicode characters after trimming, with no commas or control characters."
+                },
+                "maxItems": 20
+              }
+            }
+          }
+        ],
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "Title of at most 160 Unicode characters after trimming. Control characters are rejected."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "analytics_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "Nonempty tag up to 40 Unicode characters after trimming, with no commas or control characters."
+                },
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "CatalogOrigin": {
+        "type": "string",
+        "format": "uri",
+        "maxLength": 4096,
+        "description": "Bare HTTP or HTTPS origin with the configured host and an optional port."
+      },
+      "CatalogRedirectCondition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "language"
+              },
+              "value": {
+                "type": "string",
+                "maxLength": 63,
+                "pattern": "^[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8})*$"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "device"
+              },
+              "value": {
+                "type": "string",
+                "enum": [
+                  "desktop",
+                  "mobile",
+                  "tablet",
+                  "unknown"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "os"
+              },
+              "value": {
+                "type": "string",
+                "enum": [
+                  "windows",
+                  "macos",
+                  "linux",
+                  "android",
+                  "ios",
+                  "chromeos",
+                  "unknown"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "browser"
+              },
+              "value": {
+                "type": "string",
+                "enum": [
+                  "edge",
+                  "firefox",
+                  "chrome",
+                  "safari",
+                  "opera",
+                  "unknown"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "query"
+              },
+              "key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "description": "Nonempty decoded query key up to 128 UTF-8 bytes, with no control characters."
+              },
+              "value": {
+                "type": "string",
+                "maxLength": 512,
+                "description": "Decoded query value up to 512 UTF-8 bytes, with no control characters."
+              }
+            },
+            "required": [
+              "type",
+              "key",
+              "value"
+            ]
+          }
+        ]
+      },
+      "CatalogRedirectPolicy": {
+        "description": "Omitted fields use their defaults. Time windows and visit limits require status 302 or 307.",
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    301,
+                    308
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "starts_at": {
+                  "type": "null"
+                },
+                "expires_at": {
+                  "type": "null"
+                },
+                "max_visits": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ],
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "integer",
+            "format": "int64",
+            "enum": [
+              301,
+              302,
+              307,
+              308
+            ],
+            "default": 302
+          },
+          "starts_at": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Inclusive start in Unix seconds."
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Exclusive expiry in Unix seconds. Must follow starts_at when both are specified."
+          },
+          "max_visits": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Maximum successful GET redirects."
+          },
+          "forward_query": {
+            "type": "boolean",
+            "default": false
+          },
+          "forward_path": {
+            "type": "boolean",
+            "default": false
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogRedirectRule"
+            },
+            "maxItems": 16,
+            "default": [],
+            "description": "Ordered rules. The first rule with every condition matching supplies the destination."
+          }
+        }
+      },
+      "CatalogRedirectPolicyDetails": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "integer",
+            "format": "int64",
+            "enum": [
+              301,
+              302,
+              307,
+              308
+            ],
+            "default": 302
+          },
+          "starts_at": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Inclusive start in Unix seconds."
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Exclusive expiry in Unix seconds. Must follow starts_at when both are specified."
+          },
+          "max_visits": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Maximum successful GET redirects."
+          },
+          "forward_query": {
+            "type": "boolean",
+            "default": false
+          },
+          "forward_path": {
+            "type": "boolean",
+            "default": false
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogRedirectRule"
+            },
+            "maxItems": 16,
+            "default": [],
+            "description": "Ordered rules. The first rule with every condition matching supplies the destination."
+          },
+          "visits_used": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Committed visit reservations. Policy replacement preserves this counter."
+          }
+        },
+        "required": [
+          "status",
+          "starts_at",
+          "expires_at",
+          "max_visits",
+          "forward_query",
+          "forward_path",
+          "rules",
+          "visits_used"
+        ]
+      },
+      "CatalogRedirectRule": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/CatalogTarget"
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogRedirectCondition"
+            },
+            "minItems": 1,
+            "maxItems": 8
+          }
+        },
+        "required": [
+          "target",
+          "conditions"
+        ]
+      },
+      "CatalogSlug": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "pattern": "^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$",
+        "description": "Exact case-sensitive path without a leading slash."
+      },
+      "CatalogTagDelete": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nonempty tag up to 40 Unicode characters after trimming, with no commas or control characters."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "CatalogTagList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Nonempty tag up to 40 Unicode characters after trimming, with no commas or control characters."
+                },
+                "link_count": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "name",
+                "link_count"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "CatalogTagRename": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nonempty tag up to 40 Unicode characters after trimming, with no commas or control characters."
+          },
+          "new_name": {
+            "type": "string",
+            "description": "Nonempty tag up to 40 Unicode characters after trimming, with no commas or control characters."
+          }
+        },
+        "required": [
+          "name",
+          "new_name"
+        ]
+      },
+      "CatalogTarget": {
+        "type": "string",
+        "format": "uri",
+        "maxLength": 4096,
+        "description": "Absolute HTTP or HTTPS destination with valid percent escapes and no credentials. The server preserves the submitted bytes."
+      },
+      "Problem": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "title",
+          "code"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}
