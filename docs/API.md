@@ -12,6 +12,7 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `POST /api/v1/auth/recover` | Accepts the CLI recovery `token` and a new `password`. Revokes existing sessions and returns a replacement session. |
 | `POST /api/v1/auth/password` and `POST /api/v1/auth/logout` | Require a browser session and CSRF token. Password change accepts `current_password` and `password`. Logout revokes the cookie and returns `204`. |
 | `GET /api/v1/domains` | Returns active `hosts`, an `origins` map for configured hosts visible to the caller, and the local public port. |
+| `POST /api/v1/links/duplicates` | Admin session lookup for an exact stored destination. Accepts `target` and an optional positive `exclude_id`. Returns up to ten items newest first and `has_more`. |
 | `GET /api/v1/links` | Accepts the optional `after_id` cursor. Returns `items` and `next_after_id` with up to 100 records per page. |
 | `POST /api/v1/links` | Accepts `target` and optional `host`, `slug`, `title`, and `tags`. Returns `201` with the created link. A duplicate slug on the same host returns `409`. |
 | `PATCH /api/v1/links/{id}` | Accepts any of `target`, `title`, `enabled`, `tags`, and `analytics_enabled`. A supplied tag list replaces the previous list. The published host and slug remain fixed. |

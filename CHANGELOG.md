@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add exact destination lookup and a local preview for removing tracking parameters.
+
 - Add verified local backups and offline restore with a rollback database.
 
 - Add UTC analytics reports, coarse visitor classification, privacy preferences, and data retention and deletion.

@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { readFile } = require('node:fs/promises');
 const { chromium } = require(process.env.SHORTCIRCUIT_PLAYWRIGHT);
 
 const admin = 'http://localhost:8081';
@@ -40,6 +41,18 @@ async function verify() {
     const link = await createdResponse.json();
     await page.getByText('Test guide', { exact: true }).waitFor();
 
+    await page.getByRole('button', { name: 'Create link', exact: true }).click();
+    const unclean = target.replace('#start', '&utm_source=sample#start');
+    const urlField = dialog.getByLabel('Destination URL', { exact: true });
+    await urlField.fill(unclean);
+    await dialog.getByRole('button', { name: 'Review URL parameters', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Use proposed URL', exact: true }).click();
+    assert.equal(await urlField.inputValue(), target);
+    await dialog.getByRole('button', { name: 'Find matching links', exact: true }).click();
+    await dialog.getByRole('list', { name: 'Matching links', exact: true })
+      .getByText('Test guide', { exact: true }).waitFor();
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+
     const redirect = await page.request.get(publicOrigin + '/test/guide', { maxRedirects: 0 });
     assert.equal(redirect.status(), 302);
     assert.equal(redirect.headers().location, target);
@@ -48,10 +61,17 @@ async function verify() {
     await page.getByRole('button', { name: 'QR code', exact: true }).click();
     const qr = page.getByRole('dialog', { name: 'QR code', exact: true });
     await qr.getByRole('img', { name: 'QR code' }).waitFor();
-    const png = await page.request.get(admin + '/api/v1/links/' + link.id + '/qr?format=png');
+    await qr.getByRole('combobox', { name: 'Resolution in pixels', exact: true }).selectOption('512');
+    const downloaded = page.waitForEvent('download');
+    await qr.getByRole('button', { name: 'Download PNG', exact: true }).click();
+    const qrDownload = await downloaded;
+    const png = await page.request.get(admin + '/api/v1/links/' + link.id + '/qr?format=png&size=512');
+    assert.equal(qrDownload.suggestedFilename(), 'shortcircuit-link-' + link.id + '.png');
     assert.equal(png.status(), 200);
     assert.equal(png.headers()['content-type'], 'image/png');
-    assert.equal((await png.body()).subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    const pngBytes = await readFile(await qrDownload.path());
+    assert.equal(pngBytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    assert.equal(pngBytes.readUInt32BE(16), 512);
     await qr.getByRole('button', { name: 'Close', exact: true }).click();
 
     await page.getByRole('button', { name: 'Redirect settings', exact: true }).click();
@@ -100,7 +120,7 @@ async function verify() {
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);
     assert.deepEqual(errors, []);
-    console.log('Browser smoke passed: setup, create link, QR, visit limits, analytics controls, native import, mobile layout and sign-out.');
+    console.log('Browser smoke passed: setup, create link, QR, visit limits, analytics controls, native import, URL tools, mobile layout and sign-out.');
   } finally {
     await browser.close();
   }
