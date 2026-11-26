@@ -146,10 +146,9 @@ async fn save_tag_details(
         .color
         .map(|color| {
             let color = color.trim();
-            if color
-                .strip_prefix('#')
-                .is_some_and(|hex| hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
-            {
+            if color.strip_prefix('#').is_some_and(|hex| {
+                hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }) {
                 Ok(color.to_ascii_lowercase())
             } else {
                 Err(Problem::invalid("invalid_tag_color"))
@@ -178,7 +177,10 @@ async fn save_tag_details(
         .await
         .map_err(|_| Problem::unavailable())?;
     }
-    transaction.commit().await.map_err(|_| Problem::unavailable())?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| Problem::unavailable())?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -229,7 +231,10 @@ async fn rename_tag(
     .await
     .map_err(|_| Problem::unavailable())?;
     delete_tag(&mut transaction, name).await?;
-    transaction.commit().await.map_err(|_| Problem::unavailable())?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| Problem::unavailable())?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -287,7 +292,10 @@ async fn remove_tag(
         .map_err(|_| Problem::unavailable())?;
     require_tag(&mut transaction, name).await?;
     delete_tag(&mut transaction, name).await?;
-    transaction.commit().await.map_err(|_| Problem::unavailable())?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| Problem::unavailable())?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -379,25 +387,45 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let router = routes(pool.clone(), PublicHosts::parse("go.example").unwrap(), 8080);
+        let router = routes(
+            pool.clone(),
+            PublicHosts::parse("go.example").unwrap(),
+            8080,
+        );
         let path = "/api/v1/catalog/tags";
         let details = "/api/v1/catalog/tags/details";
         for (body, expected) in [
-            (json!({"name":"source", "color":"#D3FC51", "description":"  Team\nnotes  "}), StatusCode::NO_CONTENT),
-            (json!({"name":"destination", "color":"#40c98a"}), StatusCode::NO_CONTENT),
-            (json!({"name":"missing", "color":"#ffffff"}), StatusCode::NOT_FOUND),
-            (json!({"name":"source", "color":"var(--ink)"}), StatusCode::UNPROCESSABLE_ENTITY),
+            (
+                json!({"name":"source", "color":"#D3FC51", "description":"  Team\nnotes  "}),
+                StatusCode::NO_CONTENT,
+            ),
+            (
+                json!({"name":"destination", "color":"#40c98a"}),
+                StatusCode::NO_CONTENT,
+            ),
+            (
+                json!({"name":"missing", "color":"#ffffff"}),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                json!({"name":"source", "color":"var(--ink)"}),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
         ] {
             let saved = request(&router, Method::PATCH, details, body).await;
             assert_eq!(saved.status(), expected);
         }
-        let color: String = sqlx::query_scalar("SELECT color FROM tag_details WHERE name = 'source'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let color: String =
+            sqlx::query_scalar("SELECT color FROM tag_details WHERE name = 'source'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(color, "#d3fc51");
         let merged = request(
-            &router, Method::PATCH, path, json!({"name":"source", "new_name":"destination"}),
+            &router,
+            Method::PATCH,
+            path,
+            json!({"name":"source", "new_name":"destination"}),
         )
         .await;
         assert_eq!(merged.status(), StatusCode::NO_CONTENT);
@@ -406,16 +434,22 @@ mod tests {
             .await
             .unwrap();
         let renamed = request(
-            &router, Method::PATCH, path, json!({"name":"destination", "new_name":"saved"}),
+            &router,
+            Method::PATCH,
+            path,
+            json!({"name":"destination", "new_name":"saved"}),
         )
         .await;
         assert_eq!(renamed.status(), StatusCode::NO_CONTENT);
         let listed = request(&router, Method::GET, path, Value::Null).await;
         let listed: Value =
             serde_json::from_slice(&to_bytes(listed.into_body(), 8192).await.unwrap()).unwrap();
-        assert_eq!(listed, json!({"items":[
-            {"name":"saved", "link_count":0, "color":"#40c98a", "description":"Team\nnotes"}
-        ]}));
+        assert_eq!(
+            listed,
+            json!({"items":[
+                {"name":"saved", "link_count":0, "color":"#40c98a", "description":"Team\nnotes"}
+            ]})
+        );
         let removed = request(&router, Method::DELETE, path, json!({"name":"saved"})).await;
         assert_eq!(removed.status(), StatusCode::NO_CONTENT);
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM tag_details")

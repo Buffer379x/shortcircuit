@@ -506,7 +506,9 @@ async function verify() {
 
     await page.getByRole('button', { name: 'Tags', exact: true }).click();
     const tagRow = page.locator('.catalog-row').filter({ has: page.getByText('internal', { exact: true }) });
-    await tagRow.getByRole('button', { name: 'Edit tag details', exact: true }).click();
+    const editTagDetails = tagRow.getByRole('button', { name: 'Edit tag details', exact: true });
+    await editTagDetails.focus();
+    await editTagDetails.press('Enter');
     const tagDetails = page.getByRole('dialog', { name: 'Edit tag details', exact: true });
     await tagDetails.getByLabel('Use a custom color', { exact: true }).check();
     await tagDetails.getByLabel('Tag color', { exact: true }).fill('#2d7aed');
@@ -514,10 +516,11 @@ async function verify() {
     await tagDetails.getByRole('button', { name: 'Save changes', exact: true }).click();
     await tagDetails.waitFor({ state: 'hidden' });
     await tagRow.getByText('Team links', { exact: true }).waitFor();
+    assert.equal(await editTagDetails.evaluate(button => button === document.activeElement), true);
 
     await page.getByRole('button', { name: 'Links', exact: true }).click();
     const internalTag = linkTable.getByRole('button', { name: 'internal', exact: true });
-    await internalTag.waitFor();
+    await internalTag.locator('span').waitFor();
     assert.equal(await internalTag.getAttribute('title'), 'Team links');
     assert.equal(await internalTag.locator('span').evaluate(mark => mark.style.getPropertyValue('--tag-color')), '#2d7aed');
     await page.getByRole('button', { name: 'Create link', exact: true }).click();
@@ -525,6 +528,8 @@ async function verify() {
     await tagField.fill('other, inte');
     await dialog.getByRole('group', { name: 'Suggested tags', exact: true })
       .getByRole('button', { name: 'internal', exact: true }).click();
+    await page.waitForFunction(() => document.activeElement?.getAttribute('name') === 'tags'
+      && document.activeElement.value === 'other, internal, ');
     assert.equal((await tagField.inputValue()).trimEnd(), 'other, internal,');
     assert.equal(await tagField.evaluate(input => input === document.activeElement), true);
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();

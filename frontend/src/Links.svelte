@@ -579,12 +579,16 @@
               <td role="cell">
                 <span class="cell-label" aria-hidden="true">{t.tags}</span>
                 <div class="tags">
-                  {#each link.tags as value (value)}
+                  {#each link.tags as value, tagIndex (value)}
+                    {@const details = tagDetails.get(value)}
+                    {@const descriptionId = `link-tag-description-${link.id}-${tagIndex}`}
                     <button class="tag tag-with-marker" type="button" aria-pressed={tagsFilter.includes(value)}
-                      title={tagDetails.get(value)?.description}
+                      aria-describedby={details?.description ? descriptionId : undefined}
+                      title={details?.description}
                       disabled={tagsFilter.length >= 20 && !tagsFilter.includes(value)} onclick={() => toggleTag(value)}>
-                      <TagMark color={tagDetails.get(value)?.color} />{value}
+                      <TagMark color={details?.color} />{value}
                     </button>
+                    {#if details?.description}<span class="visually-hidden" id={descriptionId}>{details.description}</span>{/if}
                   {/each}
                   {#if !link.tags.length}<span class="muted" aria-hidden="true">—</span>{/if}
                 </div>

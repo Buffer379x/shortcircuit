@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import type { Api, Domain, Tag } from './api';
   import Dialog from './Dialog.svelte';
   import { problemMessage } from './format';
@@ -25,12 +25,13 @@
   let useTagColor = $state(false);
   let tagColor = $state('#60a5fa');
   let tagDescription = $state('');
+  let heading: HTMLHeadingElement;
   const count = $derived(new Intl.NumberFormat(language));
 
   onMount(() => { void load(); });
 
-  async function load() {
-    loading = true;
+  async function load(showLoading = true) {
+    loading = showLoading;
     error = null;
     try {
       if (kind === 'domains') domains = (await api<{ items: Domain[] }>('/catalog/domains')).items;
@@ -64,6 +65,7 @@
     if (saving) return;
     saving = true;
     formError = null;
+    let focusHeading = false;
     try {
       if (action === 'domain' && domain) {
         const updated = await api<Domain>('/catalog/domains', 'POST', {
@@ -79,7 +81,8 @@
         onDomainSaved();
       } else if (action === 'rename') {
         await api('/catalog/tags', 'PATCH', { name: tag, new_name: newName.trim() });
-        await load();
+        await load(false);
+        focusHeading = Boolean(error) || !tags.some((item) => item.name === tag);
       } else if (action === 'tag-details') {
         if ([...tagDescription.trim()].length > 500) {
           formError = 'invalidDescription';
@@ -88,12 +91,18 @@
         await api('/catalog/tags/details', 'PATCH', {
           name: tag, color: useTagColor ? tagColor : null, description: tagDescription.trim(),
         });
-        await load();
+        await load(false);
+        focusHeading = Boolean(error) || !tags.some((item) => item.name === tag);
       } else if (action === 'delete') {
         await api('/catalog/tags', 'DELETE', { name: tag });
         tags = tags.filter((item) => item.name !== tag);
+        focusHeading = true;
       }
       action = null;
+      if (focusHeading) {
+        await tick();
+        heading.focus();
+      }
     } catch (result) {
       formError = problemMessage(result);
     } finally {
@@ -104,7 +113,7 @@
 
 <div class="page-head">
   <div>
-    <h1>{t[kind]}</h1>
+    <h1 tabindex="-1" bind:this={heading}>{t[kind]}</h1>
     {#if kind === 'domains'}<p>{t.domainsDescription}</p>{/if}
   </div>
   {#if kind === 'domains'}
@@ -115,7 +124,7 @@
 <section class="panel panel-pad stack" aria-label={t[kind]} aria-busy={loading}>
   {#if error}
     <p class="notice error" role="alert">{t[error]}</p>
-    <div><button class="button" type="button" onclick={load}>{t.retry}</button></div>
+    <div><button class="button" type="button" onclick={() => load()}>{t.retry}</button></div>
   {:else if loading}
     <p role="status">{t.loading}</p>
   {:else if kind === 'domains'}
