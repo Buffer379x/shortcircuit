@@ -66,8 +66,8 @@
 <section class="panel account-panel stack" aria-labelledby="display-heading">
   <h2 id="display-heading">{t.displayPreferences}</h2>
   <label class="field">
-    <span>{t.displayTimezone}</span>
-    <select bind:value={timeZone} aria-describedby="display-timezone-hint">
+    <span id="display-timezone-label">{t.displayTimezone}</span>
+    <select bind:value={timeZone} aria-labelledby="display-timezone-label" aria-describedby="display-timezone-hint">
       <option value={undefined}>{t.browserTimezone} · {defaultTimeZone()}</option>
       {#each options as name (name)}
         <option value={name}>{name.replaceAll('_', ' ')}</option>

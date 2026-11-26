@@ -629,7 +629,7 @@ async function verify() {
 
     await page.getByRole('button', { name: 'Account', exact: true }).click();
     await page.getByLabel('Display timezone', { exact: true }).selectOption('UTC');
-    assert.equal(await page.evaluate(() => localStorage.getItem('shortcircuit-timezone')), 'UTC');
+    await page.waitForFunction(() => localStorage.getItem('shortcircuit-timezone') === 'UTC');
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);
