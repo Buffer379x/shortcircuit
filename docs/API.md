@@ -19,8 +19,8 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `POST /api/v1/links/search` | Searches, filters, and sorts all links in the administrator's catalog. Requires a browser session, Origin and CSRF. Search terms and cursors are sent in the JSON body. |
 | `POST /api/v1/links/bulk` | Applies one action atomically to 1 to 50 selected links. Requires a browser session, Origin, and CSRF. |
 | `POST /api/v1/links/bulk/export` | Downloads the selected links as native JSON or CSV. Requires a browser session, Origin, and CSRF. |
-| `POST /api/v1/links` | Accepts `target` and optional `host`, `slug`, `title`, `tags`, and `protection`. The protection object takes `one_time` and optional `password`. Both the link and protection commit together. Returns `201`, or `409` for a duplicate slug on the same host. |
-| `PATCH /api/v1/links/{id}` | Accepts any of `target`, `title`, `enabled`, `tags`, and `analytics_enabled`. A supplied tag list replaces the previous list. The published host and slug remain fixed. |
+| `POST /api/v1/links` | Accepts `target` and optional `host`, `slug`, `title`, `description`, `tags`, `enabled`, `analytics_enabled`, and `protection`. The protection object takes `one_time` and optional `password`. Both the link and protection commit together. Returns `201`, or `409` for a duplicate slug on the same host. |
+| `PATCH /api/v1/links/{id}` | Accepts any of `target`, `title`, `description`, `enabled`, `tags`, and `analytics_enabled`. A supplied tag list replaces the previous list. The published host and slug remain fixed. |
 | `DELETE /api/v1/links/{id}` | Deletes a link and returns `204`. |
 | `GET` and `POST /api/v1/keys` | Require a browser session. Listing returns key metadata. Creation accepts `name`, `scopes`, optional `host`, and optional `expires_at` in Unix seconds. The response contains `key` and the one-time `token`. |
 | `DELETE /api/v1/keys/{id}` | Revokes the key and returns `204`. |

@@ -377,6 +377,8 @@ async function verify() {
     const linkTable = page.getByRole('table', { name: 'Links', exact: true });
     await linkTable.getByRole('columnheader', { name: 'Clicks', exact: true }).waitFor();
     await linkTable.getByRole('columnheader', { name: 'Last used', exact: true }).waitFor();
+    await page.setViewportSize({ width: 768, height: 1024 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole('combobox', { name: 'Sort links', exact: true }).selectOption('slug_asc');
     await linkTable.locator('.link-short').first().filter({ hasText: 'localhost/backup-check' }).waitFor();
