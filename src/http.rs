@@ -99,6 +99,30 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         Ok(_) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
+    if uri.path() == "/robots.txt" {
+        let body = if domain.block_crawlers {
+            "User-agent: *\nDisallow: /\n"
+        } else {
+            "User-agent: *\nDisallow:\n"
+        };
+        return match parts.method {
+            Method::GET => {
+                ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response()
+            }
+            Method::HEAD => (
+                [
+                    (
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("text/plain; charset=utf-8"),
+                    ),
+                    (header::CONTENT_LENGTH, HeaderValue::from(body.len())),
+                ],
+                "",
+            )
+                .into_response(),
+            _ => method_not_allowed(),
+        };
+    }
     let Some(slug) = uri.path().strip_prefix('/') else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -167,7 +191,7 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
             _ => method_not_allowed(),
         };
     }
-    let (kind, response) = match result.outcome {
+    let (kind, mut response) = match result.outcome {
         Outcome::Redirect { target, status } => (Kind::Redirect, respond(&target, status)),
         Outcome::Missing => (
             Kind::Missing,
@@ -176,6 +200,17 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         Outcome::Blocked => (Kind::Blocked, StatusCode::NOT_FOUND.into_response()),
         Outcome::Challenge(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
+    if response.status().is_redirection()
+        && result
+            .subject
+            .as_ref()
+            .is_some_and(|subject| subject.noindex)
+    {
+        response.headers_mut().insert(
+            "x-robots-tag",
+            HeaderValue::from_static("noindex, nofollow"),
+        );
+    }
     if parts.method != Method::HEAD
         && (!post || response.status() == StatusCode::SEE_OTHER)
         && !response.status().is_server_error()

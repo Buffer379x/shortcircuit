@@ -20,6 +20,7 @@ export interface Domain {
   enabled: boolean;
   root_target: string | null;
   missing_target: string | null;
+  block_crawlers: boolean;
 }
 
 export interface Tag {
@@ -49,8 +50,15 @@ export interface Policy {
   max_visits: number | null;
   forward_query: boolean;
   forward_path: boolean;
+  noindex?: boolean;
   rules: RedirectRule[];
   visits_used: number;
+}
+
+export interface SimulationResult {
+  target: string;
+  status: number;
+  rule: number | null;
 }
 
 export interface Link {

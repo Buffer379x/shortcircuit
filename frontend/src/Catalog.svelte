@@ -45,7 +45,9 @@
 
   function editDomain(item?: Domain) {
     existing = Boolean(item);
-    domain = item ? { ...item } : { host: '', origin: '', enabled: true, root_target: null, missing_target: null };
+    domain = item ? { ...item } : {
+      host: '', origin: '', enabled: true, root_target: null, missing_target: null, block_crawlers: false,
+    };
     formError = null;
     action = 'domain';
   }
@@ -168,6 +170,10 @@
         <label class="field"><span>{t.domain}</span><input bind:value={domain.host} required readonly={existing} disabled={saving} placeholder="go.example.com" /></label>
         <label class="field"><span>{t.publicOrigin}</span><input type="url" bind:value={domain.origin} required disabled={saving} placeholder="https://go.example.com" /></label>
         <label class="row"><input type="checkbox" bind:checked={domain.enabled} disabled={saving} />{t.enabled}</label>
+        <label class="field">
+          <span class="row"><input type="checkbox" bind:checked={domain.block_crawlers} disabled={saving} />{t.blockCrawlers}</span>
+          <small>{t.blockCrawlersHint}</small>
+        </label>
         <label class="field"><span>{t.rootTarget}</span><input type="url" bind:value={domain.root_target} disabled={saving} /></label>
         <label class="field"><span>{t.missingTarget}</span><input type="url" bind:value={domain.missing_target} disabled={saving} /></label>
       {:else if action === 'rename'}

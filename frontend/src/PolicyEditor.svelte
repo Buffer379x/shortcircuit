@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { Api, ConditionType, Link, Policy, RedirectCondition, RedirectRule } from './api';
+  import type { Api, ConditionType, Link, LinkPolicy, Policy, RedirectCondition, RedirectRule, SimulationResult } from './api';
   import Dialog from './Dialog.svelte';
   import { problemMessage } from './format';
   import type { Messages } from './i18n';
@@ -26,11 +26,20 @@
   let used = $state(0);
   let forwardQuery = $state(false);
   let forwardPath = $state(false);
+  let noindex = $state(false);
   let rules = $state<RedirectRule[]>([]);
   let loading = $state(true);
   let ready = $state(false);
   let saving = $state(false);
   let error = $state<keyof Messages | null>(null);
+  let sampleQuery = $state('');
+  let sampleLanguage = $state('');
+  let sampleAgent = $state('');
+  let samplePath = $state('');
+  let simulating = $state(false);
+  let simulationError = $state<keyof Messages | null>(null);
+  let simulation = $state<{ key: string; result: SimulationResult } | null>(null);
+  const currentSimulation = $derived(simulation && simulation.key === JSON.stringify(simulationInput()) ? simulation.result : null);
 
   onMount(() => { void load(); });
 
@@ -57,6 +66,7 @@
       used = policy.visits_used;
       forwardQuery = policy.forward_query;
       forwardPath = policy.forward_path;
+      noindex = policy.noindex ?? false;
       rules = policy.rules;
       ready = true;
     } catch (result) {
@@ -77,22 +87,60 @@
     rules = moved;
   }
 
+  function policyDraft(): LinkPolicy {
+    return {
+      status, starts_at: asTimestamp(starts), expires_at: asTimestamp(expires), max_visits: maximum ?? null,
+      forward_query: forwardQuery, forward_path: forwardPath, noindex, rules,
+    };
+  }
+
+  function simulationInput() {
+    return {
+      policy: policyDraft(),
+      query: sampleQuery.replace(/^\?/, ''),
+      accept_language: sampleLanguage,
+      user_agent: sampleAgent,
+      extra_path: forwardPath ? samplePath.trim() : '',
+    };
+  }
+
+  async function simulate() {
+    if (!ready || saving || simulating) return;
+    simulating = true;
+    simulation = null;
+    simulationError = null;
+    const input = simulationInput();
+    const key = JSON.stringify(input);
+    try {
+      const result = await api<SimulationResult>(`${path}/simulate`, 'POST', input);
+      simulation = { key, result };
+    } catch (failure) {
+      simulationError = problemMessage(failure);
+    } finally {
+      simulating = false;
+    }
+  }
+
+  function simulateOnEnter(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void simulate();
+    }
+  }
+
   async function save(event: SubmitEvent) {
     event.preventDefault();
     if (saving || !ready) return;
     error = null;
-    const start = asTimestamp(starts);
-    const end = asTimestamp(expires);
+    const draft = policyDraft();
+    const { starts_at: start, expires_at: end } = draft;
     if ((start !== null && !Number.isFinite(start)) || (end !== null && !Number.isFinite(end))) {
       error = 'invalidRedirectWindow';
       return;
     }
     saving = true;
     try {
-      await api<Policy>(path, 'PATCH', {
-        status, starts_at: start, expires_at: end, max_visits: maximum ?? null,
-        forward_query: forwardQuery, forward_path: forwardPath, rules,
-      });
+      await api<Policy>(path, 'PATCH', draft);
       onsaved();
     } catch (result) {
       error = problemMessage(result);
@@ -127,6 +175,10 @@
           <label class="field"><span>{t.visitLimit}</span><input type="number" min="1" max={Number.MAX_SAFE_INTEGER} step="1" bind:value={maximum} /><small>{t.visitsUsed} · {used}</small></label>
           <label class="row"><input type="checkbox" bind:checked={forwardQuery} />{t.forwardQuery}</label>
           <label class="row"><input type="checkbox" bind:checked={forwardPath} />{t.forwardPath}</label>
+          <label class="field">
+            <span class="row"><input type="checkbox" bind:checked={noindex} />{t.requestNoIndex}</span>
+            <small>{t.requestNoIndexHint}</small>
+          </label>
           <div class="stack compact">
             <h3>{t.redirectRules}</h3>
             <p>{t.ruleHint}</p>
@@ -170,6 +222,27 @@
           {/each}
           <div><button type="button" class="button" disabled={rules.length >= 16} onclick={() => rules.push({ target: '', conditions: [queryCondition()] })}>{t.addRule}</button></div>
         </fieldset>
+        <details class="rule">
+          <summary>{t.ruleSimulator}</summary>
+          <fieldset disabled={saving || simulating} class="stack compact simulator">
+            <legend class="visually-hidden">{t.ruleSimulator}</legend>
+            <p>{t.ruleSimulatorHint}</p>
+            <label class="field"><span>{t.simulateQuery}</span><input bind:value={sampleQuery} maxlength="4097" placeholder="lang=de" onkeydown={simulateOnEnter} /></label>
+            <label class="field"><span>{t.simulateLanguage}</span><input bind:value={sampleLanguage} maxlength="256" placeholder="de-DE,en;q=0.8" onkeydown={simulateOnEnter} /></label>
+            <label class="field"><span>{t.simulateAgent}</span><input bind:value={sampleAgent} maxlength="1024" onkeydown={simulateOnEnter} /></label>
+            {#if forwardPath}
+              <label class="field"><span>{t.simulatePath}</span><input bind:value={samplePath} maxlength="199" placeholder="Guide/PDF" onkeydown={simulateOnEnter} /></label>
+            {/if}
+            <div><button type="button" class="button" onclick={simulate}>{simulating ? t.loading : t.runSimulation}</button></div>
+          </fieldset>
+          {#if simulationError}<p class="notice error" role="alert">{t[simulationError]}</p>{/if}
+          {#if currentSimulation}
+            <div class="notice stack compact" role="status">
+              <strong>{currentSimulation.status} · {currentSimulation.rule === null ? t.simulationFallback : `${t.rule} ${currentSimulation.rule}`}</strong>
+              <code>{currentSimulation.target}</code>
+            </div>
+          {/if}
+        </details>
         {#if error}<p class="notice error" role="alert">{t[error]}</p>{/if}
       {/if}
     </div>
@@ -185,5 +258,6 @@
   .rule { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
   .condition { padding-block: 8px; border-block-end: 1px solid var(--line); }
   .rule-actions { flex-wrap: wrap; }
+  .simulator { margin-block: 10px; }
   h3 { font-size: 1rem; }
 </style>

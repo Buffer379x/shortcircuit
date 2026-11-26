@@ -12,6 +12,7 @@ LINK_SELECTION = MIGRATION.with_name("0011_link_selection.sql")
 LINK_ORGANIZATION = MIGRATION.with_name("0012_link_organization.sql")
 LINK_DESCRIPTION = MIGRATION.with_name("0013_link_description.sql")
 TAG_DETAILS = MIGRATION.with_name("0014_tag_details.sql")
+CRAWLER_CONTROLS = MIGRATION.with_name("0015_crawler_controls.sql")
 
 
 class LinkSchemaTests(unittest.TestCase):
@@ -224,6 +225,25 @@ class LinkSchemaTests(unittest.TestCase):
         ]:
             with self.subTest(name=row[0]), self.assertRaises(sqlite3.IntegrityError):
                 db.execute("INSERT INTO tag_details(name, color, description) VALUES (?, ?, ?)", row)
+
+
+    def test_crawler_controls_leave_existing_domains_and_links_permissive(self):
+        db = self.database()
+        for migration in sorted(MIGRATION.parent.glob("*.sql")):
+            if MIGRATION < migration < CRAWLER_CONTROLS:
+                db.executescript(migration.read_text())
+        self.insert(db, "go.example", "notes")
+        db.execute("INSERT INTO domains (host, origin) VALUES ('go.example', 'https://go.example')")
+        db.execute("""INSERT INTO link_redirect_policies
+                      (link_id, status, forward_query, forward_path, rules)
+                      VALUES (1, 302, 0, 0, '[]')""")
+        self.assertTrue(CRAWLER_CONTROLS.is_file(), "expected a versioned crawler controls migration")
+        db.executescript(CRAWLER_CONTROLS.read_text())
+        self.assertEqual(db.execute("SELECT block_crawlers FROM domains").fetchone(), (0,))
+        self.assertEqual(db.execute("SELECT noindex FROM link_redirect_policies").fetchone(), (0,))
+        for table, field in [("domains", "block_crawlers"), ("link_redirect_policies", "noindex")]:
+            with self.subTest(field=field), self.assertRaises(sqlite3.IntegrityError):
+                db.execute(f"UPDATE {table} SET {field} = 2")
 
 
 if __name__ == "__main__":

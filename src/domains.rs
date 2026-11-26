@@ -16,6 +16,7 @@ pub(crate) struct Domain {
     pub(crate) enabled: bool,
     pub(crate) root_target: Option<String>,
     pub(crate) missing_target: Option<String>,
+    pub(crate) block_crawlers: bool,
 }
 
 pub(crate) async fn list(
@@ -24,7 +25,7 @@ pub(crate) async fn list(
     local_port: u16,
 ) -> Result<Vec<Domain>, sqlx::Error> {
     let mut managed: BTreeMap<_, _> = sqlx::query_as::<_, Domain>(
-        "SELECT host, origin, enabled, root_target, missing_target FROM domains",
+        "SELECT host, origin, enabled, root_target, missing_target, block_crawlers FROM domains",
     )
     .fetch_all(pool)
     .await?
@@ -76,7 +77,8 @@ pub(crate) async fn lookup(
     local_port: u16,
 ) -> Result<Option<Domain>, sqlx::Error> {
     let domain = sqlx::query_as::<_, Domain>(
-        "SELECT host, origin, enabled, root_target, missing_target FROM domains WHERE host = ?",
+        "SELECT host, origin, enabled, root_target, missing_target, block_crawlers
+         FROM domains WHERE host = ?",
     )
     .bind(host)
     .fetch_optional(pool)
@@ -88,28 +90,36 @@ pub(crate) async fn lookup(
     }))
 }
 
-pub(crate) async fn save(pool: &SqlitePool, domain: &Domain) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
-        "INSERT INTO domains (host, origin, enabled, root_target, missing_target)
-         SELECT ?, ?, ?, ?, ?
+pub(crate) async fn save(
+    pool: &SqlitePool,
+    domain: &Domain,
+    block_crawlers: Option<bool>,
+) -> Result<Option<Domain>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, Domain>(
+        "INSERT INTO domains (host, origin, enabled, root_target, missing_target, block_crawlers)
+         SELECT ?, ?, ?, ?, ?, coalesce(?, 0)
          WHERE EXISTS (SELECT 1 FROM domains WHERE host = ?)
             OR (SELECT COUNT(*) FROM domains) < ?
          ON CONFLICT (host) DO UPDATE SET
             origin = excluded.origin,
             enabled = excluded.enabled,
             root_target = excluded.root_target,
-            missing_target = excluded.missing_target",
+            missing_target = excluded.missing_target,
+            block_crawlers = coalesce(?, domains.block_crawlers)
+         RETURNING host, origin, enabled, root_target, missing_target, block_crawlers",
     )
     .bind(&domain.host)
     .bind(&domain.origin)
     .bind(domain.enabled)
     .bind(&domain.root_target)
     .bind(&domain.missing_target)
+    .bind(block_crawlers)
     .bind(&domain.host)
     .bind(MAX_MANAGED_DOMAINS)
-    .execute(pool)
+    .bind(block_crawlers)
+    .fetch_all(pool)
     .await?;
-    Ok(result.rows_affected() != 0)
+    Ok(rows.into_iter().next())
 }
 
 pub(crate) fn canonical_origin(host: &str, origin: &str) -> Option<String> {
@@ -157,6 +167,7 @@ fn default_domain(host: &str, local_port: u16) -> Domain {
         enabled: true,
         root_target: None,
         missing_target: None,
+        block_crawlers: false,
     }
 }
 
@@ -235,8 +246,9 @@ mod tests {
             enabled: false,
             root_target: None,
             missing_target: None,
+            block_crawlers: false,
         };
-        assert!(save(&pool, &go).await.unwrap());
+        assert!(save(&pool, &go, None).await.unwrap().is_some());
         let saved = lookup(&pool, &hosts, "go.example", 8180)
             .await
             .unwrap()
@@ -254,10 +266,11 @@ mod tests {
             enabled: true,
             root_target: None,
             missing_target: Some("https://example.test/help".into()),
+            block_crawlers: false,
         };
-        assert!(save(&pool, &extra).await.unwrap());
+        assert!(save(&pool, &extra, None).await.unwrap().is_some());
         go.enabled = true;
-        assert!(save(&pool, &go).await.unwrap());
+        assert!(save(&pool, &go, None).await.unwrap().is_some());
         assert_eq!(
             active_hosts(&pool, &hosts).await.unwrap(),
             ["go.example", "localhost", "[::1]", "new.example"]

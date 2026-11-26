@@ -443,6 +443,220 @@ async fn catalog_combines_multiple_tags_with_all_or_any() {
 const QR_TEMPLATES: &str = "/api/v1/qr/templates";
 
 #[tokio::test]
+async fn crawler_controls_are_host_bound_and_preserve_direct_redirects() {
+    let app = App::start().await;
+    let (cookie, csrf) = app.setup().await;
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    let saved = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/catalog/domains",
+        &headers,
+        Some(json!({"host":"go.example", "origin":"https://go.example",
+                    "enabled":true, "block_crawlers":true})),
+    )
+    .await;
+    assert_eq!(saved.status(), StatusCode::OK);
+    let updated = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/catalog/domains",
+        &headers,
+        Some(json!({"host":"go.example", "origin":"https://go.example", "enabled":true})),
+    )
+    .await;
+    assert_eq!(response_body(updated).await["block_crawlers"], true);
+    let robots = "/robots.txt";
+    for (host, expected) in [
+        ("go.example", "User-agent: *\nDisallow: /\n"),
+        ("s.example", "User-agent: *\nDisallow:\n"),
+    ] {
+        let response = request(&app.public, Method::GET, robots, &[("host", host)], None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(to_bytes(response.into_body(), 256).await.unwrap(), expected);
+    }
+    let unknown = request(
+        &app.public,
+        Method::GET,
+        robots,
+        &[("host", "other.example")],
+        None,
+    )
+    .await;
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    let head = request(
+        &app.public,
+        Method::HEAD,
+        robots,
+        &[("host", "go.example")],
+        None,
+    )
+    .await;
+    assert_eq!(head.status(), StatusCode::OK);
+    assert!(to_bytes(head.into_body(), 256).await.unwrap().is_empty());
+    let created = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links",
+        &headers,
+        Some(json!({"host":"s.example", "slug":"search", "target":"https://example.test/notes"})),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let id = response_body(created).await["id"].as_i64().unwrap();
+    let policy = request(
+        &app.admin,
+        Method::PATCH,
+        &format!("/api/v1/links/{id}/policy"),
+        &headers,
+        Some(json!({"noindex":true})),
+    )
+    .await;
+    assert_eq!(policy.status(), StatusCode::OK);
+    assert_eq!(response_body(policy).await["noindex"], true);
+    let updated = request(
+        &app.admin,
+        Method::PATCH,
+        &format!("/api/v1/links/{id}/policy"),
+        &headers,
+        Some(json!({"status":302})),
+    )
+    .await;
+    assert_eq!(response_body(updated).await["noindex"], true);
+    for method in [Method::GET, Method::HEAD] {
+        let redirect = request(
+            &app.public,
+            method,
+            "/search",
+            &[("host", "s.example")],
+            None,
+        )
+        .await;
+        assert_eq!(redirect.status(), StatusCode::FOUND);
+        assert_eq!(
+            redirect.headers()[header::LOCATION],
+            "https://example.test/notes"
+        );
+        assert_eq!(redirect.headers()["x-robots-tag"], "noindex, nofollow");
+    }
+}
+
+#[tokio::test]
+async fn simulator_checks_draft_rule_precedence_and_leaves_the_live_link_unchanged() {
+    let app = App::start().await;
+    let (cookie, csrf) = app.setup().await;
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    let created = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links",
+        &headers,
+        Some(json!({"slug":"docs","target":"https://example.test/default"})),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let id = response_body(created).await["id"].as_i64().unwrap();
+    let path = format!("/api/v1/links/{id}/policy");
+    let saved = request(
+        &app.admin,
+        Method::PATCH,
+        &path,
+        &headers,
+        Some(json!({"max_visits":1})),
+    )
+    .await;
+    assert_eq!(saved.status(), StatusCode::OK);
+    let preview = format!("{path}/simulate");
+    let draft = json!({
+        "policy":{"status":307,"forward_query":true,"forward_path":true,"rules":[
+            {"target":"https://example.test/first?base=1#keep",
+             "conditions":[{"type":"language","value":"de"},{"type":"query","key":"team","value":"ops"}]},
+            {"target":"https://example.test/second","conditions":[{"type":"language","value":"de"}]}
+        ]},
+        "accept_language":"de-AT,en;q=0.7", "query":"team=ops&sig=A%2f", "extra_path":"Guide/PDF"
+    });
+    let denied = request(
+        &app.admin,
+        Method::POST,
+        &preview,
+        &headers[..2],
+        Some(draft.clone()),
+    )
+    .await;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let result = request(&app.admin, Method::POST, &preview, &headers, Some(draft)).await;
+    assert_eq!(result.status(), StatusCode::OK);
+    assert_eq!(
+        response_body(result).await,
+        json!({
+            "target":"https://example.test/first/Guide/PDF?base=1&team=ops&sig=A%2f#keep",
+            "status":307,"rule":1
+        })
+    );
+    let fallback = request(
+        &app.admin,
+        Method::POST,
+        &preview,
+        &headers,
+        Some(json!({"policy":{}})),
+    )
+    .await;
+    assert_eq!(
+        response_body(fallback).await,
+        json!({
+            "target":"https://example.test/default","status":302,"rule":null
+        })
+    );
+    let long_rule = json!({
+        "target":format!("https://example.test/{}", "a".repeat(3980)),
+        "conditions":[{"type":"language","value":"de"}]
+    });
+    let large_draft = json!({
+        "policy":{"rules":vec![long_rule; 7]},
+        "query":format!("q={}", "a".repeat(4094)),
+        "user_agent":"a".repeat(1024)
+    });
+    assert!(large_draft.to_string().len() > 32 * 1024);
+    let result = request(
+        &app.admin,
+        Method::POST,
+        &preview,
+        &headers,
+        Some(large_draft),
+    )
+    .await;
+    assert_eq!(result.status(), StatusCode::OK);
+    let policy = request(&app.admin, Method::GET, &path, &headers, None).await;
+    let policy = response_body(policy).await;
+    assert_eq!(policy["visits_used"], 0);
+    assert_eq!(policy["rules"], json!([]));
+    let live = request(
+        &app.public,
+        Method::GET,
+        "/docs",
+        &[("host", "go.example")],
+        None,
+    )
+    .await;
+    assert_eq!(
+        live.headers()[header::LOCATION],
+        "https://example.test/default"
+    );
+}
+
+#[tokio::test]
 async fn link_descriptions_are_searchable_versioned_and_optional() {
     let app = App::start().await;
     let (cookie, csrf) = app.setup().await;

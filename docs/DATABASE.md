@@ -12,6 +12,8 @@ Schema version 13 adds the optional plain-text link description with an empty-st
 
 Schema version 14 adds `tag_details` for an optional color and plain-text description. The tag name remains the exact identity already used in link assignments. A tag with saved details remains available at zero assignments. Rename, merge, and deletion update assignments and details in one transaction. A merge uses existing destination values and fills empty fields from the source. SQLite backups include the details. Native link exchange transfers tag names.
 
+Schema version 15 adds `domains.block_crawlers` and `link_redirect_policies.noindex`. Both start disabled. Existing policy revisions omit the new option and preserve its current value when restored. The redirect simulator reads link metadata and applies the same ordered rule evaluation as the public listener.
+
 ## Protected links
 
 Migration `0007` adds `link_protection` with the link ID, optional Argon2id password hash, one-time and consumed flags, and a protection revision. A deleted link cascades to its protection record. An existing link has no protection by default. Changes to protection increment its revision. Confirmation checks that revision before consuming the one-time flag and any existing visit limit in the same write transaction. Signed confirmation tokens expire in memory and require no challenge rows.

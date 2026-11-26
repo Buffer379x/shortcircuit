@@ -20,7 +20,7 @@ use crate::{
     input::{link_tags, link_title, normalize_host, plain_description, valid_slug, valid_target},
     protection::{self, PasswordChange, ProtectionDetails, ProtectionDraft, ProtectionError},
     qr::{self, Format},
-    redirect::{self, Policy, PolicyDetails, PolicyError},
+    redirect::{self, Policy, PolicyDetails, PolicyError, SimulationInput, SimulationResult},
     store::{self, Link, LinkDraft, LinkUpdate, PAGE_SIZE},
 };
 
@@ -33,6 +33,7 @@ use super::{
 const SHORTCODE_ALPHABET: &[u8; 64] =
     b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
 const MAX_CODE_ATTEMPTS: usize = 8;
+const SIMULATION_BODY_LIMIT: usize = super::BODY_LIMIT + 12 * 1024;
 
 #[derive(Clone)]
 pub(super) struct LinkState {
@@ -48,6 +49,10 @@ pub(super) fn routes(pool: SqlitePool, app: AppState) -> Router {
         .route(
             "/api/v1/links/{id}/policy",
             get(read_policy).patch(replace_policy),
+        )
+        .route(
+            "/api/v1/links/{id}/policy/simulate",
+            post(simulate_policy).layer(DefaultBodyLimit::max(SIMULATION_BODY_LIMIT)),
         )
         .route(
             "/api/v1/links/{id}/protection",
@@ -376,18 +381,37 @@ async fn replace_policy(
     let hosts = access.allowed_hosts(&state, false).await?;
     redirect::replace_policy(&state.pool, &hosts, resource_id(id)?, policy, &access.actor)
         .await
-        .map_err(|error| match error {
-            PolicyError::Invalid(code) => Problem::invalid(code),
-            PolicyError::Database(error) => {
-                tracing::debug!(
-                    code = ?error.as_database_error().and_then(|error| error.code()),
-                    "redirect policy write failed"
-                );
-                Problem::unavailable()
-            }
-        })?
+        .map_err(policy_problem)?
         .map(Json)
         .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
+}
+
+async fn simulate_policy(
+    State(state): State<LinkState>,
+    Extension(access): Extension<LinkAccess>,
+    id: Result<Path<i64>, PathRejection>,
+    body: Result<Json<SimulationInput>, JsonRejection>,
+) -> Result<Json<SimulationResult>, Problem> {
+    let input = json_payload(body)?;
+    let hosts = access.allowed_hosts(&state, false).await?;
+    redirect::simulate(&state.pool, &hosts, resource_id(id)?, input)
+        .await
+        .map_err(policy_problem)?
+        .map(Json)
+        .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
+}
+
+fn policy_problem(error: PolicyError) -> Problem {
+    match error {
+        PolicyError::Invalid(code) => Problem::invalid(code),
+        PolicyError::Database(error) => {
+            tracing::debug!(
+                code = ?error.as_database_error().and_then(|error| error.code()),
+                "redirect policy operation failed"
+            );
+            Problem::unavailable()
+        }
+    }
 }
 
 async fn read_protection(
