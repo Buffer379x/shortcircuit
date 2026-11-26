@@ -24,11 +24,14 @@ use crate::{
     store::{self, Link, LinkDraft, LinkUpdate, PAGE_SIZE},
 };
 
-use super::{AppState, Problem, access::LinkAccess, json_payload, resource_id};
+use super::{
+    AppState, Problem,
+    access::{LinkAccess, MAX_SHORTCODE_LENGTH},
+    json_payload, resource_id,
+};
 
 const SHORTCODE_ALPHABET: &[u8; 64] =
     b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
-const SHORTCODE_LEN: usize = 10;
 const MAX_CODE_ATTEMPTS: usize = 8;
 
 #[derive(Clone)]
@@ -178,7 +181,7 @@ async fn create_link(
         return Ok((StatusCode::CREATED, Json(link)));
     }
     for _ in 0..MAX_CODE_ATTEMPTS {
-        draft.slug = random_slug()?;
+        draft.slug = random_slug(state.app.config.shortcode_length)?;
         if let Some(link) = store::insert_link(&state.pool, &draft, protection.as_ref())
             .await
             .map_err(|_| Problem::unavailable())?
@@ -212,9 +215,10 @@ fn tags(values: Vec<String>) -> Result<Vec<String>, Problem> {
     link_tags(values).ok_or_else(|| Problem::invalid("invalid_tags"))
 }
 
-fn random_slug() -> Result<String, Problem> {
-    let mut bytes = [0; SHORTCODE_LEN];
-    getrandom::fill(&mut bytes).map_err(|_| Problem::unavailable())?;
+fn random_slug(length: usize) -> Result<String, Problem> {
+    let mut bytes = [0; MAX_SHORTCODE_LENGTH];
+    let bytes = &mut bytes[..length];
+    getrandom::fill(bytes).map_err(|_| Problem::unavailable())?;
     Ok(bytes
         .iter()
         .map(|byte| char::from(SHORTCODE_ALPHABET[usize::from(*byte & 63)]))

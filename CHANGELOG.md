@@ -4,6 +4,7 @@
 
 - Add favorites and an archive view to the link catalog. Archiving preserves the public redirect and its access settings.
 - Filter the link catalog by up to 20 tags, matching all or any of them.
+- Set the length of automatically generated shortcodes with `SHORTCODE_LENGTH`.
 
 ## 0.6.0-preview.2
 

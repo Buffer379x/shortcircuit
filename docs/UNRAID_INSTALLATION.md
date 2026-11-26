@@ -48,5 +48,6 @@ For rollback, use preview.1 with the pre-upgrade preview.1 backup in a separate 
 | `PUBLIC_HOSTS` | Comma-separated public hostnames. The first active host is the default for new links. |
 | `ADMIN_ORIGIN` | Exact external origin for administration. Use HTTPS outside loopback. |
 | `LOG_LEVEL` | Default `info`. |
+| `SHORTCODE_LENGTH` | Generated shortcode length from 8 to 32. Defaults to 10. Added after preview.2. |
 | `BACKUP_INTERVAL_HOURS` and `BACKUP_KEEP` | Optional backup interval and number of scheduled copies to keep. Default scheduling is disabled. |
 

@@ -18,6 +18,8 @@ use super::{AppState, Problem};
 const HTTPS_SESSION_COOKIE: &str = "__Host-shortcircuit_session";
 const HTTP_SESSION_COOKIE: &str = "shortcircuit_session";
 const CSRF_HEADER: &str = "x-csrf-token";
+const DEFAULT_SHORTCODE_LENGTH: usize = 10;
+pub(super) const MAX_SHORTCODE_LENGTH: usize = 32;
 
 pub struct AdminConfig {
     origin: String,
@@ -26,6 +28,7 @@ pub struct AdminConfig {
     default_port: u16,
     secure: bool,
     pub(super) local_port: u16,
+    pub(super) shortcode_length: usize,
 }
 
 impl AdminConfig {
@@ -56,7 +59,16 @@ impl AdminConfig {
             default_port,
             secure,
             local_port,
+            shortcode_length: DEFAULT_SHORTCODE_LENGTH,
         })
+    }
+
+    pub fn with_shortcode_length(mut self, length: usize) -> Result<Self, &'static str> {
+        if !(8..=MAX_SHORTCODE_LENGTH).contains(&length) {
+            return Err("SHORTCODE_LENGTH must be an integer from 8 to 32");
+        }
+        self.shortcode_length = length;
+        Ok(self)
     }
 
     fn cookie_name(&self) -> &'static str {
