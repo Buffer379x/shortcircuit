@@ -13,6 +13,7 @@ use tower::ServiceExt;
 
 const ADMIN: &str = "admin.example";
 const ORIGIN: &str = "https://admin.example";
+static QR_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct Fixture {
     _directory: tempfile::TempDir,
@@ -119,6 +120,7 @@ async fn read_json(resp: Response) -> Value {
 
 #[tokio::test]
 async fn qr_style_exports_keep_the_selected_colors_and_transparency() {
+    let _guard = QR_TESTS.lock().await;
     let app = Fixture::start().await;
     let id = app
         .create(
@@ -163,6 +165,7 @@ async fn qr_style_exports_keep_the_selected_colors_and_transparency() {
 
 #[tokio::test]
 async fn qr_style_rejects_unsafe_colors_and_undersized_margins() {
+    let _guard = QR_TESTS.lock().await;
     let app = Fixture::start().await;
     let id = app
         .create(
@@ -753,6 +756,7 @@ async fn ordered_policy_uses_raw_forwarding_and_durable_limit() {
 
 #[tokio::test]
 async fn tag_merge_and_qr_respect_existing_link_identity() {
+    let _guard = QR_TESTS.lock().await;
     let app = Fixture::start().await;
     let id = app
         .create(
