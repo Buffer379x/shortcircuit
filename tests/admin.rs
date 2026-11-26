@@ -97,6 +97,56 @@ async fn response_body(response: Response) -> Value {
     serde_json::from_slice(&to_bytes(response.into_body(), 64_000).await.unwrap()).unwrap()
 }
 
+#[tokio::test]
+async fn catalog_search_spans_pages_and_a_deleted_cursor_anchor() {
+    let app = App::start().await;
+    let (cookie, csrf) = app.setup().await;
+    let headers = [("cookie", cookie.as_str()), ("origin", ORIGIN), ("x-csrf-token", csrf.as_str())];
+    let endpoint = "/api/v1/links/search";
+    assert_eq!(
+        request(&app.admin, Method::POST, endpoint, &headers[..2], Some(json!({})))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    sqlx::raw_sql(
+        "WITH RECURSIVE counter(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM counter WHERE n < 102)
+         INSERT INTO links(host, slug, target, title)
+         SELECT 'go.example', printf('item-%03d', n), 'https://example.test/catalog', 'Same title' FROM counter;
+         INSERT INTO links(host, slug, target, title, enabled)
+         VALUES ('s.example', 'Release_Notes', 'https://example.test/?Signature=A%2b', 'Release notes', 0);
+         INSERT INTO link_tags(link_id, tag) SELECT id, 'release' FROM links WHERE slug = 'Release_Notes';",
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let search = request(&app.admin, Method::POST, endpoint, &headers, Some(json!({
+        "query":"signature=a%2B", "host":"s.example", "enabled":false, "tag":"release"
+    }))).await;
+    assert_eq!(search.status(), StatusCode::OK);
+    assert_eq!(search.headers()[header::CACHE_CONTROL], "no-store");
+    let result = response_body(search).await;
+    assert_eq!(result["items"].as_array().unwrap().len(), 1);
+    assert_eq!(result["items"][0]["slug"], "Release_Notes");
+    assert!(result["next_cursor"].is_null());
+    let literal = request(&app.admin, Method::POST, endpoint, &headers, Some(json!({"query":"%_"}))).await;
+    assert_eq!(response_body(literal).await["items"], json!([]));
+
+    let first = request(&app.admin, Method::POST, endpoint, &headers,
+        Some(json!({"sort":"title_asc","host":"go.example"}))).await;
+    let first = response_body(first).await;
+    assert_eq!(first["items"].as_array().unwrap().len(), 100);
+    assert_eq!(first["items"][99]["slug"], "item-100");
+    sqlx::query("DELETE FROM links WHERE slug = 'item-100'").execute(&app.pool).await.unwrap();
+    let next = request(&app.admin, Method::POST, endpoint, &headers, Some(json!({
+        "sort":"title_asc","host":"go.example","after":first["next_cursor"]
+    }))).await;
+    let next = response_body(next).await;
+    assert_eq!(next["items"].as_array().unwrap().len(), 2);
+    assert_eq!(next["items"][0]["slug"], "item-101");
+    assert!(next["next_cursor"].is_null());
+}
+
 const QR_TEMPLATES: &str = "/api/v1/qr/templates";
 
 fn qr_template(name: &str) -> Value {
