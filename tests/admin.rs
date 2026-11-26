@@ -119,13 +119,28 @@ async fn catalog_search_spans_pages_and_a_deleted_cursor_anchor() {
         .status(),
         StatusCode::FORBIDDEN
     );
+    let other_origin = [
+        ("cookie", cookie.as_str()),
+        ("origin", "https://other.example"),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    let response = request(
+        &app.admin,
+        Method::POST,
+        endpoint,
+        &other_origin,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response_body(response).await["code"], "invalid_origin");
     sqlx::raw_sql(
         "WITH RECURSIVE counter(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM counter WHERE n < 102)
          INSERT INTO links(host, slug, target, title)
          SELECT 'go.example', printf('item-%03d', n), 'https://example.test/catalog', 'Same title' FROM counter;
          INSERT INTO links(host, slug, target, title, enabled)
-         VALUES ('s.example', 'Release_Notes', 'https://example.test/?Signature=A%2b', 'Release notes', 0);
-         INSERT INTO link_tags(link_id, tag) SELECT id, 'release' FROM links WHERE slug = 'Release_Notes';",
+         VALUES ('s.example', 'Release_Notes', 'https://example.test/?Signature=A%2b', 'Überblick', 0);
+         INSERT INTO link_tags(link_id, tag) SELECT id, 'Änderungen' FROM links WHERE slug = 'Release_Notes';",
     )
     .execute(&app.pool)
     .await
@@ -136,7 +151,7 @@ async fn catalog_search_spans_pages_and_a_deleted_cursor_anchor() {
         endpoint,
         &headers,
         Some(json!({
-            "query":"signature=a%2B", "host":"s.example", "enabled":false, "tag":"release"
+            "query":"signature=a%2B", "host":"s.example", "enabled":false, "tag":"Änderungen"
         })),
     )
     .await;
@@ -146,6 +161,19 @@ async fn catalog_search_spans_pages_and_a_deleted_cursor_anchor() {
     assert_eq!(result["items"].as_array().unwrap().len(), 1);
     assert_eq!(result["items"][0]["slug"], "Release_Notes");
     assert!(result["next_cursor"].is_null());
+    for query in ["überblick", "änderungen", "https://s.example/release"] {
+        let response = request(
+            &app.admin,
+            Method::POST,
+            endpoint,
+            &headers,
+            Some(json!({"query":query})),
+        )
+        .await;
+        let body = response_body(response).await;
+        assert_eq!(body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(body["items"][0]["slug"], "Release_Notes");
+    }
     let literal = request(
         &app.admin,
         Method::POST,

@@ -26,7 +26,7 @@ async fn search_links(
         if text.len() > 4096 || text.chars().any(char::is_control) {
             return Err(Problem::invalid("invalid_link_search"));
         }
-        filter.query = (!text.is_empty()).then(|| text.to_ascii_lowercase());
+        filter.query = (!text.is_empty()).then(|| text.to_lowercase());
     }
     if let Some(host) = &filter.host {
         filter.host = Some(normalize_host(host).ok_or_else(|| Problem::invalid("invalid_host"))?);
@@ -45,13 +45,10 @@ async fn search_links(
     {
         return Err(Problem::invalid("invalid_link_cursor"));
     }
-    let hosts: Vec<String> = domains::list(&state.pool, &state.hosts, state.config.local_port)
+    let domains = domains::list(&state.pool, &state.hosts, state.config.local_port)
         .await
-        .map_err(|_| Problem::unavailable())?
-        .into_iter()
-        .map(|domain| domain.host)
-        .collect();
-    catalog::search(&state.pool, &hosts, &filter)
+        .map_err(|_| Problem::unavailable())?;
+    catalog::search(&state.pool, &domains, &filter)
         .await
         .map(Json)
         .map_err(|_| Problem::unavailable())

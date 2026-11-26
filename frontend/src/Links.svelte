@@ -50,13 +50,18 @@
   let oneTime = $state(false);
   let linkPassword = $state('');
 
-  const availableTags = $derived([...new Set([...catalogTags, ...items.flatMap((link) => link.tags)])].sort((a, b) => a.localeCompare(b, language)));
+  const availableTags = $derived([...new Set([
+    ...catalogTags, ...items.flatMap((link) => link.tags), ...(tag ? [tag] : []),
+  ])].sort((a, b) => a.localeCompare(b, language)));
   const availableDomains = $derived(Object.keys(domains.origins).sort());
   const limit = $derived(new Intl.NumberFormat(language));
   const tagRequests = new AbortController();
   let tagGeneration = 0;
   let currentQuery: LinkSearch = { sort: 'newest' };
+  let queryKey = '';
+  let loadedPages = 0;
   let pageRequest: AbortController | null = null;
+  let retryPage: (() => void) | null = null;
   const sortLabels = {
     newest: 'sortNewest', oldest: 'sortOldest',
     title_asc: 'sortTitleAscending', title_desc: 'sortTitleDescending',
@@ -80,15 +85,24 @@
       enabled: status ? status === 'enabled' : undefined,
       sort,
     };
+    const key = JSON.stringify(criteria);
+    const retainedDepth = key === queryKey ? loadedPages : 0;
     const pending = new AbortController();
     pageRequest = pending;
     currentQuery = criteria;
-    items = [];
-    cursor = null;
-    initialized = false;
+    queryKey = key;
+    if (retainedDepth === 0) {
+      items = [];
+      cursor = null;
+      initialized = false;
+      loadedPages = 0;
+    }
     loading = true;
     loadError = null;
-    const timer = setTimeout(() => { void loadPage(criteria, null, pending.signal); }, 150);
+    const timer = setTimeout(
+      () => { void loadPages(criteria, null, pending.signal, Math.max(1, retainedDepth)); },
+      retainedDepth ? 0 : 150,
+    );
     return () => {
       clearTimeout(timer);
       pending.abort();
@@ -99,31 +113,51 @@
     const generation = ++tagGeneration;
     try {
       const page = await api<{ items: Tag[] }>('/catalog/tags', 'GET', undefined, 'json', tagRequests.signal);
-      if (!tagRequests.signal.aborted && generation === tagGeneration) catalogTags = page.items.map(({ name }) => name);
+      if (!tagRequests.signal.aborted && generation === tagGeneration) {
+        catalogTags = page.items.map(({ name }) => name);
+        if (tag && !catalogTags.includes(tag)) tag = '';
+      }
     } catch {
       // Tags from the fetched links remain usable when the catalog is unavailable.
     }
   }
 
-  async function loadPage(criteria: LinkSearch, after: LinkCursor | null, signal: AbortSignal) {
+  async function loadPages(criteria: LinkSearch, after: LinkCursor | null, signal: AbortSignal, pages = 1) {
     loading = true;
     loadError = null;
+    retryPage = null;
     try {
-      const page = await api<LinkSearchPage>('/links/search', 'POST', { ...criteria, after: after ?? undefined }, 'json', signal);
-      if (signal.aborted) return;
-      const seen = new Set(items.map((link) => link.id));
-      items = [...items, ...page.items.filter((link) => !seen.has(link.id))];
-      cursor = page.next_cursor;
+      const collected = after ? [...items] : [];
+      const seen = new Set(collected.map((link) => link.id));
+      let next = after;
+      let depth = after ? loadedPages : 0;
+      for (let index = 0; index < pages; index += 1) {
+        const page = await api<LinkSearchPage>('/links/search', 'POST', { ...criteria, after: next ?? undefined }, 'json', signal);
+        if (signal.aborted) return;
+        for (const link of page.items) {
+          if (!seen.has(link.id)) collected.push(link);
+          seen.add(link.id);
+        }
+        depth += 1;
+        next = page.next_cursor;
+        if (!next) break;
+      }
+      items = collected;
+      cursor = next;
+      loadedPages = depth;
       initialized = true;
     } catch (error) {
-      if (!signal.aborted) loadError = problemMessage(error);
+      if (!signal.aborted) {
+        loadError = problemMessage(error);
+        retryPage = () => { void loadPages(criteria, after, signal, pages); };
+      }
     } finally {
       if (!signal.aborted) loading = false;
     }
   }
 
   function loadMore() {
-    if (!loading && pageRequest) void loadPage(currentQuery, cursor, pageRequest.signal);
+    if (!loading && pageRequest && cursor) void loadPages(currentQuery, cursor, pageRequest.signal);
   }
 
   function refreshCatalog() {
@@ -226,7 +260,7 @@
     notice = null;
     try {
       await api<Link>(`/links/${link.id}`, 'PATCH', { enabled: !link.enabled });
-      refreshCatalog();
+      revision += 1;
       notice = 'linkUpdated';
     } catch (error) {
       actionError = problemMessage(error);
@@ -378,7 +412,7 @@
     </div>
   {/if}
   {#if loadError}
-    <div class="panel-foot between"><p role="alert" class="notice error">{t[loadError]}</p><button class="button" type="button" onclick={loadMore}>{t.retry}</button></div>
+    <div class="panel-foot between"><p role="alert" class="notice error">{t[loadError]}</p><button class="button" type="button" onclick={() => retryPage?.()}>{t.retry}</button></div>
   {/if}
   <div class="panel-foot between">
     <p class="table-count" aria-live="polite">

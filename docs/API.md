@@ -41,7 +41,7 @@ An API key uses `Authorization: Bearer <token>`. A key can hold `read` for list 
 
 ### Catalog search
 
-The search body accepts optional `query`, `host`, `tag`, `enabled`, `sort`, and `after` fields. The query is a literal substring up to 4,096 bytes and matches titles, slugs, domains, destinations, and tag names. A full HTTP or HTTPS short URL can match its stored host and path. Case folding applies to ASCII characters. Non-ASCII characters match their original spelling. Optional domain, tag, and enabled filters combine with AND.
+The search body accepts optional `query`, `host`, `tag`, `enabled`, `sort`, and `after` fields. The query is a case-insensitive Unicode substring up to 4,096 bytes and matches titles, slugs, domains, short URLs, destinations, and tag names. Optional domain, tag, and enabled filters combine with AND.
 
 Supported sort values are `newest` (default), `oldest`, `title_asc`, `title_desc`, `slug_asc`, `slug_desc`, `host_asc`, `host_desc`, `target_asc`, `target_desc`, `enabled_first`, and `disabled_first`. Each response includes up to 100 `items` and `next_cursor`. Send the returned cursor as `after` with the same filters and sort to continue. A null cursor means the search is complete. The cursor carries its sort key and the link ID, so deleting the anchor link does not prevent paging. Changing filters or sort starts a new search.
 

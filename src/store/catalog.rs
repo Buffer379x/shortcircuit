@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
+
+use crate::domains::Domain;
 
 use super::{Link, PAGE_SIZE, push_host_scope};
 
@@ -85,15 +88,29 @@ pub(crate) struct SearchPage {
     next_cursor: Option<Cursor>,
 }
 
+#[derive(sqlx::FromRow)]
+struct SearchRow {
+    #[sqlx(flatten)]
+    link: Link,
+    tags_json: String,
+}
+
 pub(crate) async fn search(
     pool: &SqlitePool,
-    hosts: &[String],
+    domains: &[Domain],
     filter: &Search,
 ) -> Result<SearchPage, sqlx::Error> {
+    let hosts: Vec<_> = domains.iter().map(|domain| domain.host.clone()).collect();
+    let origins: HashMap<_, _> = domains
+        .iter()
+        .map(|domain| (domain.host.as_str(), domain.origin.as_str()))
+        .collect();
     let mut query = QueryBuilder::<Sqlite>::new(
-        "SELECT id, host, slug, target, created_at, title, enabled, analytics_enabled FROM links WHERE 1",
+        "SELECT id, host, slug, target, created_at, title, enabled, analytics_enabled,
+                (SELECT json_group_array(tag ORDER BY tag) FROM link_tags WHERE link_id = links.id) AS tags_json
+         FROM links WHERE 1",
     );
-    push_host_scope(&mut query, hosts);
+    push_host_scope(&mut query, &hosts);
     if let Some(host) = &filter.host {
         query.push(" AND host = ").push_bind(host);
     }
@@ -106,37 +123,6 @@ pub(crate) async fn search(
             .push_bind(tag)
             .push(")");
     }
-    if let Some(text) = &filter.query {
-        query.push(" AND (");
-        for (index, expression) in ["title", "slug", "host", "target", "host || '/' || slug"]
-            .into_iter()
-            .enumerate()
-        {
-            if index > 0 {
-                query.push(" OR ");
-            }
-            query
-                .push("instr(lower(")
-                .push(expression)
-                .push("), ")
-                .push_bind(text)
-                .push(") > 0");
-        }
-        query
-            .push(" OR EXISTS (SELECT 1 FROM link_tags WHERE link_id = links.id AND instr(lower(tag), ")
-            .push_bind(text)
-            .push(") > 0)");
-        if let Ok(url) = url::Url::parse(text)
-            && matches!(url.scheme(), "http" | "https")
-            && let Some(host) = url.host_str()
-        {
-            query
-                .push(" OR lower(host || '/' || slug) = ")
-                .push_bind(format!("{host}{}", url.path()));
-        }
-        query.push(")");
-    }
-
     let sort = filter.sort;
     let comparison = if sort.descending() { " < " } else { " > " };
     let direction = if sort.descending() { " DESC" } else { " ASC" };
@@ -158,42 +144,43 @@ pub(crate) async fn search(
         .push(" COLLATE NOCASE")
         .push(direction)
         .push(", id")
-        .push(direction)
-        .push(" LIMIT ")
-        .push_bind((PAGE_SIZE + 1) as i64);
-    let mut transaction = pool.begin().await?;
-    let mut items = query
-        .build_query_as::<Link>()
-        .fetch_all(&mut *transaction)
-        .await?;
-    let has_more = items.len() > PAGE_SIZE;
-    items.truncate(PAGE_SIZE);
-    let positions: HashMap<_, _> = items
-        .iter()
-        .enumerate()
-        .map(|(pos, link)| (link.id, pos))
-        .collect();
-    if !positions.is_empty() {
-        let mut tags =
-            QueryBuilder::<Sqlite>::new("SELECT link_id, tag FROM link_tags WHERE link_id IN (");
-        let mut ids = tags.separated(", ");
-        for id in positions.keys() {
-            ids.push_bind(id);
-        }
-        ids.push_unseparated(") ORDER BY link_id, tag");
-        for (id, tag) in tags
-            .build_query_as::<(i64, String)>()
-            .fetch_all(&mut *transaction)
-            .await?
+        .push(direction);
+    if filter.query.is_none() {
+        query.push(" LIMIT ").push_bind((PAGE_SIZE + 1) as i64);
+    }
+    let mut rows = query.build_query_as::<SearchRow>().fetch(pool);
+    let mut items = Vec::with_capacity(PAGE_SIZE + 1);
+    while let Some(mut row) = rows.try_next().await? {
+        row.link.tags = serde_json::from_str(&row.tags_json)
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        let origin = origins.get(row.link.host.as_str()).copied();
+        if filter
+            .query
+            .as_deref()
+            .is_none_or(|text| matches_query(&row.link, origin, text))
         {
-            items[positions[&id]].tags.push(tag);
+            items.push(row.link);
+            if items.len() > PAGE_SIZE {
+                break;
+            }
         }
     }
-    transaction.commit().await?;
+    let has_more = items.len() > PAGE_SIZE;
+    items.truncate(PAGE_SIZE);
     let next_cursor = items.last().filter(|_| has_more).map(|link| Cursor {
         id: link.id,
         key: sort.key(link),
         sort,
     });
     Ok(SearchPage { items, next_cursor })
+}
+
+fn matches_query(link: &Link, origin: Option<&str>, text: &str) -> bool {
+    let contains = |value: &str| value.contains(text) || value.to_lowercase().contains(text);
+    [link.title.as_str(), &link.slug, &link.host, &link.target]
+        .into_iter()
+        .chain(link.tags.iter().map(String::as_str))
+        .any(contains)
+        || contains(&format!("{}/{}", link.host, link.slug))
+        || origin.is_some_and(|base| contains(&format!("{base}/{}", link.slug)))
 }
