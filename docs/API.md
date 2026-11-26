@@ -27,7 +27,7 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `GET` and `PATCH /api/v1/links/{id}/protection` | Returns `password_required`, `one_time`, and `consumed`. PATCH takes `one_time` and optional `password` or `remove_password: true`. Omit both password fields to keep the current password. A permanent redirect or an attempt to remove a consumed one-time restriction returns `409`. |
 | `GET` and `DELETE /api/v1/links/{id}/history` | Browser-session access. GET returns current editable settings and up to 25 recent revisions. DELETE clears the link's history and returns `204`. |
 | `POST /api/v1/links/{id}/history/{revision}/restore` | Browser-session access with CSRF protection. Restores one metadata or redirect-policy revision and returns `204`. Informational protection entries return `409`. |
-| `GET /api/v1/links/{id}/qr` | Returns an image containing the configured public short URL. Query options are `format=svg\|png` and `size=128..1024` (384 default). Requires a read scope or browser session. |
+| `GET /api/v1/links/{id}/qr` | Renders the configured public short URL as SVG or PNG. Supports image size, colors, transparency, error correction, and quiet zone. Requires a read scope or browser session. |
 | `GET` or `HEAD /{slug}` | Resolves the link's redirect policy. The default is `302` with the stored `Location` and `Cache-Control: no-store`. A protected link returns a confirmation page for GET or an empty response for HEAD. |
 | `POST /{slug}` | Accepts a protected-link confirmation from the exact public origin. A successful confirmation returns `303` to continue with GET. |
 
@@ -40,6 +40,22 @@ An API key uses `Authorization: Bearer <token>`. A key can hold `read` for list 
 Each revision includes an actor, a UTC timestamp in Unix seconds, an action, and the previous configuration for that category. The actor identifies the administrator username or the numeric ID of a scoped API key. Direct link edits record metadata, tags, and redirect policy changes. Protection changes record an informational entry. Catalog-wide tag operations apply to the catalog. The administration interface exports the fetched history as JSON.
 
 A restore applies only the selected category. Metadata includes destination, title, tags, enabled state, and analytics preference. A policy restore keeps the current visit counter and revalidates the configuration against current protection. A successful restore that changes settings records the previous state. The short URL and access protection persist across these operations.
+
+### Styled QR codes
+
+The `/api/v1/links/{id}/qr` endpoint accepts the following query options. The QR code contains the configured public origin and the exact stored slug.
+
+| Option | Values | Default |
+|---|---|---|
+| `format` | `svg` or `png` | `svg` |
+| `size` | 128 to 1,024 pixels per side | `384` |
+| `foreground` | Six hexadecimal sRGB digits | `000000` |
+| `background` | Six hexadecimal sRGB digits | `ffffff` |
+| `transparent` | `true` or `false` | `false` |
+| `correction` | `L`, `M`, `Q`, or `H` | `M` |
+| `quiet_zone` | 4 to 12 modules on each side | `4` |
+
+ShortCircuit requires dark modules and a contrast ratio of at least 4.5:1 as a scan-readability guard. A transparent export uses the background color as the contrast reference and leaves its light cells and quiet zone transparent. Place it on a background with the same or better contrast. A larger correction level or quiet zone can require a larger image for the same link. Check the final printed size and background with the intended scanner. [QR quiet-zone guidance](https://www.qrcode.com/en/howto/code.html) · [QR error correction](https://www.qrcode.com/en/about/error_correction.html) · [Relative luminance](https://www.w3.org/WAI/WCAG21/Understanding/contrast-minimum.html)
 
 ### Analytics
 

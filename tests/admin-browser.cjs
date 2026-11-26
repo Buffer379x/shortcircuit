@@ -87,7 +87,42 @@ async function verify() {
     const pngBytes = await readFile(await qrDownload.path());
     assert.equal(pngBytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
     assert.equal(pngBytes.readUInt32BE(16), 512);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await qr.getByLabel('Foreground color', { exact: true }).fill('#002040');
+    await qr.getByLabel('Background color', { exact: true }).fill('#fff4e0');
+    await qr.getByRole('checkbox', { name: 'Transparent background', exact: true }).check();
+    await qr.getByRole('combobox', { name: 'Error correction', exact: true }).selectOption('H');
+    await qr.getByRole('combobox', { name: 'Quiet zone in modules', exact: true }).selectOption('8');
+    const styledPreview = qr.locator('img[src*="quiet_zone=8"]');
+    await styledPreview.waitFor({ state: 'visible' });
+    const previewUrl = new URL(await styledPreview.getAttribute('src'), admin);
+    assert.deepEqual(Object.fromEntries(previewUrl.searchParams), {
+      format: 'svg', size: '512', foreground: '002040', background: 'fff4e0',
+      transparent: 'true', correction: 'H', quiet_zone: '8',
+    });
+    assert.equal(await qr.evaluate(dialog => dialog.scrollWidth > dialog.clientWidth), false);
+    const styledDownload = page.waitForEvent('download');
+    await qr.getByRole('button', { name: 'Download SVG', exact: true }).click();
+    const svgDownload = await styledDownload;
+    const previewResponse = await page.request.get(previewUrl.href);
+    assert.equal(previewResponse.status(), 200);
+    const previewBytes = await previewResponse.body();
+    assert.deepEqual(await readFile(await svgDownload.path()), previewBytes);
+    assert.match(previewBytes.toString('utf8'), /fill="#002040"/);
+    assert.doesNotMatch(previewBytes.toString('utf8'), /<rect\b/);
+    const copyQr = qr.getByRole('button', { name: 'Copy PNG', exact: true });
+    if (await copyQr.count()) {
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: admin });
+      await copyQr.click();
+      await qr.getByText('QR code copied.', { exact: true }).waitFor();
+      assert.equal(await page.evaluate(async () => (await navigator.clipboard.read())
+        .some(item => item.types.includes('image/png'))), true);
+    }
+    await qr.getByLabel('Foreground color', { exact: true }).fill('#eeeeee');
+    await qr.getByText('Choose a darker foreground and a lighter background for enough contrast.', { exact: true }).waitFor();
+    assert.equal(await qr.getByRole('button', { name: 'Download PNG', exact: true }).isDisabled(), true);
     await qr.getByRole('button', { name: 'Close', exact: true }).click();
+    await page.setViewportSize({ width: 1360, height: 900 });
 
     const guideRow = page.getByRole('row').filter({ hasText: 'localhost/test/guide' });
     await guideRow.getByRole('button', { name: 'Edit link', exact: true }).click();
@@ -249,7 +284,7 @@ async function verify() {
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);
     assert.equal((await page.request.get(admin + '/api/v1/openapi.json')).status(), 401);
     assert.deepEqual(errors, []);
-    console.log('Browser smoke passed: setup, create link, QR, link history, visit limits, protected links, analytics controls, JSON and CSV exchange, URL tools, mobile layout and sign-out.');
+    console.log('Browser smoke passed: setup, create link, styled QR preview, download and validation, link history, visit limits, protected links, analytics controls, JSON and CSV exchange, URL tools, mobile layout and sign-out.');
   } finally {
     await browser.close();
   }

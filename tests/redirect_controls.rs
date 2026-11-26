@@ -13,6 +13,7 @@ use tower::ServiceExt;
 
 const ADMIN: &str = "admin.example";
 const ORIGIN: &str = "https://admin.example";
+static QR_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct Fixture {
     _directory: tempfile::TempDir,
@@ -115,6 +116,84 @@ async fn send(
 async fn read_json(resp: Response) -> Value {
     let data = to_bytes(resp.into_body(), 100_000).await.unwrap();
     serde_json::from_slice(&data).unwrap()
+}
+
+#[tokio::test]
+async fn qr_style_exports_keep_the_selected_colors_and_transparency() {
+    let _guard = QR_TESTS.lock().await;
+    let app = Fixture::start().await;
+    let id = app
+        .create(
+            "go.example",
+            "Styled/Code",
+            "https://example.test/target",
+            &[],
+        )
+        .await;
+    let route = format!("/api/v1/links/{id}/qr");
+    let style =
+        "size=384&foreground=002040&background=FFF4E0&transparent=true&correction=H&quiet_zone=8";
+    let image = app
+        .admin_request(Method::GET, &format!("{route}?format=svg&{style}"), None)
+        .await;
+    assert_eq!(image.status(), StatusCode::OK);
+    assert_eq!(image.headers()[header::CONTENT_TYPE], "image/svg+xml");
+    assert_eq!(image.headers()[header::CACHE_CONTROL], "no-store");
+    let body = to_bytes(image.into_body(), 128_000).await.unwrap();
+    let svg = std::str::from_utf8(&body).unwrap();
+    assert!(svg.contains("fill=\"#002040\""));
+    assert!(!svg.contains("<rect"));
+    assert!(!svg.contains("example.test"));
+
+    let image = app
+        .admin_request(Method::GET, &format!("{route}?format=png&{style}"), None)
+        .await;
+    assert_eq!(image.status(), StatusCode::OK);
+    assert_eq!(image.headers()[header::CONTENT_TYPE], "image/png");
+    let bytes = to_bytes(image.into_body(), 2_000_000).await.unwrap();
+    let reader = png::Decoder::new(std::io::Cursor::new(bytes))
+        .read_info()
+        .unwrap();
+    let info = reader.info();
+    assert_eq!((info.width, info.height), (384, 384));
+    assert_eq!(
+        info.palette.as_deref(),
+        Some(&[0, 32, 64, 255, 244, 224][..])
+    );
+    assert_eq!(info.trns.as_deref(), Some(&[255, 0][..]));
+}
+
+#[tokio::test]
+async fn qr_style_rejects_unsafe_colors_and_undersized_margins() {
+    let _guard = QR_TESTS.lock().await;
+    let app = Fixture::start().await;
+    let id = app
+        .create(
+            "go.example",
+            "invalid-style",
+            "https://example.test/target",
+            &[],
+        )
+        .await;
+    let route = format!("/api/v1/links/{id}/qr");
+    for (query, code) in [
+        ("foreground=%3Cscript%3E", "invalid_qr_color"),
+        ("foreground=ffffff&background=000000", "invalid_qr_contrast"),
+        ("foreground=dddddd&background=ffffff", "invalid_qr_contrast"),
+        ("quiet_zone=3", "invalid_qr_quiet_zone"),
+        ("quiet_zone=13", "invalid_qr_quiet_zone"),
+        ("correction=Z", "invalid_qr_correction"),
+    ] {
+        let response = app
+            .admin_request(Method::GET, &format!("{route}?{query}"), None)
+            .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{query}"
+        );
+        assert_eq!(read_json(response).await["code"], code);
+    }
 }
 
 #[tokio::test]
@@ -677,6 +756,7 @@ async fn ordered_policy_uses_raw_forwarding_and_durable_limit() {
 
 #[tokio::test]
 async fn tag_merge_and_qr_respect_existing_link_identity() {
+    let _guard = QR_TESTS.lock().await;
     let app = Fixture::start().await;
     let id = app
         .create(
