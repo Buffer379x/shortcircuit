@@ -98,7 +98,7 @@ async function verify() {
     assert.equal((await page.request.get(publicOrigin + '/test/guide', { maxRedirects: 0 })).status(), 302);
     assert.equal((await page.request.get(publicOrigin + '/test/guide', { maxRedirects: 0 })).status(), 404);
 
-    const protectedTarget = 'https://example.test/protected-destination';
+    const protectedTarget = admin + '/readyz';
     const linkPassword = 'ci-browser-link-password';
     await page.getByRole('button', { name: 'Create link', exact: true }).click();
     await dialog.getByLabel('Destination URL', { exact: true }).fill(protectedTarget);
@@ -131,14 +131,17 @@ async function verify() {
 
     const visitor = await browser.newPage();
     try {
-      await visitor.route(protectedTarget, route => route.fulfill({ status: 200, body: 'Protected destination' }));
       const shortUrl = publicOrigin + '/protected-test';
       assert.equal((await visitor.goto(shortUrl)).status(), 200);
       await visitor.getByRole('heading', { name: 'Confirm link access', exact: true }).waitFor();
       await visitor.getByLabel('Password', { exact: true }).fill(linkPassword);
-      const destination = visitor.waitForRequest(request => request.url() === protectedTarget);
-      await visitor.getByRole('button', { name: 'Continue', exact: true }).click();
-      assert.equal((await destination).method(), 'GET');
+      const [destination] = await Promise.all([
+        visitor.waitForRequest(request => request.url() === protectedTarget),
+        visitor.waitForURL(protectedTarget),
+        visitor.getByRole('button', { name: 'Continue', exact: true }).click(),
+      ]);
+      assert.equal(destination.method(), 'GET');
+      assert.equal(destination.postData(), null);
       assert.equal((await visitor.goto(shortUrl)).status(), 404);
     } finally {
       await visitor.close();
