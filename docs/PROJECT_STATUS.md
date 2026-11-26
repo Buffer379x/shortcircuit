@@ -10,7 +10,7 @@
 | Redirect controls | Managed domains and fallbacks, time windows, atomic visit limits, ordered rules, and opt-in query and path forwarding. |
 | Protected links | Optional passwords and confirmed one-time access. The public form verifies a short-lived signature and the configured origin before redirecting. SQLite enforces consumption independently of analytics. |
 | Link history | Record individual link edits with actor and timestamp. Compare and restore metadata or redirect policy through the admin dialog, download JSON, or clear a link's history. |
-| QR Studio | Preview and export local PNG and SVG with colors, transparency, error correction, size, and quiet-zone controls. Copy PNG when the browser supports image clipboard access. |
+| QR Studio | Preview and export local PNG and SVG with colors, transparency, error correction, size, and quiet-zone controls. Copy PNG when the browser supports image clipboard access. Save reusable templates in SQLite and apply them to any link. |
 | Tags | The admin catalog shows tag counts and supports rename, merge and delete. |
 | Analytics | UTC trends, period comparison, top links, DNT, referrer hostname controls, per-link opt-out, retention, and clear-all. Browser, OS, device, and geolocation breakdowns are pending. |
 | Backup and restore | The CLI creates consistent, verified SQLite backups and supports an offline restore with a rollback copy. Optional scheduled backups have independent retention and use the same verified snapshot format. Admin downloads are planned. |

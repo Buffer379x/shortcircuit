@@ -118,9 +118,34 @@ async function verify() {
       assert.equal(await page.evaluate(async () => (await navigator.clipboard.read())
         .some(item => item.types.includes('image/png'))), true);
     }
+    await qr.getByText('QR templates', { exact: true }).click();
+    await qr.getByRole('textbox', { name: 'Template name', exact: true }).fill('Print style');
+    await qr.getByRole('button', { name: 'Save current settings', exact: true }).click();
+    await qr.getByText('Template saved.', { exact: true }).waitFor();
     await qr.getByLabel('Foreground color', { exact: true }).fill('#eeeeee');
     await qr.getByText('Choose a darker foreground and a lighter background for enough contrast.', { exact: true }).waitFor();
     assert.equal(await qr.getByRole('button', { name: 'Download PNG', exact: true }).isDisabled(), true);
+    await qr.getByRole('button', { name: 'Close', exact: true }).click();
+    await page.getByRole('button', { name: 'QR code', exact: true }).click();
+    await qr.getByText('QR templates', { exact: true }).click();
+    const template = qr.getByRole('combobox', { name: 'Saved template', exact: true });
+    await template.selectOption({ label: 'Print style' });
+    await qr.getByRole('button', { name: 'Apply template', exact: true }).click();
+    await styledPreview.waitFor({ state: 'visible' });
+    assert.equal(await styledPreview.getAttribute('src'), previewUrl.pathname + previewUrl.search);
+    assert.equal(await qr.evaluate(dialog => dialog.scrollWidth > dialog.clientWidth), false);
+    const removeTemplate = qr.getByRole('button', { name: 'Delete template', exact: true });
+    const confirmTemplate = page.getByRole('dialog', { name: 'Delete this QR template?', exact: true });
+    await removeTemplate.click();
+    await confirmTemplate.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await confirmTemplate.waitFor({ state: 'hidden' });
+    assert.equal(await template.getByRole('option', { name: 'Print style' }).count(), 1);
+    await removeTemplate.click();
+    await confirmTemplate.getByRole('button', { name: 'Delete template', exact: true }).click();
+    await confirmTemplate.waitFor({ state: 'hidden' });
+    await qr.getByText('Template deleted.', { exact: true }).waitFor();
+    assert.equal(await template.getByRole('option', { name: 'Print style' }).count(), 0);
+    assert.equal(await styledPreview.getAttribute('src'), previewUrl.pathname + previewUrl.search);
     await qr.getByRole('button', { name: 'Close', exact: true }).click();
     await page.setViewportSize({ width: 1360, height: 900 });
 
@@ -284,7 +309,7 @@ async function verify() {
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);
     assert.equal((await page.request.get(admin + '/api/v1/openapi.json')).status(), 401);
     assert.deepEqual(errors, []);
-    console.log('Browser smoke passed: setup, create link, styled QR preview, download and validation, link history, visit limits, protected links, analytics controls, JSON and CSV exchange, URL tools, mobile layout and sign-out.');
+    console.log('Browser smoke passed: setup, create link, styled QR preview, templates, download and validation, link history, visit limits, protected links, analytics controls, JSON and CSV exchange, URL tools, mobile layout and sign-out.');
   } finally {
     await browser.close();
   }

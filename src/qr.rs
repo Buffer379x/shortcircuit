@@ -124,16 +124,26 @@ impl Style {
     }
 }
 
-pub(crate) fn generate(value: &str, format: Format, options: &Options) -> Result<Vec<u8>, QrError> {
-    let size = options.size.unwrap_or(DEFAULT_SIZE);
-    if !(MIN_SIZE..=MAX_SIZE).contains(&size) {
-        return Err(QrError::InvalidSize);
+impl Options {
+    fn render_settings(&self) -> Result<(u16, Style), QrError> {
+        let size = self.size.unwrap_or(DEFAULT_SIZE);
+        if !(MIN_SIZE..=MAX_SIZE).contains(&size) {
+            return Err(QrError::InvalidSize);
+        }
+        Ok((size, Style::parse(self)?))
     }
+
+    pub(crate) fn validate(&self) -> Result<(), QrError> {
+        self.render_settings().map(|_| ())
+    }
+}
+
+pub(crate) fn generate(value: &str, format: Format, options: &Options) -> Result<Vec<u8>, QrError> {
+    let (size, style) = options.render_settings()?;
     if value.len() > MAX_VALUE_BYTES {
         return Err(QrError::DataTooLong);
     }
 
-    let style = Style::parse(options)?;
     let code = QrCode::with_error_correction_level(value.as_bytes(), style.correction)
         .map_err(|_| QrError::EncodingFailed)?;
     let size = usize::from(size);

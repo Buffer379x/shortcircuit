@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { ApiError } from './api';
-  import type { Link } from './api';
+  import type { Api, Link, QrStyle } from './api';
   import Dialog from './Dialog.svelte';
   import { problemMessage } from './format';
   import Icon from './Icon.svelte';
   import type { Messages } from './i18n';
+  import QrTemplates from './QrTemplates.svelte';
 
-  let { link, t, onclose }: { link: Link; t: Messages; onclose: () => void } = $props();
+  let { api, link, t, onclose }: { api: Api; link: Link; t: Messages; onclose: () => void } = $props();
 
   const qrId = $props.id();
   const contrastErrorId = qrId + '-contrast';
@@ -44,6 +45,14 @@
   const previewUrl = $derived(qrUrl('svg', settings));
   const validContrast = $derived((luminance(settings.background) + 0.05) / (luminance(settings.foreground) + 0.05) >= 4.5);
   const canExport = $derived(validContrast && preview === 'ready' && !exporting);
+  const templateStyle: QrStyle = $derived({
+    size: settings.size,
+    foreground: settings.foreground.slice(1),
+    background: settings.background.slice(1),
+    transparent: settings.transparent,
+    correction: settings.correction,
+    quiet_zone: settings.quietZone,
+  });
 
   onDestroy(() => requests.abort());
 
@@ -84,6 +93,17 @@
 
   function settlePreview(image: Element, state: 'ready' | 'error') {
     if (previewSource === previewUrl && image.getAttribute('src') === previewSource) preview = state;
+  }
+
+  function applyStyle(style: QrStyle) {
+    update({
+      size: style.size,
+      foreground: '#' + style.foreground,
+      background: '#' + style.background,
+      transparent: style.transparent,
+      correction: style.correction,
+      quietZone: style.quiet_zone,
+    });
   }
 
   async function fetchQr(format: Format, current: Settings): Promise<Blob> {
@@ -158,6 +178,9 @@
       <label class="field">
         <span>{t.qrResolution}</span>
         <select value={settings.size} disabled={exporting} onchange={(event) => update({ size: Number(event.currentTarget.value) })}>
+          {#if !resolutions.includes(settings.size)}
+            <option value={settings.size}>{settings.size} × {settings.size}</option>
+          {/if}
           {#each resolutions as resolution (resolution)}<option value={resolution}>{resolution} × {resolution}</option>{/each}
         </select>
       </label>
@@ -167,6 +190,7 @@
         onchange={(event) => update({ transparent: event.currentTarget.checked })} />{t.qrTransparent}
     </label>
     {#if settings.transparent}<p class="muted">{t.qrTransparentHint}</p>{/if}
+    <QrTemplates {api} {t} style={templateStyle} disabled={exporting} canSave={canExport} onapply={applyStyle} />
     {#if validContrast}
       <figure class="qr-content stack compact">
         <div class="qr-preview">

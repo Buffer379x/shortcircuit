@@ -6,6 +6,7 @@ import unittest
 MIGRATION = pathlib.Path(__file__).resolve().parents[1] / "migrations" / "0001_links.sql"
 PROTECTION = MIGRATION.with_name("0007_link_protection.sql")
 HISTORY = MIGRATION.with_name("0008_link_history.sql")
+QR_TEMPLATES = MIGRATION.with_name("0009_qr_templates.sql")
 
 
 class LinkSchemaTests(unittest.TestCase):
@@ -113,6 +114,25 @@ class LinkSchemaTests(unittest.TestCase):
         self.assertGreater(next_id, first)
         db.execute("DELETE FROM links WHERE id = ?", (link_id,))
         self.assertIsNone(db.execute("SELECT id FROM link_history").fetchone())
+
+    def test_qr_template_upgrade_preserves_existing_links_and_checks_styles(self):
+        self.assertTrue(QR_TEMPLATES.is_file(), "expected a versioned QR template migration")
+        db = self.database()
+        for migration in sorted(MIGRATION.parent.glob("*.sql")):
+            if MIGRATION < migration < QR_TEMPLATES:
+                db.executescript(migration.read_text())
+        self.insert(db, "go.example", "before-upgrade")
+        db.executescript(QR_TEMPLATES.read_text())
+        self.assertEqual(db.execute("SELECT slug FROM links").fetchone(), ("before-upgrade",))
+        insert = """INSERT INTO qr_templates
+                    (name, size, foreground, background, transparent, correction, quiet_zone)
+                    VALUES (?, 512, ?, 'fff4e0', 1, 'H', 8)"""
+        db.execute(insert, ("Print", "002040"))
+        for name, color in [("Print", "002040"), ("", "002040"), ("Invalid", "00000g")]:
+            with self.subTest(name=name, color=color), self.assertRaises(sqlite3.IntegrityError):
+                db.execute(insert, (name, color))
+        db.execute("DELETE FROM links")
+        self.assertEqual(db.execute("SELECT name FROM qr_templates").fetchone(), ("Print",))
 
 
 if __name__ == "__main__":

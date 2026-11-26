@@ -5,6 +5,7 @@ mod duplicates;
 mod exchange;
 mod links;
 mod metrics;
+mod qr_templates;
 
 use std::sync::Arc;
 
@@ -85,6 +86,7 @@ fn build_admin_router(
         .route("/api/v1/auth/password", post(change_password))
         .route("/api/v1/keys", get(list_keys).post(create_key))
         .route("/api/v1/keys/{id}", delete(revoke_key))
+        .merge(qr_templates::routes())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             access::browser_access,
