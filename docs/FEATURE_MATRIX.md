@@ -12,7 +12,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Custom and generated slugs | Current | P0 | Slugs are case-sensitive and can contain multiple segments. Custom segments use ASCII letters, digits, hyphens, and underscores. Generated slugs use 10 random characters by default. The database enforces uniqueness per host. |
 | Host-bound redirects | Current | P0 | Configured hosts can reuse the same slug independently. Public GET and HEAD use `302` by default and include `Cache-Control: no-store`. Matching uses the normalized host and exact path with optional extra path forwarding. |
 | Verify published addresses | Planned | P0 | Recreate required short URLs and check the configured host, exact slug, status, and destination through the intended proxy. Scan printed QR codes or compare their decoded URLs when applicable. |
-| Edit links and destinations | Current | P0 | Update destinations, titles, tags, and enabled status. Published hosts and slugs stay fixed. |
+| Edit links and destinations | Current | P0 | Update destinations, titles, descriptions, tags, and enabled status. Published hosts and slugs stay fixed. |
 | Activation windows and visit limits | Current | P0 | Evaluate time windows in UTC. Reserve limited visits atomically using a dedicated ledger with separate analytics counting. |
 | Redirect status and forwarding options | Current | P0 | Add per-link status and explicit query forwarding and extra-path policies. Keep temporary redirects and `no-store` for protected and limited links. Verify encoded paths, query keys, and fragments. |
 | Domain management and fallbacks | Current | P0/P1 | Manage allowed public hosts from the admin UI and configure validated fallback targets per domain. Test route collisions, errors, and redirect loops. |
@@ -24,6 +24,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Tags | Current | P1 | View tag counts, rename or merge tags, and remove their assignments. Tag suggestions and colors are planned. |
 | Crawler controls | Planned | P1 | Configure crawler directives and per-link crawlability. Check reserved route collisions before serving `robots.txt`. |
 | Duplicate detection | Current | P2 | Lookup matches against the exact stored destination. The creation and edit forms offer copying an existing short URL. Approximate matches and merge are planned. |
+| Duplicate a link | Current | P2 | Open a prefilled form for the destination, title, description, tags, and analytics preference. Save the copy disabled and review its redirect and access settings before enabling it. |
 | Protected links | Current | P2 | Optional password protection, explicit confirmation, and atomic consumption of one-time links. |
 | Link history | Current | P2 | Compare and restore earlier metadata and redirect policies. History lists verified actors and protection changes and supports JSON export and deletion. |
 | Rule simulation | Planned | P2 | Preview the selected destination for representative inputs. The current editor already supports rule ordering. |
@@ -37,6 +38,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Capability | Status | Priority | Scope |
 |---|---|---|---|
 | Visit totals and time series | Current | P1 | Report totals by UTC date and top link using bounded ingestion and indexed aggregates. Tag and domain views remain planned. |
+| Catalog usage | Current | P1 | Show successful redirects kept in analytics and the last recorded use, with a UTC date when the exact time has aged out. |
 | Visit details and unmatched requests | Planned | P1 | Show retained details and classify requests to the site root, invalid short links, and other unmatched paths. Prevent sensitive URL values from entering analytics. |
 | Referrers, devices, and bots | Current / planned | P1 | Referrer capture can store hostnames. Coarse traffic classes are reported. Browser, operating system, and device breakdowns and more detailed visit filters are planned. |
 | Privacy settings, retention, and deletion | Current | P1 | Honor global and per-link opt-outs and Do Not Track, with configurable retention and a clear-all action. Analytics collection operates independently of visit limits. |

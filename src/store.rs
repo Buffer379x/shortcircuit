@@ -34,6 +34,7 @@ pub(crate) struct Link {
     pub(crate) target: String,
     pub(crate) created_at: String,
     pub(crate) title: String,
+    pub(crate) description: String,
     pub(crate) enabled: bool,
     pub(crate) analytics_enabled: bool,
     #[sqlx(skip)]
@@ -45,6 +46,9 @@ pub(crate) struct LinkDraft {
     pub(crate) slug: String,
     pub(crate) target: String,
     pub(crate) title: String,
+    pub(crate) description: String,
+    pub(crate) enabled: bool,
+    pub(crate) analytics_enabled: bool,
     pub(crate) tags: Vec<String>,
 }
 
@@ -52,6 +56,7 @@ pub(crate) struct LinkDraft {
 pub(crate) struct LinkUpdate {
     pub(crate) target: Option<String>,
     pub(crate) title: Option<String>,
+    pub(crate) description: Option<String>,
     pub(crate) enabled: Option<bool>,
     pub(crate) analytics_enabled: Option<bool>,
     pub(crate) tags: Option<Vec<String>>,
@@ -130,14 +135,18 @@ pub(crate) async fn insert_link(
 ) -> Result<Option<Link>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
     let rows = sqlx::query_as::<_, Link>(
-        "INSERT INTO links (host, slug, target, title) VALUES (?, ?, ?, ?)
+        "INSERT INTO links (host, slug, target, title, description, enabled, analytics_enabled)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(host, slug) DO NOTHING
-         RETURNING id, host, slug, target, created_at, title, enabled, analytics_enabled",
+         RETURNING id, host, slug, target, created_at, title, description, enabled, analytics_enabled",
     )
     .bind(&draft.host)
     .bind(&draft.slug)
     .bind(&draft.target)
     .bind(&draft.title)
+    .bind(&draft.description)
+    .bind(draft.enabled)
+    .bind(draft.analytics_enabled)
     // The statement can fail at completion after SQLite has emitted the RETURNING row.
     .fetch_all(&mut *transaction)
     .await?;
@@ -175,7 +184,7 @@ pub(crate) async fn read_link(
     id: i64,
 ) -> Result<Option<Link>, sqlx::Error> {
     let mut query = QueryBuilder::new(
-        "SELECT id, host, slug, target, created_at, title, enabled, analytics_enabled
+        "SELECT id, host, slug, target, created_at, title, description, enabled, analytics_enabled
          FROM links WHERE id = ",
     );
     query.push_bind(id);
@@ -221,6 +230,7 @@ pub(crate) async fn write_link_in(
     let previous = Metadata::from(&link);
     link.target = update.target.unwrap_or(link.target);
     link.title = update.title.unwrap_or(link.title);
+    link.description = update.description.unwrap_or(link.description);
     link.enabled = update.enabled.unwrap_or(link.enabled);
     link.analytics_enabled = update.analytics_enabled.unwrap_or(link.analytics_enabled);
     let tags_changed = if let Some(mut tags) = update.tags {
@@ -237,10 +247,12 @@ pub(crate) async fn write_link_in(
     }
 
     sqlx::query(
-        "UPDATE links SET target = ?, title = ?, enabled = ?, analytics_enabled = ? WHERE id = ?",
+        "UPDATE links SET target = ?, title = ?, description = ?, enabled = ?,
+         analytics_enabled = ? WHERE id = ?",
     )
     .bind(&link.target)
     .bind(&link.title)
+    .bind(&link.description)
     .bind(link.enabled)
     .bind(link.analytics_enabled)
     .bind(id)
@@ -312,7 +324,8 @@ pub(crate) async fn list(
 ) -> Result<Vec<Link>, sqlx::Error> {
     let mut query = QueryBuilder::new(
         "WITH page AS (
-            SELECT id, host, slug, target, created_at, title, enabled, analytics_enabled FROM links WHERE id > ",
+            SELECT id, host, slug, target, created_at, title, description, enabled, analytics_enabled
+            FROM links WHERE id > ",
     );
     query.push_bind(after_id);
     push_host_scope(&mut query, hosts);
@@ -359,6 +372,9 @@ mod tests {
             slug: "Team/Docs".to_owned(),
             target: TARGET.to_owned(),
             title: "Team docs".to_owned(),
+            description: String::new(),
+            enabled: true,
+            analytics_enabled: true,
             tags: vec!["work".to_owned(), "docs".to_owned(), "work".to_owned()],
         }
     }
@@ -389,6 +405,10 @@ mod tests {
             .unwrap();
 
         sqlx::raw_sql(include_str!("../migrations/0006_analytics.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0013_link_description.sql"))
             .execute(&pool)
             .await
             .unwrap();
@@ -424,6 +444,7 @@ mod tests {
             LinkUpdate {
                 target: None,
                 title: Some("Archived docs".to_owned()),
+                description: None,
                 enabled: Some(false),
                 analytics_enabled: Some(false),
                 tags: None,
@@ -474,6 +495,7 @@ mod tests {
             LinkUpdate {
                 target: Some("https://target.example/changed".to_owned()),
                 title: None,
+                description: None,
                 enabled: None,
                 analytics_enabled: None,
                 tags: Some(vec!["reject".to_owned()]),

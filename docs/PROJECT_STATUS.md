@@ -5,14 +5,14 @@
 | Area | Status |
 |---|---|
 | Public foundation | Host-bound redirects, a versioned SQLite database with WAL and full synchronization, and separate public and admin listeners. |
-| Link management | Create, edit, enable, disable, tag, and delete links. Favorites and an archive view organize the catalog. Search, combine tag filters with all or any matching, and sort with cursor pagination. Set the generated shortcode length at startup. Apply status and tag changes, export native JSON or CSV, and confirm deletion for selections of up to 50 links. |
+| Link management | Create, edit, enable, disable, tag, and delete links. Add descriptions and create disabled duplicates for review. Favorites and an archive view organize the catalog. Search, combine tag filters with all or any matching, and sort with cursor pagination. Set the generated shortcode length at startup. Apply status and tag changes, export native JSON or CSV, and confirm deletion for selections of up to 50 links. |
 | Link tools | The link forms can find exact destination matches or preview the removal of known tracking parameters. |
 | Redirect controls | Managed domains and fallbacks, time windows, atomic visit limits, ordered rules, and opt-in query and path forwarding. |
 | Protected links | Optional passwords and confirmed one-time access. The public form verifies a short-lived signature and the configured origin before redirecting. SQLite enforces consumption independently of analytics. |
 | Link history | Record individual link edits with actor and timestamp. Compare and restore metadata or redirect policy through the admin dialog, download JSON, or clear a link's history. |
 | QR Studio | Preview and export local PNG and SVG with colors, transparency, error correction, size, quiet zone, an optional outline, and a verified PNG logo for the current dialog. Copy PNG when the browser supports image clipboard access. Save reusable style templates in SQLite. |
 | Tags | The admin catalog shows tag counts and supports rename, merge and delete. |
-| Analytics | UTC trends, period comparison, top links, DNT, referrer hostname controls, per-link opt-out, retention, and clear-all. Browser, OS, device, and geolocation breakdowns are pending. |
+| Analytics | UTC trends, period comparison, top links, catalog click counts and last use, DNT, referrer hostname controls, per-link opt-out, retention, and clear-all. Browser, OS, device, and geolocation breakdowns are pending. |
 | Backup and restore | The CLI creates consistent, verified SQLite backups and supports an offline restore with a rollback copy. Optional scheduled backups have independent retention and use the same verified snapshot format. Admin downloads are planned. |
 | Data exchange | Bounded native JSON and CSV exchange, preview, exact collision checks, and atomic apply. Bulk field mapping is planned. |
 | Authentication | A CLI-issued account claim, Argon2id passwords, revocable sessions, account recovery, CSRF protection, and scoped API keys. |
@@ -26,7 +26,7 @@
 
 ## Open work
 
-- **Link management and redirects.** Link descriptions and duplication, tag colors and descriptions, visit and last-used columns, crawl controls, and a simulator for redirect rules. Domain DNS and health checks depend on the health monitoring work.
+- **Link management and redirects.** Tag colors and descriptions, crawl controls, and a simulator for redirect rules. Domain DNS and health checks depend on the health monitoring work.
 - **Analytics and dashboard.** Top tags and domains, browser, OS, and device breakdowns, more detailed bot and preview filters, custom dates, richer dashboard views, and analytics export. Evaluate local GeoIP with a suitable dataset license.
 - **Monitoring and automation.** An opt-in outbound request policy shared by the Health Monitor, automatic title lookup, and webhooks. Add bounded adaptive checks, per-link settings, and notifications after that policy is verified.
 - **Administration and abuse controls.** Browser backup downloads and validated restore, a durable audit log, system diagnostics, API key rotation, configured trusted proxies for client address attribution, and broader rate limits. Native CSV and JSON work with the ShortCircuit format. Import field mapping remains open.

@@ -8,6 +8,8 @@ Schema version 11 assigns a unique 128-bit selection key to each existing link a
 
 Schema version 12 adds `favorite` and `archived` flags to `links`, both defaulting to false. A catalog organization write matches the link ID, selection key, and configured host in one statement. Redirect lookup ignores both flags. SQLite backups include them.
 
+Schema version 13 adds the optional plain-text link description with an empty-string default for existing links. An older history revision without a description leaves the current description intact when restored. Catalog usage reads the retained daily analytics and the latest available detailed event for the selected page. It requires no separate visit ledger.
+
 ## Protected links
 
 Migration `0007` adds `link_protection` with the link ID, optional Argon2id password hash, one-time and consumed flags, and a protection revision. A deleted link cascades to its protection record. An existing link has no protection by default. Changes to protection increment its revision. Confirmation checks that revision before consuming the one-time flag and any existing visit limit in the same write transaction. Signed confirmation tokens expire in memory and require no challenge rows.

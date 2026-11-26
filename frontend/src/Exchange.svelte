@@ -11,6 +11,7 @@
     slug: string;
     target: string;
     title: string;
+    description?: string;
     tags: string[];
     enabled: boolean;
     analytics_enabled: boolean;
@@ -181,7 +182,10 @@
   function isExchangeItem(value: unknown): value is ExchangeItem {
     if (typeof value !== 'object' || value === null) return false;
     const item = value as Record<string, unknown>;
-    return Object.keys(item).length === 7 && typeof item.host === 'string' && typeof item.slug === 'string'
+    const hasDescription = Object.hasOwn(item, 'description');
+    return Object.keys(item).length === (hasDescription ? 8 : 7)
+      && (!hasDescription || typeof item.description === 'string')
+      && typeof item.host === 'string' && typeof item.slug === 'string'
       && typeof item.target === 'string' && typeof item.title === 'string'
       && typeof item.enabled === 'boolean' && typeof item.analytics_enabled === 'boolean'
       && Array.isArray(item.tags) && item.tags.every((tag: unknown) => typeof tag === 'string');

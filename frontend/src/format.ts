@@ -24,6 +24,7 @@ const problemMessages = new Map<string, Message>([
   ['slug_in_use', 'slugInUse'],
   ['invalid_host', 'invalidHost'],
   ['invalid_title', 'invalidTitle'],
+  ['invalid_description', 'invalidDescription'],
   ['invalid_tags', 'invalidTags'],
   ['invalid_link_search', 'invalidLinkSearch'],
   ['invalid_link_cursor', 'invalidLinkCursor'],
@@ -82,11 +83,12 @@ export function labelAllowed(value: string): boolean {
   return value.length > 0 && [...value].length <= 64 && !/\p{Cc}/u.test(value);
 }
 
-export function formatDate(date: string, language: Language, withTime = false): string {
+export function formatDate(date: string, language: Language, withTime = false, timeZone?: string): string {
   const parsed = new Date(date);
   if (Number.isNaN(parsed.getTime())) return date;
   return new Intl.DateTimeFormat(language, {
     dateStyle: 'medium',
+    timeZone,
     ...(withTime ? { timeStyle: 'short' } : {}),
   }).format(parsed);
 }

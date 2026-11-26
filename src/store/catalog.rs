@@ -150,7 +150,23 @@ struct SearchItem {
     link: Link,
     #[serde(flatten)]
     organization: Organization,
+    #[serde(flatten)]
+    usage: Usage,
     selection_key: String,
+}
+
+#[derive(Default, Serialize, sqlx::FromRow)]
+struct Usage {
+    recorded_redirects: i64,
+    last_redirect_date: Option<String>,
+    last_redirect_at: Option<i64>,
+}
+
+#[derive(sqlx::FromRow)]
+struct UsageRow {
+    link_id: i64,
+    #[sqlx(flatten)]
+    usage: Usage,
 }
 
 #[derive(sqlx::FromRow)]
@@ -174,7 +190,8 @@ pub(crate) async fn search(
         .map(|domain| (domain.host.as_str(), domain.origin.as_str()))
         .collect();
     let mut query = QueryBuilder::<Sqlite>::new(
-        "SELECT id, host, slug, target, created_at, title, enabled, analytics_enabled, selection_key,
+        "SELECT id, host, slug, target, created_at, title, description,
+                enabled, analytics_enabled, selection_key,
                 favorite, archived,
                 (SELECT json_group_array(tag ORDER BY tag) FROM link_tags WHERE link_id = links.id) AS tags_json
          FROM links WHERE 1",
@@ -243,6 +260,7 @@ pub(crate) async fn search(
             items.push(SearchItem {
                 link: row.link,
                 organization: row.organization,
+                usage: Usage::default(),
                 selection_key: row.selection_key,
             });
             if items.len() > PAGE_SIZE {
@@ -252,6 +270,8 @@ pub(crate) async fn search(
     }
     let has_more = items.len() > PAGE_SIZE;
     items.truncate(PAGE_SIZE);
+    drop(rows);
+    load_usage(pool, &mut items).await?;
     let next_cursor = items.last().filter(|_| has_more).map(|link| Cursor {
         id: link.link.id,
         key: sort.key(&link.link),
@@ -260,12 +280,53 @@ pub(crate) async fn search(
     Ok(SearchPage { items, next_cursor })
 }
 
+async fn load_usage(pool: &SqlitePool, items: &mut [SearchItem]) -> Result<(), sqlx::Error> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "WITH recent AS (
+            SELECT link_id, sum(total) AS recorded_redirects, max(day) AS last_day
+            FROM analytics_daily WHERE kind = 'redirect' AND link_id IN (",
+    );
+    let mut ids = query.separated(", ");
+    for item in items.iter() {
+        ids.push_bind(item.link.id);
+    }
+    query.push(
+        ") GROUP BY link_id)
+         SELECT link_id, recorded_redirects, date(last_day * 86400, 'unixepoch') AS last_redirect_date,
+             (SELECT max(occurred_at) FROM analytics_events
+              WHERE analytics_events.link_id = recent.link_id AND kind = 'redirect'
+                AND occurred_at >= last_day * 86400 AND occurred_at < (last_day + 1) * 86400)
+             AS last_redirect_at
+         FROM recent",
+    );
+    let rows = query.build_query_as::<UsageRow>().fetch_all(pool).await?;
+    let mut by_link: HashMap<_, _> = rows
+        .into_iter()
+        .map(|row| (row.link_id, row.usage))
+        .collect();
+    for item in items {
+        if let Some(usage) = by_link.remove(&item.link.id) {
+            item.usage = usage;
+        }
+    }
+    Ok(())
+}
+
 fn matches_query(link: &Link, origin: Option<&str>, text: &str) -> bool {
     let contains = |value: &str| value.contains(text) || value.to_lowercase().contains(text);
-    [link.title.as_str(), &link.slug, &link.host, &link.target]
-        .into_iter()
-        .chain(link.tags.iter().map(String::as_str))
-        .any(contains)
+    [
+        link.title.as_str(),
+        &link.description,
+        &link.slug,
+        &link.host,
+        &link.target,
+    ]
+    .into_iter()
+    .chain(link.tags.iter().map(String::as_str))
+    .any(contains)
         || contains(&format!("{}/{}", link.host, link.slug))
         || origin.is_some_and(|base| contains(&format!("{base}/{}", link.slug)))
 }

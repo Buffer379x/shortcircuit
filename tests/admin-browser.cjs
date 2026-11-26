@@ -256,6 +256,29 @@ async function verify() {
     await dialog.waitFor({ state: 'hidden' });
 
     const protectedRow = page.getByRole('row').filter({ hasText: 'localhost/protected-test' });
+    await protectedRow.getByRole('button', { name: 'Duplicate link', exact: true }).click();
+    const duplicate = page.getByRole('dialog', { name: 'Duplicate link', exact: true });
+    assert.equal(await duplicate.getByLabel('Destination URL', { exact: true }).inputValue(), protectedTarget);
+    assert.equal(await duplicate.getByLabel('Slug (optional)', { exact: true }).count(), 0);
+    await duplicate.getByLabel('Description (optional)', { exact: true }).fill('Reviewed test description');
+    const duplicateCreated = page.waitForResponse(response =>
+      response.url().endsWith('/api/v1/links') && response.request().method() === 'POST');
+    await duplicate.getByRole('button', { name: 'Create duplicate', exact: true }).click();
+    const duplicateResponse = await duplicateCreated;
+    assert.equal(duplicateResponse.status(), 201);
+    assert.equal(duplicateResponse.request().postDataJSON().protection, undefined);
+    assert.equal(duplicateResponse.request().postDataJSON().slug, undefined);
+    const copied = await duplicateResponse.json();
+    assert.equal(copied.enabled, false);
+    assert.match(copied.slug, /^[a-zA-Z0-9_-]{10}$/);
+    await duplicate.waitFor({ state: 'hidden' });
+    assert.equal((await page.request.get(publicOrigin + '/' + copied.slug, { maxRedirects: 0 })).status(), 404);
+    await page.getByRole('row').filter({ hasText: 'localhost/' + copied.slug })
+      .getByRole('button', { name: 'Delete link', exact: true }).click();
+    const deleteCopy = page.getByRole('dialog', { name: 'Delete link', exact: true });
+    await deleteCopy.getByRole('button', { name: 'Delete', exact: true }).click();
+    await deleteCopy.waitFor({ state: 'hidden' });
+
     await protectedRow.getByRole('button', { name: 'Link protection', exact: true }).click();
     const protection = page.getByRole('dialog', { name: 'Link protection', exact: true });
     await protection.getByText('Password protection is enabled.', { exact: true }).waitFor();
@@ -316,6 +339,7 @@ async function verify() {
         slug: 'backup-check',
         target: 'https://example.test/backup-check',
         title: 'Backup check',
+        description: 'Fixture from native exchange',
         tags: ['internal'],
         enabled: true,
         analytics_enabled: true,
@@ -350,8 +374,12 @@ async function verify() {
     assert.equal(csvRedirect.headers().location, 'https://example.test/csv-check');
 
     await page.getByRole('button', { name: 'Links', exact: true }).click();
-    await page.setViewportSize({ width: 390, height: 844 });
     const linkTable = page.getByRole('table', { name: 'Links', exact: true });
+    await linkTable.getByRole('columnheader', { name: 'Clicks', exact: true }).waitFor();
+    await linkTable.getByRole('columnheader', { name: 'Last used', exact: true }).waitFor();
+    await page.setViewportSize({ width: 768, height: 1024 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole('combobox', { name: 'Sort links', exact: true }).selectOption('slug_asc');
     await linkTable.locator('.link-short').first().filter({ hasText: 'localhost/backup-check' }).waitFor();
     assert.equal(await linkTable.locator('.link-short').first().textContent(), 'localhost/backup-check');
@@ -364,6 +392,7 @@ async function verify() {
     assert.equal(await backupRow.count(), 0);
     await page.getByRole('combobox', { name: 'Match tags', exact: true }).selectOption('any');
     await backupRow.waitFor();
+    await backupRow.getByText('Fixture from native exchange', { exact: true }).waitFor();
     await guideLink.waitFor();
     await page.getByRole('button', { name: 'Remove tag filter docs', exact: true }).click();
     await page.getByRole('button', { name: 'Remove tag filter internal', exact: true }).click();

@@ -4,7 +4,7 @@
   import type { Api, BulkLinkResult, CatalogLink, Domains, Link, LinkCursor, LinkMetadata, LinkOrganization, LinkProtectionChange, LinkSearch, LinkSearchPage, LinkSort, LinkView, Tag, TagMatch } from './api';
   import BulkLinks from './BulkLinks.svelte';
   import Dialog from './Dialog.svelte';
-  import { downloadFile, formatDate, passwordAllowed, problemMessage } from './format';
+  import { downloadFile, formatDate, fromUnixSeconds, passwordAllowed, problemMessage } from './format';
   import DuplicateLookup from './DuplicateLookup.svelte';
   import UrlCleaner from './UrlCleaner.svelte';
   import LinkQr from './LinkQr.svelte';
@@ -42,6 +42,7 @@
 
   let formOpen = $state(false);
   let editing = $state<Link | null>(null);
+  let duplicating = $state(false);
   let qrLink = $state<Link | null>(null);
   let historyLink = $state<Link | null>(null);
   let policyLink = $state<Link | null>(null);
@@ -51,6 +52,7 @@
   let saving = $state(false);
   let target = $state('');
   let title = $state('');
+  let description = $state('');
   let slug = $state('');
   let host = $state('');
   let tags = $state('');
@@ -224,7 +226,7 @@
       const matching = inCurrentView(updated) && matchesTags
         && (!domain || domain === updated.host)
         && (!status || updated.enabled === (status === 'enabled'))
-        && (!text || [updated.title, updated.slug, updated.host, updated.target,
+        && (!text || [updated.title, updated.description, updated.slug, updated.host, updated.target,
           `${updated.host}/${updated.slug}`, shortUrl(updated, domains), ...updated.tags]
           .some((value) => value.toLowerCase().includes(text)));
       return matching ? [updated] : [];
@@ -249,12 +251,14 @@
     else if (tagsFilter.length < 20) tagsFilter = [...tagsFilter, tag];
   }
 
-  function openForm(link: Link | null = null) {
-    editing = link;
+  function openForm(link: Link | null = null, duplicate = false) {
+    editing = duplicate ? null : link;
+    duplicating = duplicate;
     target = link?.target ?? '';
     title = link?.title ?? '';
-    slug = link?.slug ?? '';
-    host = link?.host ?? domains.hosts[0] ?? '';
+    description = link?.description ?? '';
+    slug = duplicate ? '' : link?.slug ?? '';
+    host = link && domains.hosts.includes(link.host) ? link.host : domains.hosts[0] ?? '';
     tags = link?.tags.join(', ') ?? '';
     analyticsEnabled = link?.analytics_enabled ?? true;
     oneTime = false;
@@ -288,8 +292,13 @@
     const fields = {
       target: value,
       title: title.trim(),
+      description: description.trim(),
       tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean),
     };
+    if ([...fields.description].length > 500) {
+      formError = 'invalidDescription';
+      return;
+    }
     saving = true;
     notice = null;
     actionError = null;
@@ -299,6 +308,7 @@
           ...(fields.target !== editing.target ? { target: fields.target } : {}),
           ...(analyticsEnabled !== editing.analytics_enabled ? { analytics_enabled: analyticsEnabled } : {}),
           ...(fields.title !== editing.title ? { title: fields.title } : {}),
+          ...(fields.description !== editing.description ? { description: fields.description } : {}),
           ...(fields.tags.join(', ') !== editing.tags.join(', ') ? { tags: fields.tags } : {}),
         };
         if (!Object.keys(changes).length) {
@@ -315,13 +325,14 @@
         } : undefined;
         await api<Link>('/links', 'POST', {
           ...fields,
+          ...(duplicating ? { enabled: false, analytics_enabled: analyticsEnabled } : {}),
           ...(host ? { host } : {}),
           ...(slug.trim() ? { slug: slug.trim() } : {}),
           ...(protection ? { protection } : {}),
         });
         clearFilters();
         view = 'unarchived';
-        notice = 'linkCreated';
+        notice = duplicating ? 'duplicateCreated' : 'linkCreated';
       }
       refreshCatalog();
       closeForm();
@@ -408,7 +419,8 @@
   }
 
   function exportVisible() {
-    const listed = items.map(({ selection_key: _key, favorite: _favorite, archived: _archived, ...link }) => link);
+    const listed = items.map(({ selection_key: _key, favorite: _favorite, archived: _archived,
+      recorded_redirects: _redirects, last_redirect_date: _date, last_redirect_at: _time, ...link }) => link);
     const data = new Blob([JSON.stringify(listed, null, 2) + '\n'], { type: 'application/json' });
     downloadFile(data, 'shortcircuit-links.json');
   }
@@ -510,11 +522,17 @@
       <!-- svelte-ignore a11y_no_redundant_roles (Mobile card layout overrides native table display.) -->
       <table class="links-table" role="table" aria-label={t.links}>
         <thead>
-          <tr><th scope="col">{t.shortLink}</th><th scope="col">{t.tags}</th><th scope="col">{t.status}</th><th scope="col">{t.created}</th><th scope="col" class="align-right">{t.actions}</th></tr>
+          <tr>
+            <th scope="col">{t.shortLink}</th><th scope="col">{t.tags}</th>
+            <th scope="col">{t.status}</th><th scope="col">{t.created}</th>
+            <th scope="col" title={t.recordedRedirectsHint}>{t.recordedRedirects}</th>
+            <th scope="col">{t.lastUsed}</th><th scope="col" class="align-right">{t.actions}</th>
+          </tr>
         </thead>
         <!-- svelte-ignore a11y_no_redundant_roles (Preserve table semantics in mobile cards.) -->
         <tbody role="rowgroup">
           {#each items as link (link.id)}
+            {@const lastTime = link.last_redirect_at === null ? null : fromUnixSeconds(link.last_redirect_at)}
             <!-- svelte-ignore a11y_no_redundant_roles (Body rows display as grids on mobile.) -->
             <tr role="row">
               <td role="cell">
@@ -532,6 +550,7 @@
                     {#if link.title}<strong>{link.title}</strong>{/if}
                     <a class="mono link-short" href={shortUrl(link, domains)} target="_blank" rel="noreferrer">{link.host}/{link.slug}</a>
                     <span class="link-target" title={link.target}>{link.target}</span>
+                    {#if link.description}<span class="link-description" title={link.description}>{link.description}</span>{/if}
                   </div>
                 </div>
               </td>
@@ -548,9 +567,26 @@
               <td role="cell"><span class="cell-label" aria-hidden="true">{t.status}</span><span class:active={link.enabled} class="status"><span class="dot"></span>{link.enabled ? t.enabled : t.disabled}</span></td>
               <td role="cell"><span class="cell-label" aria-hidden="true">{t.created}</span><time datetime={link.created_at}>{formatDate(link.created_at, language)}</time></td>
               <td role="cell">
+                <span class="cell-label" aria-hidden="true">{t.recordedRedirects}</span>
+                <span title={t.recordedRedirectsHint}>{limit.format(link.recorded_redirects)}</span>
+              </td>
+              <td role="cell">
+                <span class="cell-label" aria-hidden="true">{t.lastUsed}</span>
+                {#if lastTime}
+                  <time datetime={lastTime}>{formatDate(lastTime, language, true)}</time>
+                {:else if link.last_redirect_date}
+                  <time datetime={link.last_redirect_date} title={t.lastUsedDayHint}>{formatDate(link.last_redirect_date, language, false, 'UTC')}</time>
+                {:else}
+                  <span class="muted" aria-hidden="true">—</span>
+                  <span class="visually-hidden">{t.noRecordedRedirects}</span>
+                {/if}
+              </td>
+              <td role="cell">
                 <div class="row row-actions">
                   <button class="icon-button ghost" type="button" aria-label={t.copyUrl} title={t.copyUrl} onclick={() => copy(link)}><Icon name="copy" /></button>
                   <button class="icon-button ghost" type="button" disabled={bulkBusy} aria-label={t.editLink} title={t.editLink} onclick={() => openForm(link)}><Icon name="edit" /></button>
+                  <button class="icon-button ghost" type="button" disabled={bulkBusy || !domains.hosts.length}
+                    aria-label={t.duplicateLink} title={t.duplicateLink} onclick={() => openForm(link, true)}><Icon name="duplicate" /></button>
                   <button class="icon-button ghost" type="button" disabled={bulkBusy} aria-label={t.redirectPolicy} title={t.redirectPolicy} onclick={() => policyLink = link}><Icon name="rule" /></button>
                   <button class="icon-button ghost" type="button" disabled={bulkBusy} aria-label={t.linkProtection} title={t.linkProtection} onclick={() => protectionLink = link}><Icon name="lock" /></button>
                   <button class="icon-button ghost" type="button" disabled={bulkBusy} aria-label={t.linkHistory} title={t.linkHistory} onclick={() => historyLink = link}><Icon name="history" /></button>
@@ -597,9 +633,10 @@
     onsaved={() => { protectionLink = null; notice = 'linkProtectionSaved'; }} />
 {/if}
 
-<Dialog {t} title={editing ? t.editLink : t.addLink} open={formOpen} busy={saving} onclose={closeForm}>
+<Dialog {t} title={editing ? t.editLink : duplicating ? t.duplicateLink : t.addLink} open={formOpen} busy={saving} onclose={closeForm}>
   <form onsubmit={save} aria-busy={saving}>
     <div class="dialog-body stack">
+      {#if duplicating}<p class="notice">{t.duplicateHint}</p>{/if}
       {#if editing}<a class="mono link-short" href={shortUrl(editing, domains)} target="_blank" rel="noreferrer">{shortUrl(editing, domains)}</a>{/if}
       <label class="field">
         <span id="target-label">{t.target}</span>
@@ -613,6 +650,11 @@
       <label class="field">
         <span>{t.title}</span><input name="title" bind:value={title} disabled={saving} aria-invalid={formError === 'invalidTitle'} />
       </label>
+      <label class="field">
+        <span>{t.linkDescription}</span>
+        <textarea name="description" rows="2" maxlength="1000" bind:value={description} disabled={saving}
+          aria-invalid={formError === 'invalidDescription'}></textarea>
+      </label>
       {#if !editing}
         <label class="field">
           <span>{t.domain}</span>
@@ -620,18 +662,20 @@
             {#each domains.hosts as value (value)}<option value={value}>{value}</option>{/each}
           </select>
         </label>
-        <label class="field">
-          <span id="slug-label">{t.slug}</span>
-          <input name="slug" maxlength="200" autocapitalize="none" spellcheck="false" bind:value={slug} disabled={saving} aria-labelledby="slug-label" aria-describedby="slug-hint" aria-invalid={formError === 'invalidSlug' || formError === 'slugInUse'} />
-          <small id="slug-hint">{t.slugHint}</small>
-        </label>
+        {#if !duplicating}
+          <label class="field">
+            <span id="slug-label">{t.slug}</span>
+            <input name="slug" maxlength="200" autocapitalize="none" spellcheck="false" bind:value={slug} disabled={saving} aria-labelledby="slug-label" aria-describedby="slug-hint" aria-invalid={formError === 'invalidSlug' || formError === 'slugInUse'} />
+            <small id="slug-hint">{t.slugHint}</small>
+          </label>
+        {/if}
       {/if}
       <label class="field">
         <span id="tags-label">{t.tags}</span>
         <input name="tags" bind:value={tags} disabled={saving} aria-labelledby="tags-label" aria-describedby="tags-hint" aria-invalid={formError === 'invalidTags'} />
         <small id="tags-hint">{t.tagsHint}</small>
       </label>
-      {#if editing}<label class="row"><input type="checkbox" bind:checked={analyticsEnabled} disabled={saving} />{t.countLinkVisits}</label>{/if}
+      {#if editing || duplicating}<label class="row"><input type="checkbox" bind:checked={analyticsEnabled} disabled={saving} />{t.countLinkVisits}</label>{/if}
       {#if formOpen && !editing}
         <details class="protection-options">
           <summary>{t.linkProtection}</summary>
@@ -643,7 +687,7 @@
     </div>
     <footer class="dialog-foot row">
       <button class="button" type="button" disabled={saving} onclick={closeForm}>{t.cancel}</button>
-      <button class="button primary" type="submit" disabled={saving}>{saving ? t.saving : editing ? t.save : t.addLink}</button>
+      <button class="button primary" type="submit" disabled={saving}>{saving ? t.saving : editing ? t.save : duplicating ? t.createDuplicate : t.addLink}</button>
     </footer>
   </form>
 </Dialog>

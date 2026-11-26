@@ -57,6 +57,7 @@ export interface Link {
   slug: string;
   host: string;
   title: string;
+  description: string;
   enabled: boolean;
   analytics_enabled: boolean;
   tags: string[];
@@ -75,7 +76,8 @@ export interface LinkProtectionChange {
   remove_password?: boolean;
 }
 
-export type LinkMetadata = Pick<Link, 'target' | 'title' | 'tags' | 'enabled' | 'analytics_enabled'>;
+export type LinkMetadata = Pick<Link, 'target' | 'title' | 'tags' | 'enabled' | 'analytics_enabled'>
+  & Partial<Pick<Link, 'description'>>;
 export type LinkPolicy = Omit<Policy, 'visits_used'>;
 
 export interface LinkRevision {
@@ -128,6 +130,9 @@ export interface LinkOrganization {
 
 export interface CatalogLink extends Link, LinkOrganization {
   selection_key: string;
+  recorded_redirects: number;
+  last_redirect_date: string | null;
+  last_redirect_at: number | null;
 }
 
 export interface BulkLinkResult {

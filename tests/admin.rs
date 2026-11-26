@@ -443,6 +443,177 @@ async fn catalog_combines_multiple_tags_with_all_or_any() {
 const QR_TEMPLATES: &str = "/api/v1/qr/templates";
 
 #[tokio::test]
+async fn link_descriptions_are_searchable_versioned_and_optional() {
+    let app = App::start().await;
+    let (cookie, csrf) = app.setup().await;
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    let created = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links",
+        &headers,
+        Some(json!({
+            "slug":"notes", "target":"https://example.test/guide",
+            "description":"  Übergabe\nTeam  ", "enabled":false, "analytics_enabled":false
+        })),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let link = response_body(created).await;
+    assert_eq!(link["description"], "Übergabe\nTeam");
+    assert_eq!(link["enabled"], false);
+    assert_eq!(link["analytics_enabled"], false);
+    let redirect = request(
+        &app.public,
+        Method::GET,
+        "/notes",
+        &[("host", "go.example")],
+        None,
+    )
+    .await;
+    assert_eq!(redirect.status(), StatusCode::NOT_FOUND);
+
+    let found = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links/search",
+        &headers,
+        Some(json!({"query":"übergabe"})),
+    )
+    .await;
+    assert_eq!(response_body(found).await["items"][0]["id"], link["id"]);
+    let endpoint = format!("/api/v1/links/{}", link["id"]);
+    let invalid = request(
+        &app.admin,
+        Method::PATCH,
+        &endpoint,
+        &headers,
+        Some(json!({"description":"ü".repeat(501)})),
+    )
+    .await;
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response_body(invalid).await["code"], "invalid_description");
+    let cleared = request(
+        &app.admin,
+        Method::PATCH,
+        &endpoint,
+        &headers,
+        Some(json!({"description":""})),
+    )
+    .await;
+    assert_eq!(response_body(cleared).await["description"], "");
+    let history_path = format!("{endpoint}/history");
+    let history = request(&app.admin, Method::GET, &history_path, &headers, None).await;
+    let history = response_body(history).await;
+    assert_eq!(
+        history["items"][0]["previous"]["value"]["description"],
+        "Übergabe\nTeam"
+    );
+    let restore_path = format!("{history_path}/{}/restore", history["items"][0]["id"]);
+    let restored = request(&app.admin, Method::POST, &restore_path, &headers, None).await;
+    assert_eq!(restored.status(), StatusCode::NO_CONTENT);
+    let matching = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links/search",
+        &headers,
+        Some(json!({"query":"übergabe"})),
+    )
+    .await;
+    assert_eq!(
+        response_body(matching).await["items"][0]["description"],
+        "Übergabe\nTeam"
+    );
+    let legacy = json!({"kind":"metadata","value":{
+        "target":"https://example.test/guide","title":"Legacy title","tags":[],
+        "enabled":false,"analytics_enabled":false
+    }});
+    let legacy_id: i64 = sqlx::query_scalar(
+        "INSERT INTO link_history(link_id, actor_kind, actor_label, action, previous)
+         VALUES (?, 'admin', 'Owner', 'metadata', ?) RETURNING id",
+    )
+    .bind(link["id"].as_i64().unwrap())
+    .bind(legacy.to_string())
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    let restored = request(
+        &app.admin,
+        Method::POST,
+        &format!("{history_path}/{legacy_id}/restore"),
+        &headers,
+        None,
+    )
+    .await;
+    assert_eq!(restored.status(), StatusCode::NO_CONTENT);
+    let current: (String, String) =
+        sqlx::query_as("SELECT title, description FROM links WHERE slug = 'notes'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        current,
+        ("Legacy title".to_owned(), "Übergabe\nTeam".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn catalog_usage_counts_retained_redirects_and_reports_last_available_precision() {
+    let app = App::start().await;
+    let (cookie, csrf) = app.setup().await;
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    sqlx::raw_sql(
+        "INSERT INTO links(id, host, slug, target) VALUES
+            (1, 'go.example', 'precise', 'https://example.test/one'),
+            (2, 'go.example', 'aggregate', 'https://example.test/two'),
+            (3, 'go.example', 'unused', 'https://example.test/three');
+         INSERT INTO analytics_daily(day, host, link_id, kind, visit_class, total) VALUES
+            (2, 'go.example', 1, 'redirect', 'human', 2),
+            (2, 'go.example', 1, 'redirect', 'bot', 1),
+            (3, 'go.example', 1, 'blocked', 'human', 6),
+            (1, 'go.example', 2, 'redirect', 'human', 7);
+         INSERT INTO analytics_events(occurred_at, host, link_id, kind, visit_class, source) VALUES
+            (172801, 'go.example', 1, 'redirect', 'human', 'other'),
+            (172805, 'go.example', 1, 'redirect', 'human', 'other'),
+            (259201, 'go.example', 1, 'blocked', 'human', 'other');",
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let page = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links/search",
+        &headers,
+        Some(json!({"sort":"slug_asc"})),
+    )
+    .await;
+    assert_eq!(page.status(), StatusCode::OK);
+    let body = response_body(page).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0]["slug"], "aggregate");
+    assert_eq!(items[0]["recorded_redirects"], 7);
+    assert_eq!(items[0]["last_redirect_date"], "1970-01-02");
+    assert!(items[0]["last_redirect_at"].is_null());
+    assert_eq!(items[1]["slug"], "precise");
+    assert_eq!(items[1]["recorded_redirects"], 3);
+    assert_eq!(items[1]["last_redirect_date"], "1970-01-03");
+    assert_eq!(items[1]["last_redirect_at"], 172805);
+    assert_eq!(items[2]["recorded_redirects"], 0);
+    assert!(items[2]["last_redirect_date"].is_null());
+    assert!(items[2]["last_redirect_at"].is_null());
+}
+
+#[tokio::test]
 async fn selected_link_operations_are_atomic_and_protected_exports_are_disabled() {
     let app = App::start().await;
     let (cookie, csrf) = app.setup().await;

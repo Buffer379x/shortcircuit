@@ -114,6 +114,12 @@ pub(crate) fn link_title(value: &str) -> Option<&str> {
     (value.chars().count() <= 160 && !value.chars().any(char::is_control)).then_some(value)
 }
 
+pub(crate) fn link_description(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (value.chars().count() <= 500 && !value.chars().any(|ch| ch != '\n' && ch.is_control()))
+        .then_some(value)
+}
+
 pub(crate) fn tag_name(value: &str) -> Option<&str> {
     let value = value.trim();
     let valid = !value.is_empty()
