@@ -1,6 +1,6 @@
 # ShortCircuit feature matrix
 
-Coverage as of November 25, 2026. **Current** means the current development implementation is present in source. **Planned** means work is scheduled in the roadmap. **Optional** identifies additions subject to demonstrated need. [Project status](PROJECT_STATUS.md) · [Roadmap](ROADMAP.md)
+Coverage as of `0.6.0-preview.2`. **Current** means the current development implementation is present in source. **Planned** means work is scheduled in the roadmap. **Optional** identifies additions subject to demonstrated need. [Project status](PROJECT_STATUS.md) · [Roadmap](ROADMAP.md)
 
 Priority **P0** covers production readiness and safe operation. **P1** covers the core 1.0 feature set. **P2** covers follow-up work and enhancements. **P3** and **P4** cover longer-term options.
 
@@ -26,7 +26,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Duplicate detection | Current | P2 | Lookup matches against the exact stored destination. The creation and edit forms offer copying an existing short URL. Approximate matches and merge are planned. |
 | Protected links | Current | P2 | Optional password protection, explicit confirmation, and atomic consumption of one-time links. |
 | Link history | Current | P2 | Compare and restore earlier metadata and redirect policies. History lists verified actors and protection changes and supports JSON export and deletion. |
-| Rule editor and simulator | Planned | P2 | Preview the selected destination for representative inputs. Preserve rule order during edits and support keyboard reordering. |
+| Rule simulation | Planned | P2 | Preview the selected destination for representative inputs. The current editor already supports rule ordering. |
 | URL Cleaner | Current | P2 | Review known trackers and one-time exceptions locally. Use the proposed URL explicitly before saving. Leave recognized signed URLs unchanged. |
 | Favorites and archives | Planned | P2 | Pin frequently used links and archive links from the active list. |
 | Collections | Optional | P2 | Evaluate a lightweight collections model as an additional organization option. |
@@ -38,7 +38,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 |---|---|---|---|
 | Visit totals and time series | Current | P1 | Report totals by UTC date and top link using bounded ingestion and indexed aggregates. Tag and domain views remain planned. |
 | Visit details and unmatched requests | Planned | P1 | Show retained details and classify requests to the site root, invalid short links, and other unmatched paths. Prevent sensitive URL values from entering analytics. |
-| Referrers, devices, and bots | Planned | P1 | Store referrer domains and coarse browser, operating system, and device categories by default. Show unknown categories and allow filtering by bot classification. |
+| Referrers, devices, and bots | Current / planned | P1 | Referrer capture can store hostnames. Coarse traffic classes are reported. Browser, operating system, and device breakdowns and more detailed visit filters are planned. |
 | Privacy settings, retention, and deletion | Current | P1 | Honor global and per-link opt-outs and Do Not Track, with configurable retention and a clear-all action. Analytics collection operates independently of visit limits. |
 | Period comparisons and report controls | Current | P1 | Compare fixed 7-, 30-, 90-, and 365-day views against the preceding UTC period. Custom dates and additional visualization are planned. |
 | Geolocation | Optional | P1 | Use an operator-provided local GeoIP dataset. Apply the configured granularity and handle missing data explicitly in both reports and rules. |
@@ -58,7 +58,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Audit, diagnostics, and abuse controls | Planned | P0 | Add a dedicated audit trail for sensitive operations, rate-limit protected endpoints, and make detailed diagnostics available to authorized administrators. Bulk deletions currently produce a structured count in the application log. |
 | Backup and restore | Current | P0 | The CLI creates a verified local snapshot and restores it offline with an independent rollback copy. An opt-in scheduler retains verified copies. Administration through the browser is planned. |
 | Native data exchange | Current | P1 | Import and export bounded versioned JSON and CSV pages, preview conflicts, and apply transactionally. Field mapping is planned. |
-| Maintenance CLI and installation | Planned | P1 | Provide setup, recovery, and operational commands. Verify a non-root Docker image, local storage, and the Unraid installation. |
+| Maintenance CLI and installation | Current | P1 | CLI commands handle setup, recovery, backups, restore, and readiness. The Unraid preview template uses the versioned amd64 non-root image. Production validation on the intended storage and proxy remains open. |
 | Cross-origin admin API access | Optional | P2 | Consider explicit origins for integrations that need browser access. |
 | Additional authentication methods and roles | Optional | P3 | Consider TOTP, recovery codes, OIDC, and roles as operational requirements emerge. |
 | Deployment extensions | Optional | P4 | Assess PostgreSQL, arm64 builds, and password-encrypted backups against measured needs. |
