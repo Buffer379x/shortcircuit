@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add optional scheduled backups with independent retention.
+
 - Add exact destination lookup and a local preview for removing tracking parameters.
 
 - Add verified local backups and offline restore with a rollback database.

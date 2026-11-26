@@ -11,7 +11,9 @@ docker compose up --build --wait
 docker compose exec -T shortcircuit shortcircuit setup-token
 ```
 
-Open `http://localhost:8081` and enter the one-time token, a username, and a password. The token expires after 15 minutes. Use the admin interface to create short links, edit their destinations and tags, and provision scoped API keys. Local short links are served on port 8080. The Analytics page shows UTC daily counts, period comparisons, and privacy settings. QR codes are available from the link list.
+Open `http://localhost:8081` and enter the one-time token, a username, and a password. The token expires after 15 minutes. Use the admin interface to create short links, edit their destinations and tags, and provision scoped API keys. Local short links are served on port 8080. Local backups are available on demand and can be scheduled. [Backup and restore](docs/BACKUP_RESTORE.md)
+
+The Analytics page shows UTC daily counts, period comparisons, and privacy settings. QR codes are available from the link list.
 
 The Compose profile publishes both ports on loopback and runs as UID/GID 10001. The application uses one persistent Docker volume. For a reverse proxy, set `ADMIN_ORIGIN` to the external HTTPS origin and keep the cleartext admin backend reachable only by the proxy. Use a dedicated admin hostname. [Network setup](docs/REVERSE_PROXY.md) · [Unraid](docs/UNRAID_INSTALLATION.md)
 
