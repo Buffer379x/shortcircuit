@@ -4,7 +4,9 @@ This design assumes ShortCircuit can run on its own. The visitor's browser, the 
 
 ## Current implementation
 
-The current application exposes analytics in the admin UI. It records successful GET redirects, blocked links, and unmatched non-root requests on configured public domains. It excludes HEAD and recognizes `DNT: 1` by default. Per-link opt-out covers matched redirects and blocks. A configured fallback for an unmatched path is reported as an unmatched request.
+The current application exposes analytics in the admin UI. It records successful GET redirects, blocked links, unmatched short-link paths, and GET requests for a domain root path on configured public domains. It excludes HEAD and recognizes `DNT: 1` by default. Per-link opt-out covers matched redirects and blocks. A configured fallback for an unmatched path is reported as an unmatched request. Root path requests use two separate outcomes: `root_fallback` when the domain's root destination redirects the visitor and `root_missing` when the root path has no usable destination and returns `404`. Root events never carry a link ID and follow the same collection switch, Do Not Track preference, classification options, and retention as other events.
+
+The unusual-traffic indicator reads the same retained daily rollups and stores nothing new. Notifications send only event kinds, times, and numeric identifiers or counts. They never include destinations, slugs, referrers, or visitor attributes.
 
 Detail records contain time, host, the optional link ID, outcome, estimated visit class, a fixed client category, and an optional DNS hostname from the referrer. The collector discards literal-IP referrers, credentials, path, query, fragment, raw user agent, and visitor IP. The dashboard shows UTC daily rollups. Collection options, retention, and clear-all apply locally. The admin API lists and deletes retained visits. Removing a link also removes its detailed visits and daily link counts. Geolocation and analytics exports are planned.
 

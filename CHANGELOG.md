@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Fix analytics writes, reports, search, restore, and upgrades with real data in the read-only container by giving SQLite a temporary directory on the data volume (`SQLITE_TMPDIR=/data/tmp`).
+- Write a verified pre-upgrade snapshot before migrations and run migrations outside the request pool's two-second deadline.
+- Continue scheduled backups from the newest scheduled snapshot after a restart.
+- Log analytics losses at most once a minute, readable CLI and startup errors with paths, and the first request that uses an address other than `ADMIN_ORIGIN`.
+- Notifications: detect every candidate, avoid repeats after trimming, use epoch-prefixed IDs after a restore, and reset outbound work in every restore path.
+- Destination policy: compare IPv4-mapped IPv6 literals as IPv4 and refuse hosts with empty labels. Title lookup skips links that gained protection.
+- Public `429` responses include `Retry-After`, and IPv6 clients share rate budgets per /64.
+- Admin interface: hash routes, a menu on small screens, scrollable dialogs with field errors and initial focus, focus after deletions, stronger field borders, a scrollable rail, and readable report tables.
+- Build the binary with `cargo auditable`, ship a frontend SBOM, generate release SBOMs without write permissions, and pin the CI upgrade image by digest.
+- Name browser backup downloads with the schema version and time.
+
+- Add opt-in webhook notifications for link health, upcoming and completed expiry, click milestones, failed backups and jobs, low storage, and security events with a durable, deduplicated outbox, bounded retries, and delivery status in Operations. `MONITOR_WEBHOOK_URL` becomes an alias. Link health deliveries now use the `link_health` event format.
+- Allow one explicitly configured internal HTTPS connector with pinned address ranges and an optional private CA for notification delivery only.
+- Add opt-in page title lookup for untitled links with `TITLE_LOOKUP_ENABLED`. Lookups are bounded, revalidate redirects, skip protected links, and never replace a written title.
+- Report free space on the data volume, process and container CPU use, and container memory in the system diagnostics, with explicit unavailable and low-space states.
+- Add an opt-in destination host policy with allow and block rules, subdomain and IDN handling, an impact preview, and enforcement on writes and redirects. Refused redirects keep visit allowances and one-time access.
+- Show links with unusually high traffic today compared with their seven-day average on the Overview and Analytics pages. The indicator never changes a link.
+- Report GET requests for a domain root path separately as redirected by the root destination or without a destination. Existing totals keep their meaning.
+- Add the `analytics` API key scope for read-only analytics reports and exports. Link scopes do not grant analytics access. A host-bound key reports only on its own host.
+
 - Add an Overview with link lifecycle counts, recent links, traffic, and monitor status.
 - Add browser field mapping for generic CSV files while retaining the native format.
 - Expand analytics with custom UTC dates, host filters, client and traffic breakdowns, domain and tag rankings, and a JSON report download.

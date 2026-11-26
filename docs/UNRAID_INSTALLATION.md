@@ -44,6 +44,7 @@ For rollback, use preview.1 with the pre-upgrade preview.1 backup in a separate 
 | Setting | Current behavior |
 | --- | --- |
 | `DATA_DIR` | Persistent directory. The image uses `/data`. |
+| `SQLITE_TMPDIR` | SQLite temporary files. The image after preview.2 sets `/data/tmp`, because the root filesystem is read-only. Keep the default unless `/data` moves. |
 | `PUBLIC_BIND` and `ADMIN_BIND` | Container listener addresses. The default binds are `0.0.0.0:8080` and `0.0.0.0:8081`. |
 | `PUBLIC_HOSTS` | Comma-separated public hostnames. The first active host is the default for new links. |
 | `ADMIN_ORIGIN` | Exact external origin for administration. Use HTTPS outside loopback. |
@@ -54,8 +55,26 @@ For rollback, use preview.1 with the pre-upgrade preview.1 backup in a separate 
 | `MONITOR_ENABLED` | Set `true` to allow explicit monitor enrollment. Defaults to `false`. |
 | `MONITOR_INTERVAL_HOURS` | Target interval for stable links, 1–720 hours. Defaults to 24. |
 | `MONITOR_PRIORITY_HOURS` | Target interval for priority links. Defaults to 6 hours or the regular interval if shorter. |
-| `MONITOR_WEBHOOK_URL_FILE` | Optional read-only file with an HTTPS webhook URL. Use this or `MONITOR_WEBHOOK_URL`. |
+| `MONITOR_WEBHOOK_URL_FILE` | Alias for `NOTIFICATION_WEBHOOK_URL_FILE` that selects only link-health events. Use this or `MONITOR_WEBHOOK_URL`, not both, and not together with `NOTIFICATION_WEBHOOK_URL`. |
+| `NOTIFICATION_WEBHOOK_URL_FILE` | Read-only file with the HTTPS notification webhook URL. Setting it, or `NOTIFICATION_WEBHOOK_URL`, activates notifications. Added after preview.2. |
+| `NOTIFICATION_EVENTS` | Comma-separated event kinds: `link_health`, `link_expiring`, `link_expired`, `click_milestone`, `backup_failed`, `job_failed`, `storage_low`, `security`. Defaults to all kinds except `click_milestone` unless milestones are set. |
+| `NOTIFICATION_CLICK_MILESTONES` | Up to 10 redirect counts, for example `100,1000`. Empty by default. |
+| `NOTIFICATION_EXPIRY_NOTICE_HOURS` | Hours before an expiry for `link_expiring`, 1–720. Defaults to 24. |
+| `NOTIFICATION_WEBHOOK_AUTHORIZATION_FILE` | Optional read-only file with an `Authorization` header value for the webhook. |
+| `NOTIFICATION_CONNECTOR_ORIGIN`, `NOTIFICATION_CONNECTOR_NETWORKS`, `NOTIFICATION_CONNECTOR_CA_FILE` | Optional internal connector: the exact HTTPS origin, permitted CIDR ranges, and an optional PEM CA file. Required only for a receiver on a private network. |
+| `TITLE_LOOKUP_ENABLED` | Set `true` to allow administrators to fetch page titles for untitled links. Defaults to `false`. Added after preview.2. |
 | `BACKUP_INTERVAL_HOURS` and `BACKUP_KEEP` | Optional backup interval and number of scheduled copies to keep. Default scheduling is disabled. |
 
 
-These monitor and proxy settings apply to source builds after preview.2. [Monitoring and rate limits](SECURITY.md#implemented-outbound-monitoring-policy)
+Settings marked as added after preview.2, and the monitor, notification, title lookup, and proxy settings, apply to source builds after preview.2. The published preview.2 image ignores them. [Monitoring and rate limits](SECURITY.md#implemented-outbound-monitoring-policy)
+
+## Before the next release
+
+- **Keep data outside `docker.img`.** The template stores `/data`, every backup, and every rollback copy in the named volume `shortcircuit-data` inside Docker's data store. Recreating `docker.img` deletes all of them. Map `/data` to a local appdata path such as `/mnt/<pool>/appdata/shortcircuit` owned by UID and GID 10001, or copy backups from `/data/backups` to other storage regularly. Set `BACKUP_INTERVAL_HOURS` to enable scheduled backups.
+- **Trust the proxy.** Behind Nginx Proxy Manager, add the variable `TRUSTED_PROXIES` with the proxy container address or its bridge network, for example `172.18.0.0/16`. Without it, every client shares the proxy's rate-limit budget for sign-in and protected links.
+- **Changed ports.** If you publish other host ports, set **Admin origin** and **WebUI** to the same address, and set the domain origin on **Domains**, so copied and QR short URLs use the published port.
+- **Upgrade from preview.2.** Take a verified backup and note the image digest. Change only **Repository** to the approved tag. Startup writes a pre-upgrade snapshot to `/data/backups/pre-upgrade` and migrates schema 11 to 24. To roll back, follow [Release verification](RELEASE_VERIFICATION.md#rollback). The preview.2 image refuses an upgraded volume with `VersionMissing`.
+
+- **Admin page shows "not found".** The browser address must match **Admin origin** exactly, including `localhost` versus `127.0.0.1` and the port. The log records the first mismatched request with the expected origin.
+
+The template itself is unchanged. Changing its defaults is an owner decision recorded in the [improvement plan](IMPROVEMENT_PLAN.md).

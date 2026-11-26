@@ -24,9 +24,19 @@ Take a verified snapshot with the current image before applying an upgrade. To r
 
 History entries present when a snapshot was created can return after restore. Reapply any required history purges before opening access to the restored administration interface.
 
+## Pre-upgrade snapshots
+
+When a new release finds pending migrations in an existing database, it first writes a verified snapshot to `/data/backups/pre-upgrade` and logs its path. Startup stops with a message naming the directory if the snapshot cannot be written, so no upgrade runs without a rollback point. The two newest pre-upgrade snapshots are kept. The previous release can restore such a snapshot. A release refuses a snapshot from another schema version and names both versions in the error.
+
+Restore and temporary files share the data volume. The image sets `SQLITE_TMPDIR=/data/tmp`, because the root filesystem is read-only and SQLite needs a writable directory for sorts, multi-row writes, and `VACUUM`. Keep free space of at least three times the database size. The diagnostics page warns below that.
+
+A restore discards notifications and title lookups that were pending in the snapshot, starts a new notification ID epoch, and generates only events that happen after the restore. It restores the administrator password and the API keys that were valid when the snapshot was taken, including keys revoked later. Revoke such keys again and change the password if the snapshot predates a credential change.
+
+If a copied snapshot is not readable by UID 10001, the restore names the file and suggests `chmod 644`. Browser downloads are named `shortcircuit-schema<version>-<unix-time>.sqlite`.
+
 ## Automatic backups
 
-Set `BACKUP_INTERVAL_HOURS` to an interval from 1 to 720 hours and restart the container. The default `0` disables the scheduler. The first backup starts after one interval. The scheduler creates at most one backup at a time and skips missed intervals.
+Set `BACKUP_INTERVAL_HOURS` to an interval from 1 to 720 hours and restart the container. The default `0` disables the scheduler. The schedule continues from the newest scheduled snapshot, so restarts do not postpone it. Without one, the first backup starts after one interval. An overdue backup runs about one minute after startup. The scheduler creates at most one backup at a time and skips missed intervals.
 
 Set `BACKUP_KEEP` to retain 1 to 365 scheduled backups. The default is 7. Verified copies are stored in `/data/backups/scheduled`, and a failed attempt leaves existing backups intact. Retention applies to the scheduled directory. On shutdown the process allows up to five seconds for an in-progress scheduled job to finish after HTTP and analytics wind down.
 

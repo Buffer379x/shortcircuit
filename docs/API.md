@@ -42,7 +42,7 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 
 Link objects contain `id`, `host`, `slug`, `target`, `created_at`, `title`, `description`, `enabled`, `analytics_enabled`, and `tags`. Slugs use case-sensitive ASCII letters, digits, hyphens, underscores, and segment separators. Their maximum is 200 bytes. With no custom slug, the server uses its configured generated length (10 by default). Destinations are absolute HTTP or HTTPS URIs up to 4,096 bytes, with valid percent encoding and credentials excluded. A link can carry up to 20 tags. Titles and tags use limits of 160 and 40 Unicode characters respectively. Descriptions support up to 500 Unicode characters and line feeds after trimming. Send an empty string to clear a description. Link creation accepts optional `enabled` and `analytics_enabled` flags that default to true.
 
-An API key uses `Authorization: Bearer <token>`. A key can hold `read` for list operations, `write` for creation and edits, and `delete` for link deletion. An optional host restriction applies to both reads and changes. The browser supplies an exact `Origin` and `X-CSRF-Token` for session-authenticated changes. Errors use `application/problem+json` with `status`, `title`, and `code`. [Security design](SECURITY.md)
+An API key uses `Authorization: Bearer <token>`. A key can hold `read` for list operations, `write` for creation and edits, `delete` for link deletion, and `analytics` for read-only analytics reports. Link scopes do not include analytics access, and the analytics scope grants no link access. An optional host restriction applies to reads, changes, and analytics reports. The browser supplies an exact `Origin` and `X-CSRF-Token` for session-authenticated changes. Errors use `application/problem+json` with `status`, `title`, and `code`. [Security design](SECURITY.md)
 
 ### Tags
 
@@ -101,15 +101,58 @@ To save a QR template, send a JSON object with `name`, `size`, `foreground`, `ba
 
 ### Analytics
 
-Analytics endpoints require a browser administrator session. Changes require the standard CSRF token and Origin header.
+The summary and report download accept a browser administrator session or an API key with the `analytics` scope. Settings, visit details, and deletion require a browser administrator session. Changes require the standard CSRF token and Origin header.
+
+A host-bound analytics key always reports on its own host. Omitting `host` selects that host, and naming another host returns `403`. Totals, the previous period, the daily series, rankings, and breakdowns all use the same restriction. The process-wide `dropped` count has no host and is `null` for a host-bound key.
 
 | Operation | Request and response |
 |---|---|
-| `GET /api/v1/analytics/summary?days=30` | Accepts 1 to 365 UTC days. Returns successful redirects, blocked links, missing links, visitor classes for redirects, the preceding period's redirect count, a daily series, up to ten top links, and a process-local dropped-events count. |
+| `GET /api/v1/analytics/summary?days=30` | Accepts 1 to 365 UTC days. Returns successful redirects, blocked links, missing links, root path requests with and without a root destination, visitor classes for redirects, the preceding period's redirect count, a daily series, up to ten top links, and a process-local dropped-events count. |
 | `GET` and `PATCH /api/v1/analytics/settings` | Reads or replaces the settings `enabled`, `referrers`, `classify`, `honor_dnt`, `detail_days`, and `aggregate_days`. Retention is between 1 and 3650 days. The aggregate period must cover at least the detail period. |
 | `GET /api/v1/analytics/events` | Lists up to 100 retained events newest first. Accepts the optional `before_id` cursor. Returns `items` and `next_before_id`. |
 | `DELETE /api/v1/analytics/events/{id}` | Deletes one retained event and adjusts its daily count atomically. Returns `204`. |
 | `DELETE /api/v1/analytics/data` | Deletes details, every UTC-day rollup, and queued events from the previous generation. Returns `204`. |
+
+### Destination policy
+
+The destination policy is off by default and has no rules. `GET /api/v1/destination-policy` returns `enabled`, the normalized `rules`, and the `impact` on saved destinations. `PATCH` replaces the whole policy in one transaction and records an audit entry. `POST /api/v1/destination-policy/preview` normalizes a draft and reports its impact without saving it. All three require a browser administrator session. Changes require Origin and CSRF. Bodies can use up to 64 KiB.
+
+A rule has a `host`, an `action` of `allow` or `block`, and an optional `subdomains` flag. The server trims the host, converts Unicode names with IDNA, lowercases it, and removes one trailing dot. Wildcards, schemes, ports, and paths are rejected. `subdomains: true` matches the host and every name below it, and applies only to hostnames. IP addresses match exactly. A host can appear once with the same `subdomains` value. The policy holds up to 200 rules.
+
+Evaluation uses the host that the URL parser derives from the stored destination, including percent-decoding and numeric IPv4 forms. The stored destination text is never changed.
+
+1. A matching `block` rule refuses the destination, regardless of any matching `allow` rule.
+2. Otherwise, if at least one `allow` rule exists, the destination must match an `allow` rule.
+3. Otherwise the destination is permitted. An enabled policy without rules permits every destination.
+
+While the policy is enabled, writes that introduce a refused destination return `422` with code `destination_not_allowed`. This covers link creation and edits, redirect rules, domain root and missing-path destinations, native JSON and CSV imports, duplicates created through the link form, and history restores. A write that keeps an already saved destination is accepted, so unrelated edits to an affected link still work. The public listener checks the destination it selects, including rule destinations and domain fallbacks, before it shows a confirmation form or reserves a visit. A refused redirect returns `404`, counts as `blocked` in analytics, and leaves visit counters and one-time access unchanged. A refused fallback behaves like a missing fallback. The redirect simulator reports the result as `permitted`.
+
+### Unusual traffic
+
+`GET /api/v1/analytics/traffic` lists up to ten links whose successful redirects on the current UTC day reach at least 100 and at least three times their daily average over the previous seven UTC days. The report reads retained daily rollups, so analytics settings, per-link opt-outs, Do Not Track, and retention apply. It accepts an optional `host`. Keys with the `analytics` scope can read it, and a host-bound key reports only on its host. The indicator is informational and never disables, blocks, or changes a link.
+
+### Title lookup
+
+Title lookup is off unless `TITLE_LOOKUP_ENABLED=true`. `GET /api/v1/title-lookups` reports whether it is enabled, the number of pending lookups, and the 50 most recent results. `POST /api/v1/title-lookups` queues up to 50 links with an empty title, and `POST /api/v1/links/{id}/title-lookup` queues one link. Both require a browser session with Origin and CSRF and return `202`. A disabled feature returns `409 title_lookup_disabled`. A link with a title returns `409 title_present`, and a link with password or one-time protection returns `409 title_lookup_protected`.
+
+One background worker fetches one destination at a time, two seconds apart, through the public outbound policy. It sends GET to the stored destination without its fragment, follows at most three redirects with each hop revalidated, requires an uncompressed `text/html` or `application/xhtml+xml` response, and reads at most 128 KiB within eight seconds. The first `<title>` element becomes plain text: entities are decoded, whitespace is collapsed, control characters are removed, and the result is limited to 160 characters. The worker skips destinations that the destination policy refuses. It saves the title only while the link still has an empty title and the same host and destination, records a metadata history entry for the requesting administrator, and otherwise drops the result. A changed destination or a title written by a person cancels a pending lookup. Lookups pending for more than 24 hours expire, and lookups pending in a restored snapshot are canceled at startup. The stored destination is never changed.
+
+### Notifications
+
+`GET /api/v1/notifications` reports whether notifications are configured, the webhook origin without its path or query, whether the internal connector is used, the selected event kinds, delivery counts, and the 25 most recent outbox rows with attempts, the last error code, and the next attempt time. `POST /api/v1/notifications/test` queues a `test` event and returns `202`, or `409 notifications_disabled`. Both require a browser session. The settings themselves come from environment variables.
+
+| Event | Trigger and identity | Payload fields |
+|---|---|---|
+| `link_health` | A confirmed change to `broken` or `unreachable`, or back to `healthy` or `redirected`, for an enrolled link | `link_id`, `status` |
+| `link_expiring` | An enabled link reaches the expiry notice window, once per link and expiry time | `link_id`, `expires_at` |
+| `link_expired` | A link's expiry time has passed, within seven days, once per link and expiry time | `link_id`, `expires_at` |
+| `click_milestone` | Today's retained redirects lift a link's total across a configured milestone, once per link and milestone | `link_id`, `milestone` |
+| `backup_failed` | A scheduled backup could not be created or verified | `source` |
+| `job_failed` | The analytics queue dropped events, at most once per UTC day | `job`, `dropped_events` |
+| `storage_low` | Free space on the data volume is below the diagnostics threshold, at most once per UTC day | `available_bytes`, `low_threshold_bytes` |
+| `security` | A recovery, password change, key change, restore step, or destination policy change, or any rejected or failed audited action except sign-in | `audit_id`, `action`, `outcome` |
+
+Every delivery also contains `version` (1), a stable string `id`, `event`, and `occurred_at` in UTC Unix seconds. History from before notifications were first activated, or before a restore, is not sent.
 
 ### Native link exchange
 
@@ -123,9 +166,9 @@ CSV uses the columns `version,host,slug,target,title,tags,enabled,analytics_enab
 
 ### Public redirect behavior
 
-An exact path takes precedence. When the exact path is missing, the longest stored prefix that allows extra paths can handle the request. Disabled or out-of-window links and exhausted visit limits return `404`. Unknown paths and the root path can use their configured domain fallback and otherwise return `404`. Disabled domains return `404` and remain editable on the admin listener.
+An exact path takes precedence. When the exact path is missing, the longest stored prefix that allows extra paths can handle the request. Disabled or out-of-window links and exhausted visit limits return `404`. Unknown paths and the root path can use their configured domain fallback and otherwise return `404`. Analytics counts a GET for the root path as `root_fallback` or `root_missing` according to the response it received. Neither outcome changes the redirect, blocked, or missing totals, the visitor classes, or the rankings, which describe short-link paths. Disabled domains return `404` and remain editable on the admin listener.
 
-A policy supports `301`, `302`, `307`, or `308`. Start and expiration are inclusive and exclusive respectively, expressed as UTC Unix seconds. Time windows and visit limits require a temporary status. Browsers or intermediaries can retain permanent redirects. A limited link increments its counter atomically for each successful GET while the limit is active. HEAD checks the same conditions without incrementing it. Editing or pausing a limit preserves its counter.
+A policy supports `301`, `302`, `307`, or `308`. Start and expiration are inclusive and exclusive respectively, expressed as UTC Unix seconds. Time windows and visit limits require a temporary status. Browsers or intermediaries can retain permanent redirects. A limited link increments its counter atomically for each successful GET while the limit is active. HEAD checks the same conditions without incrementing it and returns the same `Location`. A visit limit counts uses and is not access control. Use password or one-time protection to restrict access. Editing or pausing a limit preserves its counter.
 
 A rule contains a stored `target` and 1 to 8 `conditions`. The first of up to 16 rules whose conditions all match supplies the destination. Without a match, the link uses its stored target. Condition types are `language`, `device`, `os`, `browser`, and `query`. All have a `value`. Query conditions also have a `key`. Client characteristics are estimates from request headers. Language uses the preferred valid language from `Accept-Language`.
 
@@ -165,6 +208,7 @@ The JSON API under `/api/v1` runs on the admin listener. Same-origin browser cli
 - Rate-limit the admin API, with separate limits for sign-in and sensitive operations. Use an explicit CORS allowlist. Keep credentials out of query strings and browser local storage.
 - Expose feature routes when their contracts are implemented. The public listener serves redirects and explicitly public link features. Keep internal health endpoints and OpenAPI on the admin listener.
 - System diagnostics report the build, Git commit, start time, uptime, local database and visit data sizes, free capacity, and job and backup status. Where available, memory and CPU readings come from the process or cgroup. The admin UI labels the source and units. Metrics are optional and internal.
+- `GET /api/v1/system` reads resources on demand. `storage` reports available and total bytes of the filesystem that holds the SQLite data and is `low` below 512 MiB or three times the database size, whichever is larger. `cpu` samples the process counters in `/proc/self/stat` and the cgroup v2 `cpu.stat` twice, 250 ms apart, and reports each as a percentage of one core. `container_memory` reads cgroup v2 `memory.current` and `memory.max`. It includes page cache and is separate from `process_rss_bytes`. Each reading states `unavailable` instead of guessing when its source is missing.
 
 
 ## Reports and operations

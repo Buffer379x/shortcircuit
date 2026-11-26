@@ -14,6 +14,20 @@ Schema version 14 adds `tag_details` for an optional color and plain-text descri
 
 Schema version 15 adds `domains.block_crawlers` and `link_redirect_policies.noindex`. Both start disabled. Existing policy revisions omit the new option and preserve its current value when restored. The redirect simulator reads link metadata and applies the same ordered rule evaluation as the public listener.
 
+Schema version 19 rebuilds `admin_api_keys` so the scope bit mask accepts the analytics report scope (bit 8, values 1 through 15). The migration copies every key unchanged and carries the AUTOINCREMENT sequence forward, so a revoked key ID is not issued again.
+
+Schema version 20 rebuilds `analytics_events` and `analytics_daily` to accept the `root_fallback` and `root_missing` outcomes, which require a null or zero link ID. Existing rows keep their outcome, so earlier totals keep their meaning, and a period without root rows reports zero. The migration preserves event IDs, the event ID sequence, the indexes, and the link deletion trigger. The rebuild temporarily needs free space comparable to the analytics tables.
+
+Schema version 21 adds `destination_policy`, a single row with `enabled` (off by default) and a `generation` counter, and `destination_rules` keyed by normalized host and subdomain flag. Every policy change increments the generation. The redirect lookup reads the generation in the same statement as the link, so the public listener reloads its in-memory copy only after a change. The migration also rebuilds `admin_audit` to accept the `destination_policy_update` action and carries its ID sequence forward.
+
+Schema version 22 adds `link_title_lookups` with one row per link: a request revision, the host and destination at request time, the requesting administrator, status, failure code, and the extracted title. Triggers delete the row when the link's host or destination changes and delete a pending row when its title changes, so a late result cannot overwrite a newer state.
+
+Schema version 23 adds `notification_state`, which holds the activation or restore time and the audit cursor, and `notification_outbox`, keyed by a unique deterministic event key with status, attempts, next attempt time, and the last error code. A trigger keeps at most 1,000 settled rows. Pending rows are never trimmed.
+
+Schema version 24 adds a random notification epoch, keeps settled outbox rows for at least eight days before trimming, and adds triggers that cancel a pending title lookup when password or one-time protection is added.
+
+Before pending migrations run on an existing database, startup writes a verified snapshot to `backups/pre-upgrade` and keeps the two newest. Migrations run on a dedicated connection with a 60-second acquisition deadline, separate from the request pool's two-second deadline.
+
 ## Protected links
 
 Migration `0007` adds `link_protection` with the link ID, optional Argon2id password hash, one-time and consumed flags, and a protection revision. A deleted link cascades to its protection record. An existing link has no protection by default. Changes to protection increment its revision. Confirmation checks that revision before consuming the one-time flag and any existing visit limit in the same write transaction. Signed confirmation tokens expire in memory and require no challenge rows.
