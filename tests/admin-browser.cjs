@@ -373,7 +373,10 @@ async function verify() {
     await linkTable.getByRole('button', { name: 'Disable', exact: true }).click();
     await searchFailure.waitFor();
     await linkTable.getByRole('button', { name: 'Enable', exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    const recoveredSearch = page.waitForResponse(response =>
+      response.url() === admin + '/api/v1/links/search' && response.status() === 200);
+    await page.getByRole('button', { name: 'Try again', exact: true }).click();
+    await recoveredSearch;
     await searchFailure.waitFor({ state: 'hidden' });
     await linkTable.getByRole('button', { name: 'Enable', exact: true }).waitFor();
 
