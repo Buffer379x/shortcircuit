@@ -20,7 +20,8 @@ use url::{Host, Url};
 use crate::{history, input::normalize_host};
 
 const QUEUE_CAPACITY: usize = 1024;
-const BATCH_SIZE: usize = 64;
+// Larger batches amortize the synchronous commit when a burst fills the queue.
+const BATCH_SIZE: usize = 256;
 const BATCH_WINDOW: Duration = Duration::from_millis(25);
 const RETENTION_INTERVAL: Duration = Duration::from_secs(3600);
 const PRUNE_BATCH_SIZE: u64 = 512;
@@ -48,7 +49,32 @@ struct Snapshot {
 struct Shared {
     snapshot: RwLock<Snapshot>,
     changes: Mutex<()>,
-    dropped: AtomicU64,
+    dropped: Arc<AtomicU64>,
+    /// Events lost because a batch could not be written, a subset of `dropped`.
+    failed: AtomicU64,
+    /// Unix seconds of the last loss warning, to log at most once a minute.
+    warned_at: AtomicU64,
+}
+
+impl Shared {
+    fn report_loss(&self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs());
+        let last = self.warned_at.load(Ordering::Relaxed);
+        if now >= last.saturating_add(60)
+            && self
+                .warned_at
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            tracing::warn!(
+                dropped = self.dropped.load(Ordering::Relaxed),
+                write_failures = self.failed.load(Ordering::Relaxed),
+                "analytics events were not recorded; redirects were not affected"
+            );
+        }
+    }
 }
 
 impl Shared {
@@ -68,6 +94,15 @@ impl Shared {
 }
 
 #[derive(Clone)]
+pub struct DroppedCounter(Arc<AtomicU64>);
+
+impl DroppedCounter {
+    pub fn get(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+#[derive(Clone)]
 pub struct Analytics {
     pool: SqlitePool,
     queue: mpsc::Sender<Event>,
@@ -79,6 +114,10 @@ pub(crate) enum Kind {
     Redirect,
     Blocked,
     Missing,
+    /// A domain root request answered by the domain's root destination.
+    RootFallback,
+    /// A domain root request without a usable root destination.
+    RootMissing,
 }
 
 impl Kind {
@@ -87,6 +126,8 @@ impl Kind {
             Self::Redirect => "redirect",
             Self::Blocked => "blocked",
             Self::Missing => "missing",
+            Self::RootFallback => "root_fallback",
+            Self::RootMissing => "root_missing",
         }
     }
 }
@@ -134,7 +175,9 @@ impl Analytics {
         let shared = Arc::new(Shared {
             snapshot: RwLock::new(snapshot),
             changes: Mutex::new(()),
-            dropped: AtomicU64::new(0),
+            dropped: Arc::new(AtomicU64::new(0)),
+            failed: AtomicU64::new(0),
+            warned_at: AtomicU64::new(0),
         });
         let (queue, receiver) = mpsc::channel(QUEUE_CAPACITY);
         let worker = tokio::spawn(run_writer(pool.clone(), Arc::clone(&shared), receiver));
@@ -214,11 +257,17 @@ impl Analytics {
             && self.queue.try_send(event).is_err()
         {
             self.shared.dropped.fetch_add(1, Ordering::Relaxed);
+            self.shared.report_loss();
         }
     }
 
     pub(crate) fn dropped(&self) -> u64 {
         self.shared.dropped.load(Ordering::Relaxed)
+    }
+
+    /// A read-only view of the loss counter that does not keep the writer alive.
+    pub fn dropped_counter(&self) -> DroppedCounter {
+        DroppedCounter(Arc::clone(&self.shared.dropped))
     }
 }
 
@@ -438,10 +487,12 @@ async fn run_writer(pool: SqlitePool, shared: Arc<Shared>, mut receiver: mpsc::R
             }
         }
 
-        if write_batch(&pool, &shared, &batch).await.is_err() {
-            shared
-                .dropped
-                .fetch_add(batch.len() as u64, Ordering::Relaxed);
+        if let Err(error) = write_batch(&pool, &shared, &batch).await {
+            let lost = batch.len() as u64;
+            shared.dropped.fetch_add(lost, Ordering::Relaxed);
+            shared.failed.fetch_add(lost, Ordering::Relaxed);
+            tracing::debug!(%error, "analytics batch write failed");
+            shared.report_loss();
         }
         batch.clear();
     }
@@ -758,6 +809,105 @@ mod tests {
             .unwrap();
         assert_eq!(details, 0);
         assert_eq!(totals, [2]);
+    }
+
+    #[tokio::test]
+    async fn upgrade_keeps_existing_outcomes_and_reports_no_root_requests() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("upgrade.sqlite");
+        let legacy = crate::store::open_database_at_version(&path, 19).await;
+        sqlx::raw_sql(
+            "INSERT INTO links (id, host, slug, target) VALUES (5, 'go.example', 'docs', 'https://example.test');
+             INSERT INTO analytics_events (occurred_at, link_id, host, kind, visit_class, source, browser)
+                 VALUES (unixepoch(), 5, 'go.example', 'redirect', 'human', 'firefox', 'firefox'),
+                        (unixepoch(), NULL, 'go.example', 'missing', 'unknown', 'unknown', 'unknown'),
+                        (unixepoch(), NULL, 'go.example', 'blocked', 'unknown', 'unknown', 'unknown'),
+                        (unixepoch(), NULL, 'go.example', 'missing', 'unknown', 'unknown', 'unknown');
+             DELETE FROM analytics_events WHERE id = 4;
+             INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, browser, total)
+                 VALUES (unixepoch() / 86400, 'go.example', 5, 'redirect', 'human', 'firefox', 3),
+                        (unixepoch() / 86400, 'go.example', 0, 'missing', 'unknown', 'unknown', 2),
+                        (unixepoch() / 86400, 'go.example', 0, 'blocked', 'unknown', 'unknown', 1);",
+        )
+        .execute(&legacy)
+        .await
+        .unwrap();
+        // Schema 19 cannot store the new categories.
+        assert!(
+            sqlx::query(
+                "INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, total)
+                 VALUES (1, 'go.example', 0, 'root_missing', 'unknown', 1)"
+            )
+            .execute(&legacy)
+            .await
+            .is_err()
+        );
+        let totals = |pool: SqlitePool| async move {
+            sqlx::query_as::<_, (String, i64)>(
+                "SELECT kind, SUM(total) FROM analytics_daily GROUP BY kind ORDER BY kind",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        let before = totals(legacy.clone()).await;
+        let events_before =
+            sqlx::query_as::<_, (i64, String)>("SELECT id, kind FROM analytics_events ORDER BY id")
+                .fetch_all(&legacy)
+                .await
+                .unwrap();
+        legacy.close().await;
+
+        let pool = open_database(&path).await.unwrap();
+        assert_eq!(totals(pool.clone()).await, before);
+        let events_after =
+            sqlx::query_as::<_, (i64, String)>("SELECT id, kind FROM analytics_events ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(events_after, events_before);
+        let (analytics, worker) = Analytics::start(pool.clone()).await.unwrap();
+        let event = capture(
+            analytics.shared.snapshot(),
+            HOST,
+            None,
+            Kind::RootMissing,
+            &request_headers(),
+        )
+        .unwrap();
+        write_batch(&pool, &analytics.shared, &[event])
+            .await
+            .unwrap();
+        drop(analytics);
+        worker.await.unwrap();
+        // The deleted event ID is not reused after the table rebuild.
+        let newest: i64 = sqlx::query_scalar("SELECT max(id) FROM analytics_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(newest, 5);
+        // The link deletion trigger still removes the link's rollups after the rebuild.
+        sqlx::query("DELETE FROM links WHERE id = 5")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            totals(pool.clone()).await,
+            [
+                ("blocked".to_owned(), 1),
+                ("missing".to_owned(), 2),
+                ("root_missing".to_owned(), 1)
+            ]
+        );
+        assert!(
+            sqlx::query(
+                "INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, total)
+                 VALUES (1, 'go.example', 7, 'root_fallback', 'unknown', 1)"
+            )
+            .execute(&pool)
+            .await
+            .is_err()
+        );
     }
 
     #[test]

@@ -14,6 +14,7 @@ use crate::{
     analytics::{Analytics, Kind},
     auth::{Auth, AuthError},
     confirmation::Action,
+    destinations::Guard,
     domains,
     input::{PublicHosts, request_host, valid_slug},
     rate_limit::{AttemptLimiter, RateLimit, TrustedProxies},
@@ -32,6 +33,7 @@ struct AppState {
     attempts: Arc<AttemptLimiter>,
     public_limit: Option<Arc<AttemptLimiter>>,
     proxies: TrustedProxies,
+    destinations: Guard,
 }
 
 pub struct PublicControls {
@@ -98,6 +100,7 @@ pub fn public_router_with_controls(
                 .map(AttemptLimiter::with_limit)
                 .map(Arc::new),
             proxies: controls.proxies,
+            destinations: Guard::default(),
         })
         .layer(middleware::from_fn(response_headers))
 }
@@ -179,7 +182,24 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         if post {
             return method_not_allowed();
         }
-        return fallback(&host, "/", domain.root_target.as_deref());
+        let Ok(root_target) = permitted_fallback(&state, domain.root_target.as_deref()).await
+        else {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        };
+        let response = fallback(&host, "/", root_target);
+        // Root requests use the same counting rule as unmatched slugs: GET only.
+        if parts.method == Method::GET
+            && !response.status().is_server_error()
+            && let Some(analytics) = &state.analytics
+        {
+            let kind = if response.status().is_redirection() {
+                Kind::RootFallback
+            } else {
+                Kind::RootMissing
+            };
+            analytics.record(&host, None, kind, &parts.headers);
+        }
+        return response;
     }
     if !valid_slug(slug) {
         if parts.method == Method::GET
@@ -204,7 +224,9 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         // Inspect the link without reserving any visits before checking the submitted proof.
         head: parts.method != Method::GET,
     };
-    let Ok(mut result) = redirect::resolve_with_subject(&state.pool, lookup).await else {
+    let Ok(mut result) =
+        redirect::resolve_with_subject(&state.pool, lookup, &state.destinations).await
+    else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     if let Outcome::Challenge(link) = result.outcome {
@@ -227,6 +249,10 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
             result = match confirm(&state, action, lookup, &parts.headers, body, peer).await {
                 Ok(confirmed) => confirmed,
                 Err(StatusCode::UNAUTHORIZED) => return action.page(lookup.language, true),
+                Err(StatusCode::TOO_MANY_REQUESTS) => {
+                    return (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "60")])
+                        .into_response();
+                }
                 Err(status) => return status.into_response(),
             };
         } else if parts.method == Method::HEAD {
@@ -242,10 +268,14 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
     }
     let (kind, mut response) = match result.outcome {
         Outcome::Redirect { target, status } => (Kind::Redirect, respond(&target, status)),
-        Outcome::Missing => (
-            Kind::Missing,
-            fallback(&host, uri.path(), domain.missing_target.as_deref()),
-        ),
+        Outcome::Missing => {
+            let Ok(missing_target) =
+                permitted_fallback(&state, domain.missing_target.as_deref()).await
+            else {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            };
+            (Kind::Missing, fallback(&host, uri.path(), missing_target))
+        }
         Outcome::Blocked => (Kind::Blocked, StatusCode::NOT_FOUND.into_response()),
         Outcome::Challenge(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
@@ -307,9 +337,15 @@ async fn confirm(
             Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
         }
     }
-    redirect::confirm(&state.pool, lookup, action.link, action.origin)
-        .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
+    redirect::confirm(
+        &state.pool,
+        lookup,
+        action.link,
+        action.origin,
+        &state.destinations,
+    )
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
 }
 
 fn method_not_allowed() -> Response {
@@ -318,6 +354,18 @@ fn method_not_allowed() -> Response {
         [(header::ALLOW, "GET, HEAD")],
     )
         .into_response()
+}
+
+/// A configured fallback that the destination policy refuses behaves like no fallback.
+async fn permitted_fallback<'a>(
+    state: &AppState,
+    target: Option<&'a str>,
+) -> Result<Option<&'a str>, sqlx::Error> {
+    let Some(target) = target else {
+        return Ok(None);
+    };
+    let policy = state.destinations.current_from(&state.pool).await?;
+    Ok(policy.permits(target).then_some(target))
 }
 
 fn fallback(host: &str, path: &str, target: Option<&str>) -> Response {

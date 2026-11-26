@@ -4,14 +4,17 @@ mod assets;
 mod bulk;
 mod catalog;
 mod catalog_search;
+mod destination_policy;
 mod duplicates;
 mod exchange;
 mod links;
 mod metrics;
 mod monitoring;
+mod notification_routes;
 mod operations;
 mod overview;
 mod qr_templates;
+mod titles;
 
 use std::sync::Arc;
 
@@ -36,7 +39,9 @@ use crate::{
     http::response_headers,
     input::{PublicHosts, normalize_host},
     monitor::Monitor,
+    notifications::Notifier,
     rate_limit::AttemptLimiter,
+    titles::TitleLookup,
 };
 
 pub use access::AdminConfig;
@@ -55,8 +60,18 @@ struct AppState {
     api_attempts: Arc<AttemptLimiter>,
 }
 
+/// Optional services that add routes to the admin listener.
+#[derive(Default)]
+pub struct AdminServices {
+    pub analytics: Option<Analytics>,
+    pub operations: Option<Operations>,
+    pub monitor: Option<Monitor>,
+    pub titles: Option<TitleLookup>,
+    pub notifications: Option<Notifier>,
+}
+
 pub fn admin_router(pool: SqlitePool, hosts: PublicHosts, config: AdminConfig) -> Router {
-    build_admin_router(pool, hosts, config, None, None, None)
+    admin_router_with(pool, hosts, config, AdminServices::default())
 }
 
 pub fn admin_router_with_analytics(
@@ -65,35 +80,30 @@ pub fn admin_router_with_analytics(
     config: AdminConfig,
     analytics: Analytics,
 ) -> Router {
-    build_admin_router(pool, hosts, config, Some(analytics), None, None)
-}
-
-pub fn admin_router_with_services(
-    pool: SqlitePool,
-    hosts: PublicHosts,
-    config: AdminConfig,
-    analytics: Analytics,
-    operations: Operations,
-    monitor: Monitor,
-) -> Router {
-    build_admin_router(
+    admin_router_with(
         pool,
         hosts,
         config,
-        Some(analytics),
-        Some(operations),
-        Some(monitor),
+        AdminServices {
+            analytics: Some(analytics),
+            ..AdminServices::default()
+        },
     )
 }
 
-fn build_admin_router(
+pub fn admin_router_with(
     pool: SqlitePool,
     hosts: PublicHosts,
     config: AdminConfig,
-    analytics: Option<Analytics>,
-    operations: Option<Operations>,
-    monitor: Option<Monitor>,
+    services: AdminServices,
 ) -> Router {
+    let AdminServices {
+        analytics,
+        operations,
+        monitor,
+        titles,
+        notifications,
+    } = services;
     let state = AppState {
         pool: pool.clone(),
         auth: Auth::new(pool.clone()),
@@ -128,6 +138,9 @@ fn build_admin_router(
         .merge(links::qr_logo_routes())
         .merge(catalog_search::routes())
         .merge(bulk::routes())
+        .merge(destination_policy::routes())
+        .merge(titles.map_or_else(Router::new, titles::routes))
+        .merge(notification_routes::routes(notifications))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             access::browser_access,
@@ -140,10 +153,16 @@ fn build_admin_router(
             middleware::from_fn_with_state(state.clone(), access::browser_access),
         );
     let analytics_routes = analytics.map_or_else(Router::new, |service| {
-        metrics::routes(pool.clone(), service).route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            access::browser_access,
-        ))
+        metrics::report_routes(pool.clone(), service.clone())
+            .route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                access::report_access,
+            ))
+            .merge(
+                metrics::management_routes(pool.clone(), service).route_layer(
+                    middleware::from_fn_with_state(state.clone(), access::browser_access),
+                ),
+            )
     });
     let exchange_routes = exchange::routes(pool.clone(), state.hosts.clone()).route_layer(
         middleware::from_fn_with_state(state.clone(), access::browser_access),

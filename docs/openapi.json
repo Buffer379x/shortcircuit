@@ -171,6 +171,9 @@
         ],
         "security": [
           {
+            "apiKey": []
+          },
+          {
             "browserSession": []
           },
           {
@@ -221,9 +224,29 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "A browser session or a valid, unexpired API key is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key lacks the analytics scope or requests a host outside its restriction.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
-        "description": "Supply days or both start and end. Inclusive UTC dates span at most 365 days and end by the current UTC date. Tag rankings use current link assignments.",
+        "description": "Supply days or both start and end. Inclusive UTC dates span at most 365 days and end by the current UTC date. Tag rankings use current link assignments. Bearer API keys require the analytics scope. A host-bound key reports only on its host: an omitted host uses the key's host and another host returns 403.",
         "parameters": [
           {
             "in": "query",
@@ -367,6 +390,9 @@
         ],
         "security": [
           {
+            "apiKey": []
+          },
+          {
             "browserSession": []
           },
           {
@@ -386,6 +412,26 @@
           },
           "default": {
             "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session or a valid, unexpired API key is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key lacks the analytics scope or requests a host outside its restriction.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -430,7 +476,7 @@
             }
           }
         ],
-        "description": "Supply days or both start and end. Inclusive UTC dates span at most 365 days and end by the current UTC date. Tag rankings use current link assignments."
+        "description": "Supply days or both start and end. Inclusive UTC dates span at most 365 days and end by the current UTC date. Tag rankings use current link assignments. Bearer API keys require the analytics scope. A host-bound key reports only on its host: an omitted host uses the key's host and another host returns 403."
       }
     },
     "/api/v1/audit": {
@@ -1504,7 +1550,7 @@
             }
           }
         },
-        "description": "The origin host must match the supplied domain. Omit a fallback or send null to clear it. Disabling a domain retains its links.",
+        "description": "The origin host must match the supplied domain. Omit a fallback or send null to clear it. Disabling a domain retains its links. When the destination policy is enabled, a new or changed destination that it refuses returns 422 with code destination_not_allowed.",
         "parameters": [
           {
             "name": "Origin",
@@ -2089,7 +2135,7 @@
             }
           }
         },
-        "description": "Validate the entire page against active domains. Apply rechecks conflicts and inserts atomically. Existing links are never overwritten.",
+        "description": "Validate the entire page against active domains. Apply rechecks conflicts and inserts atomically. Existing links are never overwritten. When the destination policy is enabled, a new or changed destination that it refuses returns 422 with code destination_not_allowed.",
         "parameters": [
           {
             "name": "Origin",
@@ -2292,7 +2338,7 @@
             }
           }
         },
-        "description": "Preview writes no links. Apply rechecks conflicts and inserts the whole page atomically. Existing links are never overwritten. The original eight columns and an optional final description column are supported. Omitting all mapping parameters preserves native CSV behavior. Mapped CSV requires slug_column, target_column and exactly one host selection. Source column positions must be distinct.",
+        "description": "Preview writes no links. Apply rechecks conflicts and inserts the whole page atomically. Existing links are never overwritten. The original eight columns and an optional final description column are supported. Omitting all mapping parameters preserves native CSV behavior. Mapped CSV requires slug_column, target_column and exactly one host selection. Source column positions must be distinct. When the destination policy is enabled, a new or changed destination that it refuses returns 422 with code destination_not_allowed.",
         "parameters": [
           {
             "name": "preview",
@@ -3045,7 +3091,7 @@
             }
           }
         },
-        "description": "Omit the host to use the first active host visible to the caller. Omit the slug to generate one. Bearer API keys require the write scope and honor any configured host restriction.",
+        "description": "Omit the host to use the first active host visible to the caller. Omit the slug to generate one. Bearer API keys require the write scope and honor any configured host restriction. When the destination policy is enabled, a new or changed destination that it refuses returns 422 with code destination_not_allowed.",
         "parameters": [
           {
             "name": "Origin",
@@ -3695,7 +3741,7 @@
             }
           }
         },
-        "description": "A link's host and slug are fixed. Bearer API keys require the write scope and honor any configured host restriction.",
+        "description": "A link's host and slug are fixed. Bearer API keys require the write scope and honor any configured host restriction. When the destination policy is enabled, a new or changed destination that it refuses returns 422 with code destination_not_allowed.",
         "parameters": [
           {
             "name": "Origin",
@@ -4030,7 +4076,7 @@
             }
           }
         },
-        "description": "Restores one category. Protection, visit counters, and the public link identity stay intact."
+        "description": "Restores one category. Protection, visit counters, and the public link identity stay intact. When the destination policy is enabled, a new or changed destination that it refuses returns 422 with code destination_not_allowed."
       }
     },
     "/api/v1/links/{id}/organization": {
@@ -4341,7 +4387,7 @@
             }
           }
         },
-        "description": "Bearer API keys require the write scope and honor any configured host restriction.",
+        "description": "Bearer API keys require the write scope and honor any configured host restriction. When the destination policy is enabled, a new or changed destination that it refuses returns 422 with code destination_not_allowed.",
         "parameters": [
           {
             "name": "Origin",
@@ -6114,9 +6160,8 @@
                         "integer",
                         "null"
                       ],
-                      "format": "int64",
                       "minimum": 0,
-                      "description": "Linux process resident bytes when available."
+                      "description": "Resident set size of the ShortCircuit process from /proc/self/status. Null where unavailable. Excludes page cache and other processes in the container."
                     },
                     "link_count": {
                       "type": "integer",
@@ -6161,6 +6206,133 @@
                     },
                     "system_operation_in_progress": {
                       "type": "boolean"
+                    },
+                    "storage": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "status",
+                        "available_bytes",
+                        "total_bytes",
+                        "low_threshold_bytes"
+                      ],
+                      "description": "Capacity of the filesystem that contains the SQLite database, read with statvfs on request.",
+                      "properties": {
+                        "status": {
+                          "enum": [
+                            "healthy",
+                            "low",
+                            "unavailable"
+                          ]
+                        },
+                        "available_bytes": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "description": "Bytes available to the unprivileged service user."
+                        },
+                        "total_bytes": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0
+                        },
+                        "low_threshold_bytes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "512 MiB or three times the database size, whichever is larger."
+                        }
+                      }
+                    },
+                    "cpu": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "window_ms",
+                        "available_cores",
+                        "process",
+                        "process_percent",
+                        "container",
+                        "container_percent"
+                      ],
+                      "description": "Two counter readings taken window_ms apart during this request. Percentages are of one core and can exceed 100.",
+                      "properties": {
+                        "window_ms": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "available_cores": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 1
+                        },
+                        "process": {
+                          "enum": [
+                            "measured",
+                            "unavailable"
+                          ]
+                        },
+                        "process_percent": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "description": "User and system time of the ShortCircuit process from /proc/self/stat."
+                        },
+                        "container": {
+                          "enum": [
+                            "measured",
+                            "unavailable"
+                          ]
+                        },
+                        "container_percent": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "description": "usage_usec of the process's cgroup v2 cpu.stat. Unavailable outside cgroup v2."
+                        }
+                      }
+                    },
+                    "container_memory": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "status",
+                        "current_bytes",
+                        "limit_bytes"
+                      ],
+                      "description": "Memory charged to the process's cgroup v2, including page cache. Separate from the process resident set size.",
+                      "properties": {
+                        "status": {
+                          "enum": [
+                            "measured",
+                            "unavailable"
+                          ]
+                        },
+                        "current_bytes": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0
+                        },
+                        "limit_bytes": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "description": "Null when the cgroup has no limit or the reading is unavailable."
+                        }
+                      }
                     }
                   },
                   "required": [
@@ -6182,7 +6354,10 @@
                     "last_verified_backup_at",
                     "monitoring_enabled",
                     "last_monitor_check_at",
-                    "system_operation_in_progress"
+                    "system_operation_in_progress",
+                    "storage",
+                    "cpu",
+                    "container_memory"
                   ],
                   "additionalProperties": false
                 }
@@ -6199,7 +6374,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Resource readings are taken on demand and add a sampling delay of about 250 ms."
       }
     },
     "/api/v1/system/backup": {
@@ -6580,6 +6756,634 @@
           }
         }
       }
+    },
+    "/api/v1/destination-policy": {
+      "get": {
+        "operationId": "readDestinationPolicy",
+        "summary": "Read the destination policy and its impact",
+        "tags": [
+          "Destination policy"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved policy and the saved destinations it refuses.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DestinationPolicyReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "replaceDestinationPolicy",
+        "summary": "Replace the destination policy",
+        "description": "Replaces the enabled flag and all rules in one transaction and records an audit entry. Saved destinations are not modified.",
+        "tags": [
+          "Destination policy"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DestinationPolicy"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved policy and its impact.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DestinationPolicyReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin or CSRF validation failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid_destination_rule, duplicate_destination_rule, or too_many_destination_rules.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/destination-policy/preview": {
+      "post": {
+        "operationId": "previewDestinationPolicy",
+        "summary": "Preview a destination policy without saving it",
+        "tags": [
+          "Destination policy"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DestinationPolicy"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Normalized draft and the saved destinations it would refuse.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DestinationPolicyReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The draft is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/traffic": {
+      "get": {
+        "operationId": "readUnusualTraffic",
+        "summary": "List links with unusually high traffic today",
+        "description": "Compares the current UTC day with the daily average of the previous seven UTC days from retained daily rollups. The report never changes a link. Bearer API keys require the analytics scope, and a host-bound key reports only on its host.",
+        "tags": [
+          "Analytics"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "host",
+            "schema": {
+              "$ref": "#/components/schemas/CatalogHost"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Flagged links, busiest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session or a valid API key is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key lacks the analytics scope or requests another host.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/title-lookups": {
+      "get": {
+        "operationId": "listTitleLookups",
+        "summary": "List recent title lookups",
+        "tags": [
+          "Title lookup"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Feature state and the 50 most recent lookups.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TitleLookupList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "queueUntitledTitleLookups",
+        "summary": "Queue title lookups for untitled links",
+        "description": "Queues up to 50 links that have an empty title, no password or one-time protection, and no pending, applied, or recent lookup. The background worker fetches one destination at a time.",
+        "tags": [
+          "Title lookup"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Number of links queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "queued"
+                  ],
+                  "properties": {
+                    "queued": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 50
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "title_lookup_disabled when TITLE_LOOKUP_ENABLED is not true.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/links/{id}/title-lookup": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      ],
+      "post": {
+        "operationId": "queueTitleLookup",
+        "summary": "Queue a title lookup for one link",
+        "description": "The result is applied only while the link still has an empty title and the same host and destination.",
+        "tags": [
+          "Title lookup"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The lookup is pending."
+          },
+          "401": {
+            "description": "A browser session is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The link does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "title_lookup_disabled, title_present, or title_lookup_protected.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications": {
+      "get": {
+        "operationId": "readNotificationStatus",
+        "summary": "Read notification settings and delivery status",
+        "description": "Shows the configured event kinds, delivery counts, and the 25 most recent outbox rows. Settings come from environment variables and are read-only here.",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Notification status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/test": {
+      "post": {
+        "operationId": "queueTestNotification",
+        "summary": "Queue a test notification",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "A test event is pending delivery."
+          },
+          "401": {
+            "description": "A browser session is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "notifications_disabled when no webhook is configured.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6636,8 +7440,11 @@
                   "enum": [
                     "redirect",
                     "blocked",
-                    "missing"
-                  ]
+                    "missing",
+                    "root_fallback",
+                    "root_missing"
+                  ],
+                  "description": "Root path events have a null link_id."
                 },
                 "visit_class": {
                   "enum": [
@@ -6794,6 +7601,18 @@
                 "type": "integer",
                 "format": "int64"
               },
+              "root_fallback": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0,
+                "description": "GET requests for a domain root path that its root destination redirected."
+              },
+              "root_missing": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0,
+                "description": "GET requests for a domain root path without a usable root destination."
+              },
               "human": {
                 "type": "integer",
                 "format": "int64"
@@ -6811,11 +7630,14 @@
               "redirect",
               "blocked",
               "missing",
+              "root_fallback",
+              "root_missing",
               "human",
               "bot",
               "unknown"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "description": "Outcome counts for the period. redirect, blocked, and missing describe short-link paths. Root path requests count separately. human, bot, and unknown classify successful short-link redirects."
           },
           "previous_redirects": {
             "type": "integer",
@@ -6876,9 +7698,12 @@
             }
           },
           "dropped": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "minimum": 0,
-            "description": "Dropped events since process startup."
+            "description": "Events dropped by this process since startup across all hosts. Null for a host-bound API key because dropped events have no host."
           },
           "start_day": {
             "type": "integer",
@@ -7080,7 +7905,7 @@
             "items": {
               "$ref": "#/components/schemas/ApiKeyScope"
             },
-            "maxItems": 3,
+            "maxItems": 4,
             "uniqueItems": true
           },
           "host": {
@@ -7180,9 +8005,10 @@
         "enum": [
           "read",
           "write",
-          "delete"
+          "delete",
+          "analytics"
         ],
-        "description": "Link permissions. Use read for retrieval, write for creation and editing, and delete for removal."
+        "description": "Use read for link retrieval, write for creation and editing, delete for removal, and analytics for read-only analytics reports. Link scopes do not grant analytics access."
       },
       "AuthLoginInput": {
         "type": "object",
@@ -8925,7 +9751,8 @@
         "required": [
           "target",
           "status",
-          "rule"
+          "rule",
+          "permitted"
         ],
         "properties": {
           "target": {
@@ -8948,6 +9775,10 @@
             ],
             "minimum": 1,
             "description": "One-based rule position or null for the default destination."
+          },
+          "permitted": {
+            "type": "boolean",
+            "description": "Whether the current destination policy permits the selected destination."
           }
         }
       },
@@ -9560,6 +10391,467 @@
           "consecutive_failures"
         ],
         "additionalProperties": false
+      },
+      "DestinationRule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "host",
+          "action"
+        ],
+        "properties": {
+          "host": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "description": "A hostname or IP address without scheme, port, or path. Input is trimmed, lowercased, IDNA-encoded, and stripped of one trailing dot. Wildcards are not accepted; use subdomains."
+          },
+          "subdomains": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also match every name below the host. Not valid for IP addresses."
+          },
+          "action": {
+            "enum": [
+              "allow",
+              "block"
+            ]
+          }
+        }
+      },
+      "DestinationPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "rules"
+        ],
+        "description": "When enabled, a matching block rule refuses a destination. If any allow rule exists, a destination must also match an allow rule. A host and subdomain flag can appear once.",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "rules": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/DestinationRule"
+            }
+          }
+        }
+      },
+      "DestinationPolicyReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "rules",
+          "impact"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DestinationRule"
+            },
+            "description": "Normalized rules, block rules first, then by host."
+          },
+          "impact": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "links",
+              "rule_links",
+              "fallbacks",
+              "examples"
+            ],
+            "description": "Saved destinations that this policy refuses at redirect time. Zero while the policy is not enabled.",
+            "properties": {
+              "links": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Links whose default destination is refused."
+              },
+              "rule_links": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Links with at least one refused rule destination."
+              },
+              "fallbacks": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Refused domain root and missing-path destinations."
+              },
+              "examples": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "host",
+                    "slug"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "host": {
+                      "type": "string"
+                    },
+                    "slug": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "TrafficReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "day",
+          "baseline_days",
+          "minimum_redirects",
+          "multiplier",
+          "host",
+          "analytics_enabled",
+          "items",
+          "has_more"
+        ],
+        "description": "Links whose redirects on the current UTC day reach minimum_redirects and multiplier times their daily average over the previous baseline_days UTC days. Informational only.",
+        "properties": {
+          "day": {
+            "type": "integer",
+            "description": "Current UTC epoch day."
+          },
+          "baseline_days": {
+            "type": "integer",
+            "const": 7
+          },
+          "minimum_redirects": {
+            "type": "integer",
+            "const": 100
+          },
+          "multiplier": {
+            "type": "integer",
+            "const": 3
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "analytics_enabled": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "host",
+                "slug",
+                "title",
+                "today",
+                "baseline_average"
+              ],
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "host": {
+                  "type": "string"
+                },
+                "slug": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "today": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "baseline_average": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TitleLookupList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "pending",
+          "items"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether TITLE_LOOKUP_ENABLED activated the feature."
+          },
+          "pending": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "link_id",
+                "host",
+                "slug",
+                "status",
+                "failure",
+                "title",
+                "requested_at",
+                "completed_at"
+              ],
+              "properties": {
+                "link_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "host": {
+                  "type": "string"
+                },
+                "slug": {
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "pending",
+                    "applied",
+                    "no_title",
+                    "failed",
+                    "skipped"
+                  ]
+                },
+                "failure": {
+                  "enum": [
+                    null,
+                    "blocked",
+                    "busy",
+                    "dns",
+                    "timeout",
+                    "connection",
+                    "protocol",
+                    "not_html",
+                    "policy",
+                    "expired",
+                    "restored"
+                  ]
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 160,
+                  "description": "Plain text. Render as text, never as markup."
+                },
+                "requested_at": {
+                  "type": "integer",
+                  "description": "UTC Unix seconds."
+                },
+                "completed_at": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "UTC Unix seconds."
+                }
+              }
+            }
+          }
+        }
+      },
+      "NotificationStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "origin",
+          "connector",
+          "events",
+          "click_milestones",
+          "expiry_notice_hours",
+          "counts",
+          "items"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "True when a notification webhook is configured."
+          },
+          "origin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Webhook scheme, host, and port. The path, query, and credentials are never returned."
+          },
+          "connector": {
+            "type": "boolean",
+            "description": "Whether delivery uses the configured internal connector."
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "link_health",
+                "link_expiring",
+                "link_expired",
+                "click_milestone",
+                "backup_failed",
+                "job_failed",
+                "storage_low",
+                "security"
+              ]
+            }
+          },
+          "click_milestones": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "expiry_notice_hours": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 720
+          },
+          "counts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "pending",
+              "delivered",
+              "failed",
+              "discarded"
+            ],
+            "properties": {
+              "pending": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "delivered": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "discarded": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 25,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "event",
+                "occurred_at",
+                "status",
+                "attempts",
+                "last_error",
+                "next_attempt_at",
+                "delivered_at"
+              ],
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "event": {
+                  "enum": [
+                    "test",
+                    "link_health",
+                    "link_expiring",
+                    "link_expired",
+                    "click_milestone",
+                    "backup_failed",
+                    "job_failed",
+                    "storage_low",
+                    "security"
+                  ]
+                },
+                "occurred_at": {
+                  "type": "integer"
+                },
+                "status": {
+                  "enum": [
+                    "pending",
+                    "delivered",
+                    "failed",
+                    "discarded"
+                  ]
+                },
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "last_error": {
+                  "enum": [
+                    null,
+                    "blocked",
+                    "busy",
+                    "dns",
+                    "timeout",
+                    "connection",
+                    "protocol",
+                    "restored",
+                    "stale"
+                  ]
+                },
+                "next_attempt_at": {
+                  "type": "integer"
+                },
+                "delivered_at": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

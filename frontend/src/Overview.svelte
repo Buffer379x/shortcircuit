@@ -5,6 +5,7 @@
   import type { Language, Messages } from './i18n';
   import Icon from './Icon.svelte';
   import { useTimeZone } from './timezone';
+  import UnusualTraffic from './UnusualTraffic.svelte';
 
   type Destination = 'links' | 'analytics' | 'monitoring';
   const statusLabels = {
@@ -149,6 +150,8 @@
       {/if}
     </dl>
   {/if}
+
+  <UnusualTraffic {t} {api} {language} quiet />
 
   <div class="board">
     <section class="panel stack panel-pad" aria-labelledby={pageId + '-traffic'}>

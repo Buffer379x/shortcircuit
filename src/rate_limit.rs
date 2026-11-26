@@ -19,8 +19,8 @@ const MAX_FORWARDED_BYTES: usize = 2048;
 #[derive(Clone, Default)]
 pub struct TrustedProxies(Vec<Network>);
 
-#[derive(Clone)]
-enum Network {
+#[derive(Clone, Debug)]
+pub(crate) enum Network {
     V4 { address: u32, mask: u32 },
     V6 { address: u128, mask: u128 },
 }
@@ -34,7 +34,7 @@ impl TrustedProxies {
         let networks = value
             .split(',')
             .take(MAX_TRUSTED_PROXIES + 1)
-            .map(|network| Network::parse(network.trim()))
+            .map(|network| Network::parse(network.trim(), PROXY_ERROR))
             .collect::<Result<Vec<_>, _>>()?;
         if networks.len() > MAX_TRUSTED_PROXIES {
             return Err("TRUSTED_PROXIES allows at most 64 entries");
@@ -77,22 +77,48 @@ impl TrustedProxies {
     }
 
     fn contains(&self, candidate: IpAddr) -> bool {
-        self.0.iter().any(|network| match (network, candidate) {
-            (Network::V4 { address, mask }, IpAddr::V4(candidate)) => {
-                (u32::from(candidate) & *mask) == *address
-            }
-            (Network::V6 { address, mask }, IpAddr::V6(candidate)) => {
-                (u128::from(candidate) & *mask) == *address
-            }
-            _ => false,
-        })
+        self.0.iter().any(|network| network.contains(candidate))
+    }
+}
+
+const PROXY_ERROR: &str =
+    "TRUSTED_PROXIES must contain IP addresses or CIDR networks with nonzero prefixes";
+
+/// IPv6 clients usually control a whole /64, so they share one budget per /64 prefix.
+fn budget_key(peer: IpAddr) -> IpAddr {
+    match peer.to_canonical() {
+        IpAddr::V6(address) => IpAddr::V6(std::net::Ipv6Addr::from(
+            u128::from(address) & (u128::MAX << 64),
+        )),
+        address => address,
     }
 }
 
 impl Network {
-    fn parse(value: &str) -> Result<Self, &'static str> {
-        let error =
-            "TRUSTED_PROXIES must contain IP addresses or CIDR networks with nonzero prefixes";
+    pub(crate) fn contains(&self, candidate: IpAddr) -> bool {
+        match (self, candidate.to_canonical()) {
+            (Self::V4 { address, mask }, IpAddr::V4(candidate)) => {
+                (u32::from(candidate) & *mask) == *address
+            }
+            (Self::V6 { address, mask }, IpAddr::V6(candidate)) => {
+                (u128::from(candidate) & *mask) == *address
+            }
+            _ => false,
+        }
+    }
+
+    /// The first address and the prefix length in bits.
+    pub(crate) fn base(&self) -> (IpAddr, u32) {
+        match self {
+            Self::V4 { address, mask } => (IpAddr::V4(Ipv4Addr::from(*address)), mask.count_ones()),
+            Self::V6 { address, mask } => (
+                IpAddr::V6(std::net::Ipv6Addr::from(*address)),
+                mask.count_ones(),
+            ),
+        }
+    }
+
+    pub(crate) fn parse(value: &str, error: &'static str) -> Result<Self, &'static str> {
         let (address, prefix) = match value.split_once('/') {
             Some((address, prefix)) => (address, Some(prefix.parse::<u32>().map_err(|_| error)?)),
             None => (value, None),
@@ -205,7 +231,7 @@ impl AttemptLimiter {
         if window.total >= self.limit.global {
             return Err(StatusCode::TOO_MANY_REQUESTS);
         }
-        let count = window.per_peer.entry(peer).or_default();
+        let count = window.per_peer.entry(budget_key(peer)).or_default();
         if *count >= self.limit.per_peer {
             return Err(StatusCode::TOO_MANY_REQUESTS);
         }
@@ -229,6 +255,20 @@ mod tests {
             .extensions_mut()
             .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
         request
+    }
+
+    #[test]
+    fn ipv6_clients_share_a_budget_per_64_prefix() {
+        let limiter = AttemptLimiter::with_limit(RateLimit::new(2, 100).unwrap());
+        let first: IpAddr = "2001:db8:1:2::10".parse().unwrap();
+        let neighbor: IpAddr = "2001:db8:1:2:ffff::1".parse().unwrap();
+        let other: IpAddr = "2001:db8:1:3::10".parse().unwrap();
+        assert!(limiter.allow(first).is_ok());
+        assert!(limiter.allow(neighbor).is_ok());
+        assert_eq!(limiter.allow(first), Err(StatusCode::TOO_MANY_REQUESTS));
+        assert!(limiter.allow(other).is_ok());
+        let mapped: IpAddr = "::ffff:192.0.2.1".parse().unwrap();
+        assert_eq!(budget_key(mapped), "192.0.2.1".parse::<IpAddr>().unwrap());
     }
 
     #[test]

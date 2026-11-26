@@ -21,7 +21,8 @@ const TOKEN_BYTES: usize = 32;
 const SESSION_DOMAIN: &[u8] = b"shortcircuit/session/v1\0";
 const CSRF_DOMAIN: &[u8] = b"shortcircuit/csrf/v1\0";
 const KEY_DOMAIN: &[u8] = b"shortcircuit/api-key/v1\0";
-const KEY_SCOPES: [(&str, i64); 3] = [("read", 1), ("write", 2), ("delete", 4)];
+// The analytics scope grants read-only reports. It does not imply any link permission.
+const KEY_SCOPES: [(&str, i64); 4] = [("read", 1), ("write", 2), ("delete", 4), ("analytics", 8)];
 
 // Keep unknown usernames on the same password-verification path as existing accounts.
 const DUMMY_PASSWORD_HASH: &str = concat!(
@@ -1055,6 +1056,90 @@ mod tests {
         assert!(auth.key(&old.token).await.is_err());
         assert!(auth.key(&rotated.token).await.is_ok());
         assert_eq!(auth.list_keys().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn upgrade_keeps_existing_key_grants_and_never_reuses_a_key_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("keys.db");
+        let legacy = crate::store::open_database_at_version(&path, 18).await;
+        let legacy_auth = Auth::new(legacy.clone());
+        account(&legacy_auth).await;
+        let mut issued = Vec::new();
+        for (name, scopes) in [
+            ("reader", vec!["read".to_owned()]),
+            ("all", vec!["read".into(), "write".into(), "delete".into()]),
+            ("removed", vec!["delete".to_owned()]),
+        ] {
+            issued.push(
+                legacy_auth
+                    .create_key(name, scopes, Some("go.example".into()), None)
+                    .await
+                    .unwrap(),
+            );
+        }
+        // Schema 18 cannot store the new bit, so the scope is unknown before the upgrade.
+        assert!(
+            sqlx::query("UPDATE admin_api_keys SET scopes = 8 WHERE name = 'reader'")
+                .execute(&legacy)
+                .await
+                .is_err()
+        );
+        legacy_auth.revoke_key(issued[2].key.id).await.unwrap();
+        legacy.close().await;
+
+        let pool = crate::open_database(&path).await.unwrap();
+        let auth = Auth::new(pool);
+        for (key, scopes) in [
+            (&issued[0], vec!["read"]),
+            (&issued[1], vec!["read", "write", "delete"]),
+        ] {
+            let access = auth.key(&key.token).await.unwrap();
+            assert!(!access.allows("analytics"));
+            assert_eq!(access.host.as_deref(), Some("go.example"));
+            let listed = auth.list_keys().await.unwrap();
+            let meta = listed.iter().find(|item| item.id == key.key.id).unwrap();
+            assert_eq!(meta.scopes, scopes);
+        }
+        assert!(auth.key(&issued[2].token).await.is_err());
+        let analytics = auth
+            .create_key("reports", vec!["analytics".into()], None, None)
+            .await
+            .unwrap();
+        assert!(analytics.key.id > issued[2].key.id);
+        let access = auth.key(&analytics.token).await.unwrap();
+        assert!(access.allows("analytics"));
+        assert!(!access.allows("read"));
+        assert_eq!(analytics.key.scopes, ["analytics"]);
+        assert!(matches!(
+            auth.create_key("unknown", vec!["admin".into()], None, None)
+                .await,
+            Err(AuthError::Invalid)
+        ));
+    }
+
+    #[tokio::test]
+    async fn rotation_preserves_the_analytics_scope() {
+        let (_directory, auth) = database().await;
+        let session = account(&auth).await;
+        let old = auth
+            .create_key(
+                "reports",
+                vec!["analytics".into(), "read".into()],
+                Some("go.example".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        let rotated = auth
+            .rotate_key(old.key.id, &session.token, PASSWORD)
+            .await
+            .unwrap();
+        assert_eq!(rotated.key.scopes, ["read", "analytics"]);
+        let access = auth.key(&rotated.token).await.unwrap();
+        assert!(access.allows("analytics"));
+        assert_eq!(access.host.as_deref(), Some("go.example"));
+        assert!(auth.key(&old.token).await.is_err());
     }
 
     #[tokio::test]

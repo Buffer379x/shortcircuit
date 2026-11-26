@@ -12,7 +12,7 @@
     backup_authorize: 'auditBackupAuthorize', backup_download: 'auditBackupDownload',
     restore_authorize: 'auditRestoreAuthorize', restore_validate: 'auditRestoreValidate',
     restore_stage: 'auditRestoreStage', restore_cancel: 'auditRestoreCancel', restore_apply: 'auditRestoreApply',
-    monitoring_update: 'auditMonitoringUpdate',
+    monitoring_update: 'auditMonitoringUpdate', destination_policy_update: 'auditDestinationPolicy',
   };
   interface AuditItem {
     id: number;

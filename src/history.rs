@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{QueryBuilder, SqliteConnection, SqlitePool};
 
 use crate::{
+    destinations,
     input::{link_tags, link_title, plain_description, valid_target},
     redirect::{self, Policy, PolicyError},
     store::{self, Link, LinkUpdate, push_host_scope},
@@ -319,11 +320,24 @@ pub(crate) async fn restore(
         .ok_or(RestoreError::NotRestorable)?;
     match decode(&previous)? {
         Snapshot::Metadata(metadata) => {
+            let update = metadata.into_update()?;
+            let current: Option<String> =
+                sqlx::query_scalar("SELECT target FROM links WHERE id = ?")
+                    .bind(link_id)
+                    .fetch_optional(&mut *transaction)
+                    .await?;
+            let unchanged: Vec<&str> = current.as_deref().into_iter().collect();
+            if destinations::check_writes(&mut *transaction, update.target.as_deref(), &unchanged)
+                .await?
+                .is_err()
+            {
+                return Err(RestoreError::Invalid("destination_not_allowed"));
+            }
             store::update_link_in(
                 &mut transaction,
                 hosts,
                 link_id,
-                metadata.into_update()?,
+                update,
                 actor,
                 Action::Restore,
             )

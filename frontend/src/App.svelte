@@ -19,6 +19,7 @@
   import Overview from './Overview.svelte';
   import { isTimeZone, provideTimeZone } from './timezone';
   import Audit from './Audit.svelte';
+  import DestinationPolicy from './DestinationPolicy.svelte';
 
   type Page = 'overview' | 'links' | 'exchange' | 'analytics' | 'domains' | 'tags' | 'apiKeys' | 'account' | 'operations' | 'monitoring' | 'auditLog';
   const pages = [
@@ -52,6 +53,23 @@
   let domains = $state<Domains | null>(null);
   let domainError = $state<keyof Messages | null>(null);
   let signingOut = $state(false);
+  let menuOpen = $state(false);
+  let menuButton = $state<HTMLButtonElement>();
+
+  // Each page has a hash route, so reload, Back, and bookmarks keep the location.
+  function pageFromHash(): Page | null {
+    const id = location.hash.slice(1);
+    return pages.some((entry) => entry.id === id) ? id as Page : null;
+  }
+
+  function followHash() {
+    const destination = pageFromHash();
+    if (destination && destination !== page) {
+      page = destination;
+      menuOpen = false;
+      void tick().then(() => main?.focus());
+    }
+  }
   let signOutError = $state<keyof Messages | null>(null);
 
   const request = createApi(() => user?.csrf);
@@ -83,8 +101,15 @@
     systemDark = query.matches;
     const change = (event: MediaQueryListEvent) => { systemDark = event.matches; };
     query.addEventListener('change', change);
+    page = pageFromHash() ?? page;
+    window.addEventListener('popstate', followHash);
+    window.addEventListener('hashchange', followHash);
     void refreshSession();
-    return () => query.removeEventListener('change', change);
+    return () => {
+      query.removeEventListener('change', change);
+      window.removeEventListener('popstate', followHash);
+      window.removeEventListener('hashchange', followHash);
+    };
   });
 
   $effect(() => {
@@ -169,12 +194,16 @@
   }
 
   async function navigate(destination: Page) {
+    menuOpen = false;
     if (page === destination) return;
     page = destination;
+    if (location.hash !== '#' + destination) history.pushState(null, '', '#' + destination);
     await tick();
     main?.focus();
   }
 </script>
+
+<svelte:window onkeydown={(event) => { if (event.key === 'Escape' && menuOpen) { menuOpen = false; menuButton?.focus(); } }} />
 
 <svelte:head><title>{user ? `${t[page]} · ShortCircuit` : 'ShortCircuit'}</title></svelte:head>
 
@@ -184,7 +213,7 @@
   <div class="app-shell">
     <aside class="rail">
       <div class="brand"><img src="/favicon.svg" alt="" />ShortCircuit</div>
-      <nav aria-label={t.mainNavigation}>
+      <nav id="main-navigation" class:open={menuOpen} aria-label={t.mainNavigation}>
         {#each pages as entry (entry.id)}
           <button class="nav-item" type="button" aria-current={page === entry.id ? 'page' : undefined} onclick={() => navigate(entry.id)}>
             <Icon name={entry.icon} />{t[entry.id]}
@@ -203,6 +232,8 @@
       <header class="topbar">
         <div class="crumb" aria-hidden="true"><span>{t.mainNavigation}</span><Icon name="chevron" /><strong>{t[page]}</strong></div>
         <div class="brand mobile-brand"><img src="/favicon.svg" alt="" />ShortCircuit</div>
+        <button class="button menu-toggle" type="button" bind:this={menuButton} aria-expanded={menuOpen} aria-controls="main-navigation"
+          onclick={() => menuOpen = !menuOpen}><Icon name={menuOpen ? 'close' : 'rule'} />{t.menu}<span class="visually-hidden">: {t[page]}</span></button>
         <div class="top-actions">
           <Preferences {t} bind:language bind:theme />
           <button type="button" class="button signout" disabled={signingOut} onclick={signOut} aria-label={t.signOut} title={t.signOut}>
@@ -228,6 +259,7 @@
           <Analytics {t} {api} {language} />
         {:else if page === 'domains' || page === 'tags'}
           {#key page}<Catalog {t} {api} {language} kind={page} onDomainSaved={loadDomains} />{/key}
+          {#if page === 'domains'}<DestinationPolicy {t} {api} {language} />{/if}
         {:else if domains}
           {#if page === 'links'}
             <Links {t} {api} {domains} {language} bind:createRequested />

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{
         Path, Query, State,
         rejection::{JsonRejection, PathRejection, QueryRejection},
@@ -18,7 +18,7 @@ use crate::{
     input::normalize_host,
 };
 
-use super::{Problem, json_payload, resource_id};
+use super::{Problem, access::ReportAccess, json_payload, resource_id};
 
 #[derive(Clone)]
 struct MetricsState {
@@ -26,10 +26,134 @@ struct MetricsState {
     pool: SqlitePool,
 }
 
-pub(super) fn routes(pool: SqlitePool, analytics: Analytics) -> Router {
+/// Read-only reports that browser sessions and keys with the analytics scope can request.
+pub(super) fn report_routes(pool: SqlitePool, analytics: Analytics) -> Router {
     Router::new()
         .route("/api/v1/analytics/summary", get(summary))
         .route("/api/v1/analytics/export", get(export))
+        .route("/api/v1/analytics/traffic", get(traffic))
+        .with_state(MetricsState { analytics, pool })
+}
+
+/// Days before the current UTC day that form the traffic baseline.
+const BASELINE_DAYS: i64 = 7;
+/// Redirects the current UTC day needs before a link can be flagged.
+const MINIMUM_REDIRECTS: i64 = 100;
+/// Factor over the baseline daily average that the current UTC day must reach.
+const MULTIPLIER: i64 = 3;
+const MAX_FLAGGED: i64 = 10;
+
+#[derive(Serialize, sqlx::FromRow)]
+struct FlaggedLink {
+    id: i64,
+    host: String,
+    slug: String,
+    title: String,
+    today: i64,
+    #[serde(skip)]
+    baseline: i64,
+    #[sqlx(skip)]
+    baseline_average: f64,
+}
+
+#[derive(Serialize)]
+struct TrafficReport {
+    day: i64,
+    baseline_days: i64,
+    minimum_redirects: i64,
+    multiplier: i64,
+    host: Option<String>,
+    analytics_enabled: bool,
+    items: Vec<FlaggedLink>,
+    has_more: bool,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TrafficQuery {
+    host: Option<String>,
+}
+
+/// Flags links whose redirects today are unusually high compared with their recent history.
+/// The indicator is informational and never changes a link.
+async fn traffic(
+    State(state): State<MetricsState>,
+    Extension(access): Extension<ReportAccess>,
+    query: Result<Query<TrafficQuery>, QueryRejection>,
+) -> Result<Json<TrafficReport>, Problem> {
+    let Query(query) = query.map_err(|error| Problem(error.status(), "invalid_query"))?;
+    let requested = query
+        .host
+        .as_deref()
+        .map(|host| normalize_host(host).ok_or_else(|| Problem::invalid("invalid_host")))
+        .transpose()?;
+    let host = match (access.host, requested) {
+        (Some(bound), Some(requested)) if requested != bound => {
+            return Err(Problem(StatusCode::FORBIDDEN, "insufficient_scope"));
+        }
+        (Some(bound), _) => Some(bound),
+        (None, requested) => requested,
+    };
+    read_traffic(&state.pool, host, state.analytics.settings().enabled)
+        .await
+        .map(Json)
+        .map_err(|_| Problem::unavailable())
+}
+
+async fn read_traffic(
+    pool: &SqlitePool,
+    host: Option<String>,
+    analytics_enabled: bool,
+) -> Result<TrafficReport, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let day: i64 = sqlx::query_scalar("SELECT unixepoch() / 86400")
+        .fetch_one(&mut *transaction)
+        .await?;
+    let mut items = sqlx::query_as::<_, FlaggedLink>(
+        "WITH counts AS (
+            SELECT link_id,
+                   COALESCE(SUM(total) FILTER (WHERE day = ?1), 0) AS today,
+                   COALESCE(SUM(total) FILTER (WHERE day < ?1), 0) AS baseline
+            FROM analytics_daily
+            WHERE day BETWEEN ?1 - ?2 AND ?1 AND kind = 'redirect' AND link_id > 0
+              AND (?3 IS NULL OR host = ?3)
+            GROUP BY link_id
+         )
+         SELECT links.id, links.host, links.slug, links.title, counts.today, counts.baseline
+         FROM counts JOIN links ON links.id = counts.link_id
+         WHERE counts.today >= ?4 AND counts.today * ?2 >= ?5 * counts.baseline
+         ORDER BY counts.today DESC, links.id ASC
+         LIMIT ?6",
+    )
+    .bind(day)
+    .bind(BASELINE_DAYS)
+    .bind(host.as_deref())
+    .bind(MINIMUM_REDIRECTS)
+    .bind(MULTIPLIER)
+    .bind(MAX_FLAGGED + 1)
+    .fetch_all(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    let has_more = items.len() as i64 > MAX_FLAGGED;
+    items.truncate(MAX_FLAGGED as usize);
+    for item in &mut items {
+        item.baseline_average = item.baseline as f64 / BASELINE_DAYS as f64;
+    }
+    Ok(TrafficReport {
+        day,
+        baseline_days: BASELINE_DAYS,
+        minimum_redirects: MINIMUM_REDIRECTS,
+        multiplier: MULTIPLIER,
+        host,
+        analytics_enabled,
+        items,
+        has_more,
+    })
+}
+
+/// Settings, visit details, and deletion remain restricted to browser sessions.
+pub(super) fn management_routes(pool: SqlitePool, analytics: Analytics) -> Router {
+    Router::new()
         .route(
             "/api/v1/analytics/settings",
             get(settings).patch(save_settings),
@@ -54,6 +178,8 @@ struct Totals {
     redirect: i64,
     blocked: i64,
     missing: i64,
+    root_fallback: i64,
+    root_missing: i64,
     human: i64,
     bot: i64,
     unknown: i64,
@@ -114,7 +240,8 @@ struct Summary {
     top_domains: Vec<RankedDomain>,
     top_tags: Vec<RankedTag>,
     breakdowns: Breakdowns,
-    dropped: u64,
+    /// Process-wide queue overflow. Host-bound keys receive null because drops have no host.
+    dropped: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -126,20 +253,22 @@ struct SummaryExport {
 
 async fn summary(
     State(state): State<MetricsState>,
+    Extension(access): Extension<ReportAccess>,
     period: Result<Query<Period>, QueryRejection>,
 ) -> Result<Json<Summary>, Problem> {
     let Query(period) = period.map_err(|error| Problem(error.status(), "invalid_query"))?;
-    read_summary(&state.pool, period, state.analytics.dropped())
-        .await
-        .map(Json)
+    let scope = ReportScope::new(&access, state.analytics.dropped());
+    read_summary(&state.pool, period, scope).await.map(Json)
 }
 
 async fn export(
     State(state): State<MetricsState>,
+    Extension(access): Extension<ReportAccess>,
     period: Result<Query<Period>, QueryRejection>,
 ) -> Result<impl IntoResponse, Problem> {
     let Query(period) = period.map_err(|error| Problem(error.status(), "invalid_query"))?;
-    let report = read_summary(&state.pool, period, state.analytics.dropped()).await?;
+    let scope = ReportScope::new(&access, state.analytics.dropped());
+    let report = read_summary(&state.pool, period, scope).await?;
     Ok((
         [(
             header::CONTENT_DISPOSITION,
@@ -153,12 +282,48 @@ async fn export(
     ))
 }
 
-async fn read_summary(pool: &SqlitePool, period: Period, dropped: u64) -> Result<Summary, Problem> {
-    let host = period
+/// The hosts and instance-wide values that a report may disclose to the caller.
+struct ReportScope<'a> {
+    host: Option<&'a str>,
+    dropped: u64,
+}
+
+impl<'a> ReportScope<'a> {
+    fn new(access: &'a ReportAccess, dropped: u64) -> Self {
+        Self {
+            host: access.host.as_deref(),
+            dropped,
+        }
+    }
+
+    #[cfg(test)]
+    fn instance(dropped: u64) -> Self {
+        Self {
+            host: None,
+            dropped,
+        }
+    }
+}
+
+async fn read_summary(
+    pool: &SqlitePool,
+    period: Period,
+    scope: ReportScope<'_>,
+) -> Result<Summary, Problem> {
+    let requested = period
         .host
         .as_deref()
         .map(|host| normalize_host(host).ok_or_else(|| Problem::invalid("invalid_host")))
         .transpose()?;
+    // A host-bound key always reports on its own host and cannot widen or change it.
+    let host = match (scope.host, requested) {
+        (Some(bound), Some(requested)) if requested != bound => {
+            return Err(Problem(StatusCode::FORBIDDEN, "insufficient_scope"));
+        }
+        (Some(bound), _) => Some(bound.to_owned()),
+        (None, requested) => requested,
+    };
+    let dropped = scope.host.is_none().then_some(scope.dropped);
 
     let mut transaction = pool.begin().await.map_err(|_| Problem::unavailable())?;
     // The modifier normalizes invalid calendar dates, so only canonical UTC dates compare equal.
@@ -203,13 +368,15 @@ async fn query_summary(
     last: i64,
     today: i64,
     host: Option<String>,
-    dropped: u64,
+    dropped: Option<u64>,
 ) -> Result<Summary, sqlx::Error> {
     let days = (last - first + 1) as u16;
     let totals = sqlx::query_as(
         "SELECT COALESCE(SUM(total) FILTER (WHERE kind = 'redirect'), 0) AS redirect,
                 COALESCE(SUM(total) FILTER (WHERE kind = 'missing'), 0) AS missing,
                 COALESCE(SUM(total) FILTER (WHERE kind = 'blocked'), 0) AS blocked,
+                COALESCE(SUM(total) FILTER (WHERE kind = 'root_fallback'), 0) AS root_fallback,
+                COALESCE(SUM(total) FILTER (WHERE kind = 'root_missing'), 0) AS root_missing,
                 COALESCE(SUM(total) FILTER (WHERE kind = 'redirect' AND visit_class = 'human'), 0) AS human,
                 COALESCE(SUM(total) FILTER (WHERE kind = 'redirect' AND visit_class = 'bot'), 0) AS bot,
                 COALESCE(SUM(total) FILTER (WHERE kind = 'redirect' AND visit_class = 'unknown'), 0) AS unknown
@@ -513,6 +680,54 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn traffic_flags_only_links_far_above_their_recent_average() {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = crate::open_database(&directory.path().join("traffic.db"))
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO links (id, host, slug, target) VALUES
+                (1, 'go.example', 'spike', 'https://example.test/1'),
+                (2, 'go.example', 'steady', 'https://example.test/2'),
+                (3, 'go.example', 'quiet', 'https://example.test/3'),
+                (4, 'go.example', 'new', 'https://example.test/4'),
+                (5, 's.example', 'other', 'https://example.test/5'),
+                (6, 'go.example', 'old', 'https://example.test/6');
+             WITH RECURSIVE past(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM past WHERE n < 7)
+             INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, total)
+             SELECT unixepoch() / 86400 - n, 'go.example', 1, 'redirect', 'human', 10 FROM past
+             UNION ALL
+             SELECT unixepoch() / 86400 - n, 'go.example', 2, 'redirect', 'human', 60 FROM past;
+             INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, total) VALUES
+                (unixepoch() / 86400, 'go.example', 1, 'redirect', 'human', 150),
+                (unixepoch() / 86400, 'go.example', 2, 'redirect', 'human', 150),
+                (unixepoch() / 86400, 'go.example', 3, 'redirect', 'human', 99),
+                (unixepoch() / 86400, 'go.example', 4, 'redirect', 'bot', 100),
+                (unixepoch() / 86400, 's.example', 5, 'redirect', 'human', 500),
+                (unixepoch() / 86400 - 8, 'go.example', 6, 'redirect', 'human', 9000),
+                (unixepoch() / 86400, 'go.example', 6, 'redirect', 'human', 120),
+                (unixepoch() / 86400, 'go.example', 0, 'missing', 'unknown', 5000);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let all = read_traffic(&pool, None, true).await.unwrap();
+        let flagged: Vec<_> = all.items.iter().map(|item| item.slug.as_str()).collect();
+        assert_eq!(flagged, ["other", "spike", "old", "new"]);
+        assert_eq!(all.items[1].today, 150);
+        assert!((all.items[1].baseline_average - 10.0).abs() < f64::EPSILON);
+        assert!(!all.has_more);
+        let scoped = read_traffic(&pool, Some("s.example".into()), true)
+            .await
+            .unwrap();
+        assert_eq!(scoped.items.len(), 1);
+        assert_eq!(scoped.items[0].host, "s.example");
+        let body = serde_json::to_value(&scoped).unwrap();
+        assert!(body["items"][0].get("baseline").is_none());
+        assert_eq!(body["baseline_days"], 7);
+    }
+
+    #[tokio::test]
     async fn reports_compare_adjacent_utc_periods_and_fill_empty_days() {
         let directory = tempfile::tempdir().unwrap();
         let pool = crate::open_database(&directory.path().join("report.db"))
@@ -539,7 +754,10 @@ mod tests {
             days: Some(7),
             ..Period::default()
         };
-        let summary = read_summary(&pool, week(), 2).await.ok().unwrap();
+        let summary = read_summary(&pool, week(), ReportScope::instance(2))
+            .await
+            .ok()
+            .unwrap();
         assert_eq!(summary.totals.redirect, 6);
         assert_eq!(summary.totals.human, 5);
         assert_eq!(summary.totals.bot, 1);
@@ -550,7 +768,7 @@ mod tests {
         assert_eq!(summary.daily[0].redirect, 0);
         assert_eq!(summary.daily[6].redirect, 6);
         assert_eq!(summary.top_links[0].total, 6);
-        assert_eq!(summary.dropped, 2);
+        assert_eq!(summary.dropped, Some(2));
 
         let event: i64 = sqlx::query_scalar(
             "INSERT INTO analytics_events (occurred_at, link_id, host, kind, visit_class, source)
@@ -562,7 +780,10 @@ mod tests {
         .unwrap();
         assert!(delete_event_row(&pool, event).await.unwrap());
         assert!(!delete_event_row(&pool, event).await.unwrap());
-        let updated = read_summary(&pool, week(), 2).await.ok().unwrap();
+        let updated = read_summary(&pool, week(), ReportScope::instance(2))
+            .await
+            .ok()
+            .unwrap();
         assert_eq!(updated.totals.redirect, 5);
         assert_eq!(updated.totals.human, 4);
     }

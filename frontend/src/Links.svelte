@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { linkName, linkSorts, shortUrl } from './api';
   import type { Api, BulkLinkResult, CatalogLink, Domains, Link, LinkCursor, LinkMetadata, LinkOrganization, LinkProtectionChange, LinkSearch, LinkSearchPage, LinkSort, LinkView, Tag, TagMatch } from './api';
   import BulkLinks from './BulkLinks.svelte';
@@ -305,9 +305,33 @@
     formOpen = false;
   }
 
+  // Errors that belong to one field are shown next to it and move focus there.
+  const fieldErrors: Partial<Record<keyof Messages, string>> = {
+    invalidTarget: 'target', destinationNotAllowed: 'target', invalidTitle: 'title',
+    invalidDescription: 'description', invalidSlug: 'slug', slugInUse: 'slug', invalidTags: 'tags',
+  };
+  const errorField = $derived(formError ? fieldErrors[formError] ?? null : null);
+  let linkForm = $state<HTMLFormElement>();
+  let heading = $state<HTMLHeadingElement>();
+
+  function describedBy(field: string, hint?: string) {
+    return [hint, errorField === field ? 'link-form-error' : undefined].filter(Boolean).join(' ') || undefined;
+  }
+
+  async function focusError() {
+    await tick();
+    const field = errorField;
+    if (field) linkForm?.querySelector<HTMLElement>(`[name="${field}"]`)?.focus();
+  }
+
   async function save(event: SubmitEvent) {
     event.preventDefault();
     if (saving) return;
+    await submitLink();
+    if (formError) await focusError();
+  }
+
+  async function submitLink() {
     formError = null;
     const value = target.trim();
     try {
@@ -433,6 +457,9 @@
       refreshCatalog();
       removing = null;
       notice = 'linkDeleted';
+      // The deleted row's button no longer exists, so continue from the page heading.
+      await tick();
+      heading?.focus();
     } catch (error) {
       formError = problemMessage(error);
     } finally {
@@ -460,7 +487,7 @@
 </script>
 
 <div class="page-head">
-  <div><h1>{t.links}</h1><p>{t.linksDescription}</p></div>
+  <div><h1 tabindex="-1" bind:this={heading}>{t.links}</h1><p>{t.linksDescription}</p></div>
   <button class="button primary" type="button" disabled={bulkBusy} onclick={() => openForm()}><Icon name="plus" />{t.addLink}</button>
 </div>
 
@@ -551,7 +578,7 @@
     onrefresh={() => { selected = new Set(); refreshCatalog(); }} />
 
   {#if items.length}
-    <div class="table-wrap">
+    <div class="table-wrap cards">
       <!-- svelte-ignore a11y_no_redundant_roles (Mobile card layout overrides native table display.) -->
       <table class="links-table" role="table" aria-label={t.links}>
         <thead>
@@ -674,27 +701,30 @@
 {/if}
 
 <Dialog {t} title={editing ? t.editLink : duplicating ? t.duplicateLink : t.addLink} open={formOpen} busy={saving} onclose={closeForm}>
-  <form onsubmit={save} aria-busy={saving}>
+  <form onsubmit={save} aria-busy={saving} bind:this={linkForm}>
     <div class="dialog-body stack">
       {#if duplicating}<p class="notice">{t.duplicateHint}</p>{/if}
       {#if editing}<a class="mono link-short" href={shortUrl(editing, domains)} target="_blank" rel="noreferrer">{shortUrl(editing, domains)}</a>{/if}
       <label class="field">
         <span id="target-label">{t.target}</span>
-        <input name="target" type="url" required placeholder="https://example.com/" bind:value={target} disabled={saving} aria-labelledby="target-label" aria-describedby="target-hint" aria-invalid={formError === 'invalidTarget'} />
+        <input name="target" type="url" required placeholder="https://example.com/" bind:value={target} disabled={saving} aria-labelledby="target-label" aria-describedby={describedBy('target', 'target-hint')} aria-invalid={errorField === 'target'} />
         <small id="target-hint">{t.targetHint}</small>
       </label>
+      {@render fieldError('target')}
       {#if formOpen && !saving}
         <UrlCleaner {t} value={target} onapply={(value) => target = value} />
         <DuplicateLookup {t} {api} {domains} value={target} excludeId={editing?.id} />
       {/if}
       <label class="field">
-        <span>{t.title}</span><input name="title" bind:value={title} disabled={saving} aria-invalid={formError === 'invalidTitle'} />
+        <span>{t.title}</span><input name="title" bind:value={title} disabled={saving} aria-describedby={describedBy('title')} aria-invalid={errorField === 'title'} />
       </label>
+      {@render fieldError('title')}
       <label class="field">
         <span>{t.linkDescription}</span>
         <textarea name="description" rows="2" maxlength="1000" bind:value={description} disabled={saving}
-          aria-invalid={formError === 'invalidDescription'}></textarea>
+          aria-describedby={describedBy('description')} aria-invalid={errorField === 'description'}></textarea>
       </label>
+      {@render fieldError('description')}
       {#if !editing}
         <label class="field">
           <span>{t.domain}</span>
@@ -705,16 +735,18 @@
         {#if !duplicating}
           <label class="field">
             <span id="slug-label">{t.slug}</span>
-            <input name="slug" maxlength="200" autocapitalize="none" spellcheck="false" bind:value={slug} disabled={saving} aria-labelledby="slug-label" aria-describedby="slug-hint" aria-invalid={formError === 'invalidSlug' || formError === 'slugInUse'} />
+            <input name="slug" maxlength="200" autocapitalize="none" spellcheck="false" bind:value={slug} disabled={saving} aria-labelledby="slug-label" aria-describedby={describedBy('slug', 'slug-hint')} aria-invalid={errorField === 'slug'} />
             <small id="slug-hint">{t.slugHint}</small>
           </label>
+          {@render fieldError('slug')}
         {/if}
       {/if}
       <label class="field">
         <span id="tags-label">{t.tags}</span>
-        <input name="tags" bind:this={tagsInput} bind:value={tags} disabled={saving} aria-labelledby="tags-label" aria-describedby="tags-hint" aria-invalid={formError === 'invalidTags'} />
+        <input name="tags" bind:this={tagsInput} bind:value={tags} disabled={saving} aria-labelledby="tags-label" aria-describedby={describedBy('tags', 'tags-hint')} aria-invalid={errorField === 'tags'} />
         <small id="tags-hint">{t.tagsHint}</small>
       </label>
+      {@render fieldError('tags')}
       {#if tagSuggestions.length}
         <div class="tags" role="group" aria-label={t.tagSuggestions}>
           {#each tagSuggestions as item (item.name)}
@@ -732,7 +764,7 @@
             invalidPassword={formError === 'invalidPassword'} />
         </details>
       {/if}
-      {#if formError}<p class="notice error" role="alert">{t[formError]}</p>{/if}
+      {#if formError && !errorField}<p class="notice error" role="alert">{t[formError]}</p>{/if}
     </div>
     <footer class="dialog-foot row">
       <button class="button" type="button" disabled={saving} onclick={closeForm}>{t.cancel}</button>
@@ -756,6 +788,10 @@
     </form>
   {/if}
 </Dialog>
+
+{#snippet fieldError(field: string)}
+  {#if formError && errorField === field}<p id="link-form-error" class="notice error" role="alert">{t[formError]}</p>{/if}
+{/snippet}
 
 <style>
   .selection-toolbar {

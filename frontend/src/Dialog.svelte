@@ -15,7 +15,14 @@
   const headingId = $props.id();
 
   $effect(() => {
-    if (open && !dialog.open) dialog.showModal();
+    if (open && !dialog.open) {
+      dialog.showModal();
+      // Start with the first field, or with the first footer action of a confirmation.
+      const first = dialog.querySelector<HTMLElement>(
+        '.dialog-body :is(input:not([type="hidden"]), select, textarea):not([disabled])',
+      ) ?? dialog.querySelector<HTMLElement>('.dialog-foot button:not([disabled]), .dialog-body button:not([disabled])');
+      first?.focus();
+    }
     if (!open && dialog.open) dialog.close();
   });
 </script>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { ApiError, scopes } from './api';
   import type { Api, Domains, Key, Scope } from './api';
   import Dialog from './Dialog.svelte';
@@ -11,7 +11,7 @@
   const readTimeZone = useTimeZone();
 
   let { t, language, api, domains }: { t: Messages; language: Language; api: Api; domains: Domains } = $props();
-  const scopeLabels: Record<Scope, keyof Messages> = { read: 'read', write: 'write', delete: 'deleteScope' };
+  const scopeLabels: Record<Scope, keyof Messages> = { read: 'read', write: 'write', delete: 'deleteScope', analytics: 'analyticsScope' };
   let items = $state<Key[]>([]);
   let loading = $state(true);
   let loadError = $state<keyof Messages | null>(null);
@@ -30,6 +30,7 @@
   let token = $state('');
   let replacementToken = $state(false);
   let copyMessage = $state<'copiedToken' | 'copyFailed' | null>(null);
+  let heading = $state<HTMLHeadingElement>();
 
   onMount(() => { void load(); });
 
@@ -135,6 +136,8 @@
       items = items.filter((key) => key.id !== removing?.id);
       removing = null;
       notice = 'keyRevoked';
+      await tick();
+      heading?.focus();
     } catch (error) {
       formError = problemMessage(error);
     } finally {
@@ -158,7 +161,7 @@
 </script>
 
 <div class="page-head">
-  <div><h1>{t.apiKeys}</h1><p>{t.keysDescription}</p></div>
+  <div><h1 tabindex="-1" bind:this={heading}>{t.apiKeys}</h1><p>{t.keysDescription}</p></div>
   <button class="button primary" type="button" onclick={openForm} disabled={loading || !!loadError}><Icon name="plus" />{t.addKey}</button>
 </div>
 
@@ -166,7 +169,7 @@
 
 <section class="panel" aria-label={t.apiKeys} aria-busy={loading}>
   {#if items.length}
-    <div class="table-wrap">
+    <div class="table-wrap cards">
       <!-- svelte-ignore a11y_no_redundant_roles (Mobile card layout overrides native table display.) -->
       <table class="keys-table" role="table" aria-label={t.apiKeys}>
         <thead>
@@ -220,11 +223,12 @@
   <form onsubmit={create} aria-busy={saving}>
     <div class="dialog-body stack">
       <label class="field"><span>{t.keyName}</span><input name="name" required bind:value={name} disabled={saving} aria-invalid={formError === 'invalidKeyName'} /></label>
-      <fieldset class="permissions">
+      <fieldset class="permissions" aria-describedby={formError === 'invalidScopes' ? 'key-scopes-hint key-form-error' : 'key-scopes-hint'}>
         <legend>{t.scopes}</legend>
         {#each scopes as scope (scope)}
           <label><input type="checkbox" name="scopes" value={scope} bind:group={permissions} disabled={saving} />{scopeLabel(scope)}</label>
         {/each}
+        <small id="key-scopes-hint">{t.scopesHint}</small>
       </fieldset>
       <label class="field">
         <span>{t.domain}</span>
@@ -238,7 +242,7 @@
         <input type="datetime-local" name="expires_at" bind:value={expiration} disabled={saving} aria-labelledby="expiration-label" aria-describedby="expiration-hint" aria-invalid={formError === 'invalidExpiration'} />
         <small id="expiration-hint">{t.expirationHint}</small>
       </label>
-      {#if formError}<p class="notice error" role="alert">{t[formError]}</p>{/if}
+      {#if formError}<p class="notice error" id="key-form-error" role="alert">{t[formError]}</p>{/if}
     </div>
     <footer class="dialog-foot row">
       <button class="button" type="button" disabled={saving} onclick={() => adding = false}>{t.cancel}</button>

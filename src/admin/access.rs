@@ -140,6 +140,14 @@ pub(super) async fn admin_host(
                 && port.unwrap_or(state.config.default_port) == state.config.port
         });
     if !matches {
+        // Explain the most common installation mistake once per process.
+        static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::info!(
+                expected = %state.config.origin,
+                "a request used an address other than ADMIN_ORIGIN; open the configured address"
+            );
+        }
         return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
     }
     Ok(next.run(request).await)
@@ -220,13 +228,7 @@ pub(super) async fn link_access(
             (None, Actor::Admin(session.username))
         }
         (None, Some(value)) => {
-            let Some((scheme, token)) = value.split_once(' ') else {
-                return Err(Problem::unauthorized());
-            };
-            if !scheme.eq_ignore_ascii_case("bearer") {
-                return Err(Problem::unauthorized());
-            }
-            let key = state.auth.key(token).await?;
+            let key = bearer_key(&state, &value).await?;
             let scope = match *request.method() {
                 Method::GET | Method::HEAD => "read",
                 Method::POST | Method::PATCH => "write",
@@ -247,6 +249,55 @@ pub(super) async fn link_access(
     };
     request.extensions_mut().insert(LinkAccess { host, actor });
     Ok(next.run(request).await)
+}
+
+/// Read access to analytics reports for a browser session or a key with the analytics scope.
+#[derive(Clone)]
+pub(super) struct ReportAccess {
+    /// A key's host restriction. Browser sessions and unrestricted keys report on every host.
+    pub(super) host: Option<String>,
+}
+
+pub(super) async fn report_access(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Result<Response, Problem> {
+    if !matches!(*request.method(), Method::GET | Method::HEAD) {
+        return Err(Problem(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+        ));
+    }
+    let cookie = session_token(request.headers(), &state.config)?;
+    let bearer =
+        single_header(request.headers(), header::AUTHORIZATION.as_str())?.map(str::to_owned);
+    let access = match (cookie, bearer) {
+        (Some(token), None) => {
+            state.auth.session(&token).await?;
+            ReportAccess { host: None }
+        }
+        (None, Some(value)) => {
+            let key = bearer_key(&state, &value).await?;
+            if !key.allows("analytics") {
+                return Err(Problem(StatusCode::FORBIDDEN, "insufficient_scope"));
+            }
+            ReportAccess { host: key.host }
+        }
+        _ => return Err(Problem::unauthorized()),
+    };
+    request.extensions_mut().insert(access);
+    Ok(next.run(request).await)
+}
+
+async fn bearer_key(state: &AppState, value: &str) -> Result<crate::auth::KeyAccess, Problem> {
+    let Some((scheme, token)) = value.split_once(' ') else {
+        return Err(Problem::unauthorized());
+    };
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return Err(Problem::unauthorized());
+    }
+    Ok(state.auth.key(token).await?)
 }
 
 fn require_origin(headers: &HeaderMap, config: &AdminConfig) -> Result<(), Problem> {

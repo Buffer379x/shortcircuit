@@ -15,7 +15,7 @@ use sqlx::SqlitePool;
 
 use crate::{
     auth::{Auth, AuthError},
-    domains,
+    destinations, domains,
     history::{self, LinkHistory, RestoreError},
     input::{link_tags, link_title, normalize_host, plain_description, valid_slug, valid_target},
     protection::{self, PasswordChange, ProtectionDetails, ProtectionDraft, ProtectionError},
@@ -163,6 +163,7 @@ async fn create_link(
     if input.slug.as_deref().is_some_and(|slug| !valid_slug(slug)) {
         return Err(Problem::invalid("invalid_slug"));
     }
+    require_permitted(&state.pool, [input.target.as_str()], &[]).await?;
     let mut draft = LinkDraft {
         host,
         slug: String::new(),
@@ -210,6 +211,18 @@ async fn link_password_hash(auth: &Auth, password: &str) -> Result<String, Probl
             AuthError::Invalid => Problem::invalid("invalid_link_password"),
             other => other.into(),
         })
+}
+
+/// Rejects destinations that the enabled destination policy does not permit.
+pub(super) async fn require_permitted<'a>(
+    pool: &SqlitePool,
+    targets: impl IntoIterator<Item = &'a str>,
+    unchanged: &[&str],
+) -> Result<(), Problem> {
+    destinations::check_writes(pool, targets, unchanged)
+        .await
+        .map_err(|_| Problem::unavailable())?
+        .map_err(|_| Problem::invalid("destination_not_allowed"))
 }
 
 fn forbidden() -> Problem {
@@ -318,6 +331,24 @@ async fn update_link(
     {
         return Err(Problem::invalid("invalid_target"));
     }
+    let id = resource_id(id)?;
+    if let Some(target) = input.target.as_deref() {
+        // Read within the caller's host scope, so a host-bound key learns nothing about
+        // links on other hosts. An invisible link is reported as not found.
+        let hosts = access.allowed_hosts(&state, false).await?;
+        let mut query =
+            sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT target FROM links WHERE id = ");
+        query.push_bind(id);
+        store::push_host_scope(&mut query, &hosts);
+        let current: String = query
+            .build_query_scalar()
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|_| Problem::unavailable())?
+            .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
+        let unchanged = [current.as_str()];
+        require_permitted(&state.pool, [target], &unchanged).await?;
+    }
     let update = LinkUpdate {
         target: input.target,
         title: input.title.map(title).transpose()?,
@@ -326,7 +357,6 @@ async fn update_link(
         analytics_enabled: input.analytics_enabled,
         tags: input.tags.map(tags).transpose()?,
     };
-    let id = resource_id(id)?;
     store::update_link(
         &state.pool,
         &access.allowed_hosts(&state, false).await?,

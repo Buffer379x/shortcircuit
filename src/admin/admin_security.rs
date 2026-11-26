@@ -32,6 +32,7 @@ pub(crate) enum AuditAction {
     RestoreCancel,
     RestoreApply,
     MonitoringUpdate,
+    DestinationPolicyUpdate,
 }
 
 impl AuditAction {
@@ -54,6 +55,7 @@ impl AuditAction {
             Self::RestoreCancel => "restore_cancel",
             Self::RestoreApply => "restore_apply",
             Self::MonitoringUpdate => "monitoring_update",
+            Self::DestinationPolicyUpdate => "destination_policy_update",
         }
     }
 }

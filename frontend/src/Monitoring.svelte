@@ -5,6 +5,7 @@
   import { ApiError } from './api';
   import { problemMessage } from './format';
   import type { Language, Messages } from './i18n';
+  import TitleLookups from './TitleLookups.svelte';
 
   type CheckStatus = 'not_checked' | 'healthy' | 'redirected' | 'warning' | 'unreachable' | 'broken' | 'unknown';
   type Failure = 'blocked' | 'busy' | 'dns' | 'timeout' | 'connection' | 'protocol';
@@ -190,6 +191,7 @@
     </section>
   {/if}
 {/if}
+<TitleLookups {api} {t} {language} />
 
 <style>
   section { margin-top: var(--space-4, 16px); }

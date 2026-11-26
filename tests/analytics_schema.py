@@ -191,6 +191,71 @@ class AnalyticsSchemaTests(unittest.TestCase):
                     self.db.execute(f"INSERT INTO {table} ({columns}, {field}) VALUES ({row}, ?)",
                                     (value,))
 
+    def upgrade_to_root_categories(self):
+        for number in range(16, 21):
+            (migration,) = MIGRATIONS.glob(f"{number:04d}_*.sql")
+            self.db.executescript(migration.read_text())
+
+    def test_root_categories_upgrade_keeps_existing_outcomes(self):
+        self.record(7, "go.example", TODAY, increment=4)
+        self.record(None, "s.example", TODAY, kind="missing")
+        self.record(None, "s.example", TODAY, kind="blocked")
+        before = self.db.execute(
+            "SELECT kind, SUM(total) FROM analytics_daily GROUP BY kind ORDER BY kind"
+        ).fetchall()
+        self.upgrade_to_root_categories()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT kind, SUM(total) FROM analytics_daily GROUP BY kind ORDER BY kind"
+            ).fetchall(),
+            before,
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT COUNT(*) FROM analytics_daily WHERE kind LIKE 'root_%'"
+            ).fetchone(),
+            (0,),
+        )
+        for kind in ("root_fallback", "root_missing"):
+            self.db.execute(
+                "INSERT INTO analytics_events (occurred_at, host, kind, visit_class, source) "
+                "VALUES (?, 'go.example', ?, 'unknown', 'unknown')",
+                (TODAY * SECONDS_PER_DAY, kind),
+            )
+            self.db.execute(
+                "INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, total) "
+                "VALUES (?, 'go.example', 0, ?, 'unknown', 1)",
+                (TODAY, kind),
+            )
+            with self.subTest(kind=kind), self.assertRaises(sqlite3.IntegrityError):
+                self.db.execute(
+                    "INSERT INTO analytics_events (occurred_at, link_id, host, kind, visit_class, source) "
+                    "VALUES (?, 7, 'go.example', ?, 'unknown', 'unknown')",
+                    (TODAY * SECONDS_PER_DAY, kind),
+                )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute(
+                "INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, total) "
+                "VALUES (?, 'go.example', 0, 'root', 'unknown', 1)",
+                (TODAY,),
+            )
+        self.db.execute("DELETE FROM links WHERE id = 7")
+        self.assertEqual(
+            self.db.execute("SELECT COUNT(*) FROM analytics_daily WHERE link_id = 7").fetchone(),
+            (0,),
+        )
+        self.assertEqual(self.db.execute("PRAGMA foreign_key_check").fetchall(), [])
+        for index in ("analytics_events_by_time", "analytics_events_by_host",
+                      "analytics_events_by_link", "analytics_daily_by_host", "analytics_daily_by_link"):
+            with self.subTest(index=index):
+                self.assertEqual(
+                    self.db.execute(
+                        "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'index' AND name = ?",
+                        (index,),
+                    ).fetchone(),
+                    (1,),
+                )
+
 
     def test_retention_and_filtered_aggregates_use_range_indexes(self):
         queries = [

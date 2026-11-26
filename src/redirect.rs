@@ -3,6 +3,7 @@ use sqlx::{Executor, QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
 use url::form_urlencoded;
 
 use crate::{
+    destinations::{self, Guard},
     history::{self, Action, Actor, Snapshot},
     input::{valid_slug, valid_target},
     store::push_host_scope,
@@ -198,6 +199,7 @@ struct SelectedLink {
     one_time: bool,
     consumed: bool,
     protection_revision: Option<i64>,
+    policy_generation: i64,
     #[sqlx(flatten)]
     policy: StoredPolicy,
 }
@@ -309,6 +311,22 @@ pub(crate) async fn replace_policy_in(
         return Ok(None);
     };
     policy.noindex = policy.noindex.or(previous.policy.noindex);
+    let saved: Vec<&str> = previous
+        .policy
+        .rules
+        .iter()
+        .map(|rule| rule.target.as_str())
+        .collect();
+    if destinations::check_writes(
+        &mut *connection,
+        policy.rules.iter().map(|rule| rule.target.as_str()),
+        &saved,
+    )
+    .await?
+    .is_err()
+    {
+        return Err(PolicyError::Invalid("destination_not_allowed"));
+    }
     if matches!(policy.status, 301 | 308) {
         let protected = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM link_protection WHERE link_id = ?
@@ -428,7 +446,8 @@ fn select_link(request: RedirectRequest<'_>) -> QueryBuilder<Sqlite> {
         "SELECT links.id, links.slug, links.target, links.enabled, links.analytics_enabled, unixepoch() AS now,
          protection.password_hash IS NOT NULL AS password_required,
          COALESCE(protection.one_time, 0) AS one_time, COALESCE(protection.consumed, 0) AS consumed,
-         protection.revision AS protection_revision, ",
+         protection.revision AS protection_revision,
+         (SELECT generation FROM destination_policy WHERE id = 1) AS policy_generation, ",
     );
     query
         .push(POLICY_COLUMNS)
@@ -458,7 +477,7 @@ pub(crate) async fn resolve(
     pool: &SqlitePool,
     request: RedirectRequest<'_>,
 ) -> Result<Outcome, sqlx::Error> {
-    resolve_with_subject(pool, request)
+    resolve_with_subject(pool, request, &Guard::default())
         .await
         .map(|result| result.outcome)
 }
@@ -466,6 +485,7 @@ pub(crate) async fn resolve(
 pub(crate) async fn resolve_with_subject(
     pool: &SqlitePool,
     request: RedirectRequest<'_>,
+    guard: &Guard,
 ) -> Result<Resolution, sqlx::Error> {
     let missing = Resolution {
         outcome: Outcome::Missing,
@@ -481,13 +501,18 @@ pub(crate) async fn resolve_with_subject(
     if link.blocked() {
         return Ok(link.resolution(Outcome::Blocked));
     }
+    // Evaluate the destination policy on the selected destination before a challenge or
+    // reservation, so a refused redirect never consumes a visit or one-time access.
+    let outcome = link.redirect(request)?;
+    let policy = guard.current(pool, link.policy_generation).await?;
+    if !outcome_permitted(&policy, &outcome) {
+        return Ok(link.resolution(Outcome::Blocked));
+    }
     if let Some(challenge) = link.challenge() {
         return Ok(link.resolution(Outcome::Challenge(challenge)));
     }
     if request.head || link.policy.max_visits.is_none() {
-        return link
-            .redirect(request)
-            .map(|outcome| link.resolution(outcome));
+        return Ok(link.resolution(outcome));
     }
 
     // The winner and its policy may have changed while acquiring the write lock.
@@ -500,10 +525,15 @@ pub(crate) async fn resolve_with_subject(
         None => missing,
         Some(link) if link.blocked() => link.resolution(Outcome::Blocked),
         Some(link) => {
-            if let Some(challenge) = link.challenge() {
+            let outcome = link.redirect(request)?;
+            let policy = guard
+                .current(&mut *transaction, link.policy_generation)
+                .await?;
+            if !outcome_permitted(&policy, &outcome) {
+                link.resolution(Outcome::Blocked)
+            } else if let Some(challenge) = link.challenge() {
                 link.resolution(Outcome::Challenge(challenge))
             } else {
-                let outcome = link.redirect(request)?;
                 consume_limit(&mut transaction, &link).await?;
                 link.resolution(outcome)
             }
@@ -513,11 +543,19 @@ pub(crate) async fn resolve_with_subject(
     Ok(outcome)
 }
 
+fn outcome_permitted(policy: &destinations::Compiled, outcome: &Outcome) -> bool {
+    match outcome {
+        Outcome::Redirect { target, .. } => policy.permits(target),
+        _ => true,
+    }
+}
+
 pub(crate) async fn confirm(
     pool: &SqlitePool,
     request: RedirectRequest<'_>,
     challenge: Challenge,
     origin: &str,
+    guard: &Guard,
 ) -> Result<Resolution, sqlx::Error> {
     let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
     let domain_changed = sqlx::query_scalar::<_, bool>(
@@ -545,6 +583,15 @@ pub(crate) async fn confirm(
     let Outcome::Redirect { target, .. } = link.redirect(request)? else {
         unreachable!("an eligible link produces a redirect");
     };
+    // A refused destination leaves the one-time state and the visit allowance untouched.
+    if !guard
+        .current(&mut *transaction, link.policy_generation)
+        .await?
+        .permits(&target)
+    {
+        transaction.commit().await?;
+        return Ok(link.resolution(Outcome::Blocked));
+    }
     if axum::http::HeaderValue::from_str(&target).is_err() {
         return Err(sqlx::Error::Protocol(
             "invalid protected link destination".into(),
@@ -614,6 +661,8 @@ pub(crate) struct SimulationResult {
     target: String,
     status: u16,
     rule: Option<usize>,
+    /// Whether the current destination policy permits the selected destination.
+    permitted: bool,
 }
 
 pub(crate) async fn simulate(
@@ -672,10 +721,12 @@ pub(crate) async fn simulate(
     let rule = matched_rule(&input.policy.rules, request);
     let target = rule.map_or(fallback.as_str(), |(_, rule)| rule.target.as_str());
     let location = forward(target, suffix, query.filter(|_| input.policy.forward_query));
+    let permitted = destinations::load(pool).await?.permits(&location);
     Ok(Some(SimulationResult {
         target: location,
         status: input.policy.status,
         rule: rule.map(|(index, _)| index + 1),
+        permitted,
     }))
 }
 
@@ -911,6 +962,8 @@ mod tests {
             include_str!("../migrations/0006_analytics.sql"),
             include_str!("../migrations/0007_link_protection.sql"),
             include_str!("../migrations/0015_crawler_controls.sql"),
+            include_str!("../migrations/0017_admin_audit.sql"),
+            include_str!("../migrations/0021_destination_policy.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -1075,6 +1128,90 @@ mod tests {
                 status: 308,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn a_refused_protected_destination_keeps_its_one_time_access_and_allowance() {
+        let (_directory, pool) = database().await;
+        let id = insert(&pool, "once", true).await;
+        for statement in [
+            "INSERT INTO link_protection (link_id, one_time) VALUES (?, 1)",
+            "INSERT INTO link_redirect_policies
+                (link_id, status, max_visits, forward_query, forward_path, rules)
+             VALUES (?, 302, 5, 0, 0, '[]')",
+        ] {
+            sqlx::query(statement)
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let guard = Guard::default();
+        let request = request("once");
+        let Outcome::Challenge(challenge) = resolve_with_subject(&pool, request, &guard)
+            .await
+            .unwrap()
+            .outcome
+        else {
+            panic!("expected a confirmation challenge");
+        };
+        let set_policy = |enabled: bool| {
+            let pool = pool.clone();
+            async move {
+                let mut transaction = pool.begin().await.unwrap();
+                destinations::replace(
+                    &mut transaction,
+                    &destinations::Policy {
+                        enabled,
+                        rules: vec![destinations::Rule {
+                            host: "allowed.example".into(),
+                            subdomains: false,
+                            action: destinations::RuleAction::Allow,
+                        }],
+                    },
+                )
+                .await
+                .unwrap();
+                transaction.commit().await.unwrap();
+            }
+        };
+        set_policy(true).await;
+        // The challenge is no longer offered and a pending confirmation is refused.
+        assert_eq!(
+            resolve_with_subject(&pool, request, &guard)
+                .await
+                .unwrap()
+                .outcome,
+            Outcome::Blocked
+        );
+        assert_eq!(
+            confirm(&pool, request, challenge, "https://go.example", &guard)
+                .await
+                .unwrap()
+                .outcome,
+            Outcome::Blocked
+        );
+        let state = || async {
+            sqlx::query_as::<_, (bool, i64)>(
+                "SELECT consumed, visits_used FROM link_protection
+                 JOIN link_redirect_policies USING (link_id) WHERE link_id = ?",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+        assert_eq!(state().await, (false, 0));
+
+        set_policy(false).await;
+        assert!(matches!(
+            confirm(&pool, request, challenge, "https://go.example", &guard)
+                .await
+                .unwrap()
+                .outcome,
+            Outcome::Redirect { status: 303, .. }
+        ));
+        assert_eq!(state().await, (true, 1));
     }
 
     #[tokio::test]
