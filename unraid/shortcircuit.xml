@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Container version="2">
   <Name>shortcircuit</Name>
-  <Repository>shortcircuit:0.6.0</Repository>
+  <Repository>ghcr.io/buffer379x/shortcircuit:0.6.0-preview.1</Repository>
+  <Registry>https://github.com/users/Buffer379x/packages/container/package/shortcircuit</Registry>
   <Network>bridge</Network>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
@@ -9,13 +10,12 @@
   <Project>https://github.com/Buffer379x/shortcircuit</Project>
   <TemplateURL>https://raw.githubusercontent.com/Buffer379x/shortcircuit/main/unraid/shortcircuit.xml</TemplateURL>
   <ReadMe>https://raw.githubusercontent.com/Buffer379x/shortcircuit/main/docs/UNRAID_INSTALLATION.md</ReadMe>
-  <Overview>Self-hosted URL shortener and link management. Build the local image before installing this template. Use an SSH tunnel for the default loopback ports or configure a private reverse proxy.</Overview>
+  <Overview>Self-hosted URL shortener and link management. Docker Manager downloads the versioned preview image. Use an SSH tunnel for the default loopback ports or configure a private reverse proxy.</Overview>
   <Category>Network:Web</Category>
   <WebUI>http://localhost:8081</WebUI>
   <Icon>https://raw.githubusercontent.com/Buffer379x/shortcircuit/main/assets/branding/unraid-docker.png</Icon>
   <License>MIT</License>
-  <ExtraParams>--read-only --cap-drop=ALL --security-opt=no-new-privileges=true --restart=unless-stopped --stop-timeout=25 --publish=127.0.0.1:8080:8080/tcp --publish=127.0.0.1:8081:8081/tcp</ExtraParams>
-  <Config Name="Appdata" Target="/data" Default="/mnt/cache/appdata/shortcircuit" Mode="rw" Description="Persistent data on a local pool. Use the direct path for your pool and grant UID and GID 10001 write access." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/shortcircuit</Config>
+  <ExtraParams>--read-only --cap-drop=ALL --security-opt=no-new-privileges=true --restart=unless-stopped --stop-timeout=25 --publish=127.0.0.1:8080:8080/tcp --publish=127.0.0.1:8081:8081/tcp --volume=shortcircuit-data:/data</ExtraParams>
   <Config Name="Public hosts" Target="PUBLIC_HOSTS" Default="localhost,127.0.0.1,[::1]" Mode="" Description="Comma-separated hostnames for public redirects on port 8080." Type="Variable" Display="always" Required="true" Mask="false">localhost,127.0.0.1,[::1]</Config>
   <Config Name="Admin origin" Target="ADMIN_ORIGIN" Default="http://localhost:8081" Mode="" Description="Browser origin for the admin listener on port 8081. Set the exact HTTPS origin when using a reverse proxy." Type="Variable" Display="always" Required="true" Mask="false">http://localhost:8081</Config>
   <Config Name="Log level" Target="LOG_LEVEL" Default="info" Mode="" Description="Application logging level." Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>

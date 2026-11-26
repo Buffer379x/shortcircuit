@@ -1,6 +1,6 @@
 # Project status
 
-**November 25, 2026 · 0.6.0 in development.** Architecture and design are approved for implementation. Existing links are recreated manually.
+**November 26, 2026 · 0.6.0 in development.** Architecture and design are approved for implementation. Existing links are recreated manually.
 
 | Area | Status |
 |---|---|
@@ -15,10 +15,10 @@
 | Authentication | A CLI-issued account claim, Argon2id passwords, revocable sessions, account recovery, CSRF protection, and scoped API keys. |
 | Database verification | The schema tests cover compatibility, the redirect index, and exact stored destinations. The authentication and lifecycle migrations have additional transactional regression tests. |
 | Build and container verification | GitHub Actions checks the Rust integration tests, Clippy, Rustfmt, frontend types and assets, and a non-root container with a Chromium smoke test. [CI results](https://github.com/Buffer379x/shortcircuit/actions) |
-| GitHub | [The repository](https://github.com/Buffer379x/shortcircuit) exists. The owner approved public source development in this repository. The owner set the MIT license in the initial commit. Release artifacts still require approval. |
+| GitHub | The owner approved public source development and the first container preview. The repository uses MIT. [Repository](https://github.com/Buffer379x/shortcircuit) · [Preview](https://github.com/Buffer379x/shortcircuit/releases/tag/v0.6.0-preview.1) |
 | UI and branding | The embedded Svelte admin interface includes account setup, authentication, links, and API keys with English and German UI text and dark, light, or system appearance. The separate design preview covers additional planned screens. |
 | Browser verification | CI exercises the integrated administration workflow in Chromium. The [capture instructions](../README.md) cover the separate design preview. |
-| Unraid | A Docker Manager template uses the locally built image, loopback port bindings, and the existing PNG container icon. Testing in Unraid Docker Manager is pending. |
+| Unraid | Docker Manager uses a versioned amd64 preview image, a Docker-managed data volume, loopback port bindings, and the PNG container icon. Testing in Unraid Docker Manager is pending. [Installation](UNRAID_INSTALLATION.md) |
 | Performance and release | The benchmark method and resource estimates are documented. Production measurements and operating approval are pending. |
 
 [Core implementation plan](superpowers/plans/2026-11-25-core-foundation.md) · [Roadmap](ROADMAP.md) · [Decisions](DECISIONS.md)

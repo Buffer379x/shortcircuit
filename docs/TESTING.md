@@ -1,6 +1,6 @@
 # Test and Release Strategy
 
-The 0.1 foundation has five passing schema tests under `python3 tests/schema.py`. Rust checks and Docker smoke tests remain unverified. The design preview has its own verification status. See [Project Status](PROJECT_STATUS.md).
+GitHub Actions runs the core test suite on pull requests and on `main`. The design preview has its own verification status. See [Project Status](PROJECT_STATUS.md).
 
 | When | Checks | Evidence |
 |---|---|---|
@@ -25,5 +25,7 @@ Test core workflows in Dark, Light, and System themes, in English and German, at
 The release review report records severity from P0 through P4, component, impact, evidence and reproduction steps, resolution, effort, and benefit. Track required 1.0 features and any deviations by version in the test report. Unresolved critical or high risks, an unverified planned traffic switch, or an untested restore block release. Stable version tags and `latest` follow approval.
 
 ## CI and Versioning
+
+After core checks succeed for a push to `main`, the container preview workflow checks that the Unraid template references the approved preview tag. For a new release, it builds the amd64 image from that commit, runs the template defaults in Docker, pushes the image to GHCR, and publishes a GitHub prerelease with the XML and image digest. It then checks that a clean runner can pull the tagged image anonymously and verifies its digest. The package owner must set visibility to Public on the first GHCR publication. Rerun the anonymous pull job after changing visibility. [GitHub package visibility](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility#configuring-visibility-of-packages-for-your-personal-account)
 
 The Git workflow checks changes before they merge into the main branch. Key CI caches by toolchain, architecture, and lockfile. Release CI builds amd64 images reproducibly with a pinned toolchain and base image, then adds OCI labels, an SBOM, a vulnerability scan, and verifiable digests. Review dependency updates as individual changes. Tag release candidate images with a SemVer prerelease tag. Apply stable tags and `latest` only after stable release authorization. Document the schema version, pre-upgrade backup, and supported rollback path. Add arm64 when the target system requires it and dedicated release checks pass.

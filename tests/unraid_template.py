@@ -1,3 +1,4 @@
+import re
 import shlex
 import struct
 import unittest
@@ -14,14 +15,17 @@ class UnraidTemplate(unittest.TestCase):
         self.assertTrue(TEMPLATE.is_file(), "the Unraid XML template must be included")
         return ElementTree.parse(TEMPLATE).getroot()
 
-    def test_local_image_and_loopback_listeners(self):
+    def test_published_image_and_loopback_listeners(self):
         template = self.template()
         self.assertEqual(template.tag, "Container")
         self.assertEqual(template.get("version"), "2")
         self.assertEqual(template.findtext("Network"), "bridge")
         self.assertEqual(template.findtext("Privileged"), "false")
         version = (ROOT / "Dockerfile").read_text().split('org.opencontainers.image.version="')[1].split('"')[0]
-        self.assertEqual(template.findtext("Repository"), f"shortcircuit:{version}")
+        self.assertRegex(
+            template.findtext("Repository"),
+            rf"^ghcr\.io/buffer379x/shortcircuit:{re.escape(version)}-preview\.[1-9][0-9]*$",
+        )
 
         params = shlex.split(template.findtext("ExtraParams"))
         self.assertEqual(
@@ -33,7 +37,8 @@ class UnraidTemplate(unittest.TestCase):
         self.assertIn("--cap-drop=ALL", params)
         self.assertIn("--security-opt=no-new-privileges=true", params)
         self.assertEqual(template.findtext("WebUI"), template.findtext("./Config[@Target='ADMIN_ORIGIN']"))
-        self.assertEqual(template.findtext("./Config[@Type='Path'][@Target='/data']"), "/mnt/cache/appdata/shortcircuit")
+        self.assertIn("--volume=shortcircuit-data:/data", params)
+        self.assertIsNone(template.find("./Config[@Target='/data']"))
 
     def test_template_references_the_branding_image(self):
         template = self.template()

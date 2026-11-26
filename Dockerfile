@@ -4,6 +4,9 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
+RUN mkdir -p /notices/npm && cd node_modules && \
+    find . -type f \( -iname 'license*' -o -iname 'copying*' -o -iname 'notice*' -o -iname 'copyright*' \) \
+    -exec cp --parents --target-directory=/notices/npm {} +
 
 FROM rust:1.100.0-bookworm AS build
 WORKDIR /build
@@ -14,13 +17,21 @@ COPY docs/openapi.json ./docs/openapi.json
 COPY assets/branding/favicon.svg assets/branding/favicon.png ./assets/branding/
 COPY --from=frontend /web/dist ./frontend/dist
 RUN cargo build --locked --release
+RUN mkdir -p /notices/rust && cd /usr/local/cargo/registry/src && \
+    find . -type f \( -iname 'license*' -o -iname 'copying*' -o -iname 'notice*' -o -iname 'copyright*' \) \
+    -exec cp --parents --target-directory=/notices/rust {} +
 
 FROM debian:bookworm-slim AS runtime
 LABEL org.opencontainers.image.title="ShortCircuit" \
       org.opencontainers.image.description="Self-hosted URL shortener and link management" \
+      org.opencontainers.image.source="https://github.com/Buffer379x/shortcircuit" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="0.6.0"
 RUN install -d -m 0700 -o 10001 -g 10001 /data
 COPY --from=build /build/target/release/shortcircuit /usr/local/bin/shortcircuit
+COPY LICENSE /usr/share/doc/shortcircuit/LICENSE
+COPY --from=build /notices/rust /usr/share/doc/shortcircuit/licenses/rust
+COPY --from=frontend /notices/npm /usr/share/doc/shortcircuit/licenses/npm
 ENV DATA_DIR=/data \
     PUBLIC_BIND=0.0.0.0:8080 \
     ADMIN_BIND=0.0.0.0:8081 \

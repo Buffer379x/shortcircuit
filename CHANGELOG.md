@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.6.0-preview.1
+
+- Add an Unraid Docker Manager template that pulls the versioned preview image from GitHub Container Registry and initializes a persistent Docker volume.
 
 - Document the implemented management endpoints in OpenAPI 3.1 and serve the specification on the admin listener.
 

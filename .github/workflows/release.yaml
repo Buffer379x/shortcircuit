@@ -1,0 +1,130 @@
+name: Container preview
+
+on:
+  workflow_run:
+    workflows: [Core checks]
+    branches: [main]
+    types: [completed]
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: shortcircuit-container-preview
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: write
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+      VERSION: 0.6.0-preview.1
+    outputs:
+      image: ${{ steps.publish.outputs.image }}
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          persist-credentials: false
+      - name: Select the preview version from the template
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image=$(python3 -c 'from xml.etree import ElementTree; print(ElementTree.parse("unraid/shortcircuit.xml").findtext("Repository"))')
+          if [[ "$image" != "ghcr.io/buffer379x/shortcircuit:$VERSION" ]]; then
+            echo "The Unraid template does not match the approved preview image." >&2
+            exit 1
+          fi
+          if gh api --silent "repos/$GITHUB_REPOSITORY/releases/tags/v$VERSION" 2> "$RUNNER_TEMP/release-check"; then
+            echo "v$VERSION has already been released."
+            exit 0
+          fi
+          if ! grep -Fq '(HTTP 404)' "$RUNNER_TEMP/release-check"; then
+            cat "$RUNNER_TEMP/release-check" >&2
+            exit 1
+          fi
+          printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
+      - name: Build the amd64 image and start it with the Unraid template defaults
+        if: steps.version.outputs.image != ''
+        env:
+          IMAGE: ${{ steps.version.outputs.image }}
+        run: |
+          docker build --platform linux/amd64 --tag "$IMAGE" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.revision=$RELEASE_SHA" .
+          args=$(python3 -c '
+          import shlex
+          from xml.etree import ElementTree
+          template = ElementTree.parse("unraid/shortcircuit.xml")
+          for arg in shlex.split(template.findtext("ExtraParams")):
+              print(arg)
+          for config in template.findall("./Config[@Type=\"Variable\"]"):
+              print("--env={}={}".format(config.attrib["Target"], config.text))
+          ')
+          mapfile -t template_args <<< "$args"
+          trap 'docker rm -f shortcircuit-template >/dev/null; docker volume rm shortcircuit-data >/dev/null' EXIT
+          docker run --detach --name shortcircuit-template --pull=never --network bridge "${template_args[@]}" "$IMAGE"
+          curl --retry 30 --retry-connrefused --retry-delay 1 --max-time 5 --fail --silent --show-error http://127.0.0.1:8081/readyz
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/readyz)" = "404"
+          test "$(docker inspect --format '{{.Config.User}}' shortcircuit-template)" = '10001:10001'
+          docker exec shortcircuit-template test -f /data/shortcircuit.db
+          docker exec shortcircuit-template test -s /usr/share/doc/shortcircuit/LICENSE
+          docker exec shortcircuit-template shortcircuit setup-token >/dev/null
+          curl --fail --silent --show-error http://localhost:8081/favicon.png --output "$RUNNER_TEMP/favicon.png"
+          cmp "$RUNNER_TEMP/favicon.png" assets/branding/favicon.png
+      - name: Upload the image and create a GitHub prerelease
+        if: steps.version.outputs.image != ''
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.version.outputs.image }}
+        run: |
+          export DOCKER_CONFIG
+          DOCKER_CONFIG=$(mktemp -d)
+          trap 'docker logout ghcr.io >/dev/null' EXIT
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker push "$IMAGE" | tee "$RUNNER_TEMP/image-push.log"
+          registry=${IMAGE%:*}
+          digest=$(sed -nE 's/^.*: digest: (sha256:[0-9a-f]{64}) size: [0-9]+$/\1/p' "$RUNNER_TEMP/image-push.log")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          notes="$RUNNER_TEMP/release-notes.md"
+          {
+            printf 'Development preview for Unraid Docker Manager on linux/amd64.\n\n'
+            printf -- '- Image `%s`\n- Digest `%s@%s`\n' "$IMAGE" "$registry" "$digest"
+            printf '\n[Installation and first sign-in](https://github.com/%s/blob/v%s/docs/UNRAID_INSTALLATION.md)\n' "$GITHUB_REPOSITORY" "$VERSION"
+          } > "$notes"
+          cp unraid/shortcircuit.xml "$RUNNER_TEMP/my-shortcircuit.xml"
+          gh release create "v$VERSION" "$RUNNER_TEMP/my-shortcircuit.xml" \
+            --target "$RELEASE_SHA" --prerelease --latest=false \
+            --title "ShortCircuit $VERSION" --notes-file "$notes"
+          printf 'image=%s\ndigest=%s\n' "$IMAGE" "$digest" >> "$GITHUB_OUTPUT"
+
+  public-pull:
+    needs: publish
+    if: needs.publish.outputs.image != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      IMAGE: ${{ needs.publish.outputs.image }}
+      DIGEST: ${{ needs.publish.outputs.digest }}
+    steps:
+      - name: Verify the published image without credentials
+        run: |
+          export DOCKER_CONFIG
+          DOCKER_CONFIG=$(mktemp -d)
+          docker pull --platform linux/amd64 "$IMAGE"
+          docker image inspect "$IMAGE" --format '{{range .RepoDigests}}{{println .}}{{end}}' |
+            grep -Fx "${IMAGE%:*}@$DIGEST"

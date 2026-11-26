@@ -1,67 +1,33 @@
 # Unraid installation
 
-ShortCircuit runs as one container. The image uses UID and GID 10001, public port 8080, and admin port 8081. The Docker Manager template uses the locally built image. [Template XML](../unraid/shortcircuit.xml) · [Docker icon](../assets/branding/unraid-docker.png) · [SVG favicon](../assets/branding/favicon.svg) · [PNG favicon](../assets/branding/favicon.png)
-
-## Prepare storage and networking
-
-Select a local pool for SQLite. Use a direct path such as `/mnt/cache/appdata/shortcircuit` if the pool is named `cache`. A verified exclusive share can resolve directly to the same pool. Keep the database and its WAL on that filesystem and exclude the directory from Mover. Grant write access to the runtime UID and GID. [Unraid shares](https://docs.unraid.net/unraid-os/using-unraid-to/manage-storage/shares/) · [SQLite WAL](https://www.sqlite.org/wal.html)
-
-Connect ShortCircuit and Nginx Proxy Manager to a shared user-defined Docker bridge. Restrict the admin hostname to the LAN or VPN. The example assumes an existing bridge named `shortcircuit-proxy`. On a custom VLAN, verify the firewall rules for IPv4 and IPv6. [Unraid container networking](https://docs.unraid.net/unraid-os/using-unraid-to/run-docker-containers/managing-and-customizing-containers/) · [Reverse proxy configuration](REVERSE_PROXY.md)
+ShortCircuit runs in one container on `linux/amd64`. Docker Manager pulls `ghcr.io/buffer379x/shortcircuit:0.6.0-preview.1` and creates a persistent Docker volume on first start. The image uses UID and GID 10001, public port 8080, and admin port 8081. [Download the template](https://github.com/Buffer379x/shortcircuit/releases/download/v0.6.0-preview.1/my-shortcircuit.xml) · [Docker icon](../assets/branding/unraid-docker.png) · [SVG favicon](../assets/branding/favicon.svg) · [PNG favicon](../assets/branding/favicon.png)
 
 ## Install with Docker Manager
 
-Build the image on the same Docker host that will run ShortCircuit. With a local source checkout, run either `docker build --tag shortcircuit:0.6.0 .` or `docker compose build shortcircuit` from the repository root.
+1. Copy `my-shortcircuit.xml` to `/boot/config/plugins/dockerMan/templates-user/` using the Unraid file manager or an existing flash share. In **Docker → Add Container**, select the `shortcircuit` user template. [Unraid templates](https://docs.unraid.net/community-applications/)
+2. For Nginx Proxy Manager, select the Docker bridge shared with the proxy and remove both `--publish` entries from **Extra Parameters**. Set **Admin origin** and **WebUI** to your exact HTTPS admin URL, and **Public hosts** to your redirect hostnames. Limit the admin hostname to your LAN or VPN. [Proxy host configuration](REVERSE_PROXY.md)
+3. Click **Apply**. Docker Manager downloads the image and starts the container. Follow the first sign-in steps below.
 
-If you started with the XML download, run these commands in the Unraid terminal to fetch the source used for the template and build its image.
-
-~~~sh
-shortcircuit_source=$(mktemp -d) &&
-curl -fsSL https://codeload.github.com/Buffer379x/shortcircuit/tar.gz/c2f6ca1ba72f0aa5cad9bd8c74416bdbdd1b3782 \
-  -o "$shortcircuit_source/source.tar.gz" &&
-tar -xzf "$shortcircuit_source/source.tar.gz" --strip-components=1 -C "$shortcircuit_source" &&
-docker build --tag shortcircuit:0.6.0 "$shortcircuit_source"
-~~~
-
-1. Run `docker image inspect shortcircuit:0.6.0 --format '{{.Id}}'` on Unraid. A printed image ID confirms that Docker Manager can use the local tag. When Docker reports `pull access denied` for this tag, build the image on Unraid and apply the template again. Prepare the local appdata directory as shown below.
-2. For a new installation, save the XML as `my-shortcircuit.xml` in `/boot/config/plugins/dockerMan/templates-user/`. In **Docker → Add Container**, select the ShortCircuit user template and set **Appdata** to your local pool path.
-3. For tunnel access, keep the default bridge and admin origin. The two `--publish` options in **Extra Parameters** bind to IPv4 loopback. Use Docker Engine 28.0.0 or newer for this setup. Forward the ports from your client, then use `http://localhost:8081` for administration. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
-
-   ~~~sh
-   ssh -N -L 8081:127.0.0.1:8081 -L 8080:127.0.0.1:8080 root@unraid
-   ~~~
-
-4. For Nginx Proxy Manager, select the bridge shared with the proxy and remove the two `--publish` options. Set **Admin origin** and the Docker Manager **WebUI** field to your exact HTTPS admin URL. Set **Public hosts** to your redirect domains. Keep the admin hostname restricted to the LAN or VPN. [Proxy host configuration](REVERSE_PROXY.md)
-
-To update a local build, rebuild the image under the configured tag and recreate the container with the same appdata path.
-
-## Build and start from the command line
-
-Use the Dockerfile from the revision you intend to run. Substitute the storage directory, bridge name, and DNS names for your installation.
+For an isolated install, keep the default bridge and IPv4 loopback bindings. Use Docker Engine 28.0.0 or newer with these bindings. Forward the two ports from your client with an SSH tunnel, then open `http://localhost:8081`. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
 
 ~~~sh
-docker build --tag shortcircuit:0.6.0 .
-
-shortcircuit_data=/mnt/cache/appdata/shortcircuit
-install -d -m 0700 -o 10001 -g 10001 "$shortcircuit_data"
-
-docker run --detach --name shortcircuit \
-  --network shortcircuit-proxy \
-  --restart unless-stopped --stop-timeout 25 \
-  --read-only --cap-drop ALL --security-opt no-new-privileges \
-  --mount "type=bind,source=$shortcircuit_data,target=/data" \
-  --env PUBLIC_HOSTS=go.example.com \
-  --env ADMIN_ORIGIN=https://shortcircuit.example.com \
-  shortcircuit:0.6.0
+ssh -N -L 8081:127.0.0.1:8081 -L 8080:127.0.0.1:8080 root@unraid
 ~~~
-
-Reach both listeners through the proxy on the shared bridge. [Proxy host configuration](REVERSE_PROXY.md)
 
 ## First sign-in
 
-1. Verify the private admin HTTPS hostname from your LAN or VPN.
-2. Run `docker exec shortcircuit shortcircuit setup-token`. Enter the one-time token, username, and password on the admin hostname.
+1. Open the admin HTTPS hostname from your LAN or VPN, or use the loopback address through your tunnel.
+2. After the container starts, click its icon in the Docker tab and open **Console**. Run `shortcircuit setup-token`. Enter the one-time token, username, and password in the setup form.
 3. Open **Domains** to configure canonical origins and fallbacks. Preserve the hostname and case-sensitive slug when recreating an existing address.
 4. Open **Analytics** to choose collection and retention. Take a verified backup after setup.
+
+## Persistent storage and updates
+
+The named volume `shortcircuit-data` persists across container replacement. It resides in Docker's data store. Export a verified backup outside that store before recreating it. Use a separate volume name if you install a second ShortCircuit instance. [Docker volumes](https://docs.docker.com/engine/storage/volumes/) · [Backup and restore](BACKUP_RESTORE.md)
+
+If you already have data in an appdata bind mount, edit the existing container and change only **Repository** to the published image reference. Preserve the existing `/data` mapping. For a new bind mount, remove `--volume=shortcircuit-data:/data` and add a path mapping to `/data`. Use a local pool directory writable by UID/GID 10001. [Unraid shares](https://docs.unraid.net/unraid-os/using-unraid-to/manage-storage/shares/) · [SQLite WAL](https://www.sqlite.org/wal.html)
+
+Take a verified backup before changing the version in **Repository**. Preserve the `/data` mount, public hostnames, and admin origin when updating.
 
 ## Configuration
 
@@ -74,4 +40,3 @@ Reach both listeners through the proxy on the shared bridge. [Proxy host configu
 | `LOG_LEVEL` | Default `info`. |
 | `BACKUP_INTERVAL_HOURS` and `BACKUP_KEEP` | Optional backup interval and number of scheduled copies to keep. Default scheduling is disabled. |
 
-Take a verified backup before upgrading. Preserve the public hostnames, admin origin, and storage mount. Recover with the offline restore workflow on the same data volume. [Backup and restore](BACKUP_RESTORE.md)
