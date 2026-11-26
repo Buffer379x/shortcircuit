@@ -629,7 +629,14 @@ async fn simulator_checks_draft_rule_precedence_and_leaves_the_live_link_unchang
         "user_agent":"a".repeat(1024)
     });
     assert!(large_draft.to_string().len() > 32 * 1024);
-    let result = request(&app.admin, Method::POST, &preview, &headers, Some(large_draft)).await;
+    let result = request(
+        &app.admin,
+        Method::POST,
+        &preview,
+        &headers,
+        Some(large_draft),
+    )
+    .await;
     assert_eq!(result.status(), StatusCode::OK);
     let policy = request(&app.admin, Method::GET, &path, &headers, None).await;
     let policy = response_body(policy).await;
