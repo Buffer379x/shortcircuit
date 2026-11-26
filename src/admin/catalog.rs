@@ -59,6 +59,7 @@ struct DomainInput {
     enabled: bool,
     root_target: Option<String>,
     missing_target: Option<String>,
+    block_crawlers: Option<bool>,
 }
 
 async fn save_domain(
@@ -90,14 +91,13 @@ async fn save_domain(
         enabled: input.enabled,
         root_target: input.root_target,
         missing_target: input.missing_target,
+        block_crawlers: input.block_crawlers.unwrap_or(false),
     };
-    if !domains::save(&state.pool, &domain)
+    domains::save(&state.pool, &domain, input.block_crawlers)
         .await
         .map_err(|_| Problem::unavailable())?
-    {
-        return Err(Problem(StatusCode::CONFLICT, "domain_limit"));
-    }
-    Ok(Json(domain))
+        .map(Json)
+        .ok_or(Problem(StatusCode::CONFLICT, "domain_limit"))
 }
 
 #[derive(Serialize, sqlx::FromRow)]

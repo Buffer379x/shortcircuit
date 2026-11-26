@@ -3856,6 +3856,136 @@
         }
       }
     },
+    "/api/v1/links/{id}/policy/simulate": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Numeric link ID.",
+          "schema": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      ],
+      "post": {
+        "operationId": "simulateLinkRedirect",
+        "summary": "Simulate a draft redirect policy",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The draft selected the destination.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSimulationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Link ID is invalid, absent, or outside the caller's visible hosts.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The draft policy or sample headers, query, or extra path are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Uses the first matching draft rule and the saved default destination. A scoped API key requires write access. The simulation reads the link and returns the destination and configured status. Availability, visit limits, and access protection apply to live requests.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "description": "Exact configured admin origin, required with browser session authentication.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogSimulationInput"
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/links/{id}/protection": {
       "parameters": [
         {
@@ -4815,6 +4945,47 @@
           }
         }
       }
+    },
+    "/robots.txt": {
+      "get": {
+        "operationId": "readCrawlerPolicy",
+        "summary": "Get the public domain crawler policy",
+        "responses": {
+          "200": {
+            "description": "The domain robots file.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The public host is unknown or disabled."
+          }
+        }
+      },
+      "head": {
+        "operationId": "headCrawlerPolicy",
+        "summary": "Inspect the public domain crawler policy headers",
+        "responses": {
+          "200": {
+            "description": "The domain robots file headers.",
+            "headers": {
+              "Content-Length": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The public host is unknown or disabled."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5598,6 +5769,11 @@
                 "type": "null"
               }
             ]
+          },
+          "block_crawlers": {
+            "type": "boolean",
+            "description": "Ask crawlers to skip this domain through robots.txt.",
+            "default": false
           }
         },
         "required": [
@@ -5605,7 +5781,8 @@
           "origin",
           "enabled",
           "root_target",
-          "missing_target"
+          "missing_target",
+          "block_crawlers"
         ]
       },
       "CatalogDomainInput": {
@@ -5640,6 +5817,13 @@
                 "type": "null"
               }
             ]
+          },
+          "block_crawlers": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Ask crawlers to skip this domain through robots.txt. Omission preserves the saved value on an existing domain and defaults to false for a new domain."
           }
         },
         "required": [
@@ -6543,6 +6727,13 @@
             "maxItems": 16,
             "default": [],
             "description": "Ordered rules. The first rule with every condition matching supplies the destination."
+          },
+          "noindex": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Send a noindex, nofollow header on matching redirects. Omission preserves the saved value when replacing a live policy."
           }
         }
       },
@@ -6623,6 +6814,10 @@
             "format": "int64",
             "minimum": 0,
             "description": "Committed visit reservations. Policy replacement preserves this counter."
+          },
+          "noindex": {
+            "type": "boolean",
+            "description": "Whether matching redirects send the noindex, nofollow header."
           }
         },
         "required": [
@@ -6633,7 +6828,8 @@
           "forward_query",
           "forward_path",
           "rules",
-          "visits_used"
+          "visits_used",
+          "noindex"
         ]
       },
       "CatalogRedirectRule": {
@@ -6879,6 +7075,80 @@
           "disabled_first"
         ],
         "default": "newest"
+      },
+      "CatalogSimulationInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "policy"
+        ],
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/CatalogRedirectPolicy"
+          },
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 4096,
+            "description": "URL-encoded query without a leading question mark or a fragment."
+          },
+          "accept_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 256
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 1024
+          },
+          "extra_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 199,
+            "description": "Relative slug segments. The draft must allow extra path segments."
+          }
+        }
+      },
+      "CatalogSimulationResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "target",
+          "status",
+          "rule"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "format": "uri"
+          },
+          "status": {
+            "type": "integer",
+            "enum": [
+              301,
+              302,
+              307,
+              308
+            ]
+          },
+          "rule": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "One-based rule position or null for the default destination."
+          }
+        }
       },
       "CatalogSlug": {
         "type": "string",

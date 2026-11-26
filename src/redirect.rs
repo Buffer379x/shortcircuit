@@ -4,7 +4,7 @@ use url::form_urlencoded;
 
 use crate::{
     history::{self, Action, Actor, Snapshot},
-    input::valid_target,
+    input::{valid_slug, valid_target},
     store::push_host_scope,
 };
 
@@ -21,6 +21,8 @@ pub(crate) struct Policy {
     pub(crate) max_visits: Option<i64>,
     pub(crate) forward_query: bool,
     pub(crate) forward_path: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) noindex: Option<bool>,
     pub(crate) rules: Vec<Rule>,
 }
 
@@ -33,6 +35,7 @@ impl Default for Policy {
             max_visits: None,
             forward_query: false,
             forward_path: false,
+            noindex: None,
             rules: Vec::new(),
         }
     }
@@ -134,6 +137,7 @@ pub(crate) struct Challenge {
 pub(crate) struct VisitSubject {
     pub(crate) id: i64,
     pub(crate) analytics_enabled: bool,
+    pub(crate) noindex: bool,
 }
 
 pub(crate) struct Resolution {
@@ -150,6 +154,7 @@ struct StoredPolicy {
     visits_used: Option<i64>,
     forward_query: Option<bool>,
     forward_path: Option<bool>,
+    noindex: Option<bool>,
     rules: Option<String>,
 }
 
@@ -173,6 +178,7 @@ impl StoredPolicy {
                 max_visits: self.max_visits,
                 forward_query: self.forward_query.unwrap_or(false),
                 forward_path: self.forward_path.unwrap_or(false),
+                noindex: Some(self.noindex.unwrap_or(false)),
                 rules,
             },
             visits_used: self.visits_used.unwrap_or_default(),
@@ -203,6 +209,7 @@ impl SelectedLink {
             subject: Some(VisitSubject {
                 id: self.id,
                 analytics_enabled: self.analytics_enabled,
+                noindex: self.policy.noindex.unwrap_or(false),
             }),
         }
     }
@@ -230,17 +237,8 @@ impl SelectedLink {
 
     fn redirect(&self, request: RedirectRequest<'_>) -> Result<Outcome, sqlx::Error> {
         let rules = self.policy.decode_rules()?;
-        let mut target = self.target.as_str();
-        if !rules.is_empty() {
-            let attributes = Attributes::from_request(request);
-            if let Some(rule) = rules.iter().find(|rule| {
-                rule.conditions
-                    .iter()
-                    .all(|condition| attributes.matches(condition))
-            }) {
-                target = &rule.target;
-            }
-        }
+        let target = matched_rule(&rules, request)
+            .map_or(self.target.as_str(), |(_, rule)| rule.target.as_str());
 
         // A non-exact selection has already matched a complete segment and opted in.
         let suffix = request
@@ -259,7 +257,8 @@ impl SelectedLink {
 }
 
 const POLICY_COLUMNS: &str = "policy.status, policy.starts_at, policy.expires_at,
-    policy.max_visits, policy.visits_used, policy.forward_query, policy.forward_path, policy.rules";
+    policy.max_visits, policy.visits_used, policy.forward_query, policy.forward_path, policy.rules,
+    policy.noindex";
 const POLICY_JOIN: &str = " FROM links
     LEFT JOIN link_redirect_policies AS policy ON policy.link_id = links.id";
 
@@ -301,7 +300,7 @@ pub(crate) async fn replace_policy_in(
     connection: &mut SqliteConnection,
     hosts: &[String],
     id: i64,
-    policy: Policy,
+    mut policy: Policy,
     actor: &Actor,
     action: Action,
 ) -> Result<Option<PolicyDetails>, PolicyError> {
@@ -309,6 +308,7 @@ pub(crate) async fn replace_policy_in(
     let Some(previous) = read_policy(&mut *connection, hosts, id).await? else {
         return Ok(None);
     };
+    policy.noindex = policy.noindex.or(previous.policy.noindex);
     if matches!(policy.status, 301 | 308) {
         let protected = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM link_protection WHERE link_id = ?
@@ -330,12 +330,12 @@ pub(crate) async fn replace_policy_in(
         .map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
     sqlx::query(
         "INSERT INTO link_redirect_policies
-         (link_id, status, starts_at, expires_at, max_visits, forward_query, forward_path, rules)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(link_id) DO UPDATE SET
+         (link_id, status, starts_at, expires_at, max_visits, forward_query, forward_path, rules, noindex)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(link_id) DO UPDATE SET
             status = excluded.status, starts_at = excluded.starts_at,
             expires_at = excluded.expires_at, max_visits = excluded.max_visits,
             forward_query = excluded.forward_query, forward_path = excluded.forward_path,
-            rules = excluded.rules",
+            rules = excluded.rules, noindex = excluded.noindex",
     )
     .bind(id)
     .bind(i64::from(policy.status))
@@ -345,6 +345,7 @@ pub(crate) async fn replace_policy_in(
     .bind(policy.forward_query)
     .bind(policy.forward_path)
     .bind(rules)
+    .bind(policy.noindex.unwrap_or(false))
     .execute(&mut *connection)
     .await?;
     history::record(
@@ -586,6 +587,96 @@ struct Attributes<'a> {
     query: &'a str,
 }
 
+fn matched_rule<'a>(
+    rules: &'a [Rule],
+    request: RedirectRequest<'_>,
+) -> Option<(usize, &'a Rule)> {
+    if rules.is_empty() {
+        return None;
+    }
+    let attributes = Attributes::from_request(request);
+    rules.iter().enumerate().find(|(_, rule)| {
+        rule.conditions
+            .iter()
+            .all(|condition| attributes.matches(condition))
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SimulationInput {
+    policy: Policy,
+    query: Option<String>,
+    user_agent: Option<String>,
+    accept_language: Option<String>,
+    extra_path: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SimulationResult {
+    target: String,
+    status: u16,
+    rule: Option<usize>,
+}
+
+pub(crate) async fn simulate(
+    pool: &SqlitePool,
+    hosts: &[String],
+    id: i64,
+    input: SimulationInput,
+) -> Result<Option<SimulationResult>, PolicyError> {
+    validate_policy(&input.policy)?;
+    for (value, limit) in [(&input.user_agent, 1024), (&input.accept_language, 256)] {
+        if value.as_deref().is_some_and(|value| {
+            value.len() > limit
+                || !value.bytes().all(|byte| matches!(byte, b' '..=b'~' | b'\t'))
+        }) {
+            return Err(PolicyError::Invalid("invalid_simulation_header"));
+        }
+    }
+    let query = input.query.as_deref().filter(|query| !query.is_empty());
+    if query.is_some_and(|query| {
+        query.len() > 4096
+            || !format!("/?{query}")
+                .parse::<axum::http::uri::PathAndQuery>()
+                .is_ok_and(|path| path.query() == Some(query))
+    }) {
+        return Err(PolicyError::Invalid("invalid_simulation_query"));
+    }
+    let mut select = QueryBuilder::<Sqlite>::new("SELECT host, slug, target FROM links WHERE id = ");
+    select.push_bind(id);
+    push_host_scope(&mut select, hosts);
+    let Some((host, slug, fallback)) = select
+        .build_query_as::<(String, String, String)>()
+        .fetch_optional(pool)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let suffix = input.extra_path.as_deref().unwrap_or_default();
+    if !suffix.is_empty()
+        && (!input.policy.forward_path || !valid_slug(suffix) || slug.len() + 1 + suffix.len() > 200)
+    {
+        return Err(PolicyError::Invalid("invalid_simulation_path"));
+    }
+    let request = RedirectRequest {
+        host: &host,
+        slug: &slug,
+        query,
+        user_agent: input.user_agent.as_deref(),
+        language: input.accept_language.as_deref(),
+        head: true,
+    };
+    let rule = matched_rule(&input.policy.rules, request);
+    let target = rule.map_or(fallback.as_str(), |(_, rule)| rule.target.as_str());
+    let location = forward(target, suffix, query.filter(|_| input.policy.forward_query));
+    Ok(Some(SimulationResult {
+        target: location,
+        status: input.policy.status,
+        rule: rule.map(|(index, _)| index + 1),
+    }))
+}
+
 impl<'a> Attributes<'a> {
     fn from_request(request: RedirectRequest<'a>) -> Self {
         let agent = request.user_agent.unwrap_or_default().to_ascii_lowercase();
@@ -814,8 +905,10 @@ mod tests {
         insert(&pool, "Team/Docs", true).await;
         for migration in [
             include_str!("../migrations/0004_redirect_policies.sql"),
+            include_str!("../migrations/0005_domains.sql"),
             include_str!("../migrations/0006_analytics.sql"),
             include_str!("../migrations/0007_link_protection.sql"),
+            include_str!("../migrations/0015_crawler_controls.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }

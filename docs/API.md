@@ -24,17 +24,19 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `DELETE /api/v1/links/{id}` | Deletes a link and returns `204`. |
 | `GET` and `POST /api/v1/keys` | Require a browser session. Listing returns key metadata. Creation accepts `name`, `scopes`, optional `host`, and optional `expires_at` in Unix seconds. The response contains `key` and the one-time `token`. |
 | `DELETE /api/v1/keys/{id}` | Revokes the key and returns `204`. |
-| `GET` and `POST /api/v1/catalog/domains` | Browser-session catalog. GET returns `items`. POST sets `host`, `origin`, `enabled`, and optional `root_target` and `missing_target`. Domain origins contain the same host and an optional port. |
+| `GET` and `POST /api/v1/catalog/domains` | Browser-session catalog. GET returns `items`. POST sets `host`, `origin`, `enabled`, and optional `root_target`, `missing_target`, and `block_crawlers`. Omitted crawler preferences on existing domains preserve the saved value. Domain origins contain the same host and an optional port. |
 | `GET`, `PATCH`, and `DELETE /api/v1/catalog/tags` | Browser-session catalog. GET returns tag names, link counts, and any saved color or description. PATCH renames or merges using `name` and `new_name`. DELETE uses `name` and removes the tag and its assignments. Mutations return `204`. |
 | `PATCH /api/v1/catalog/tags/details` | Replaces saved details for an existing tag. The body contains `name`, optional `color` as a six-digit hex color with a leading `#`, and an optional plain-text `description` of up to 500 Unicode characters. Use null or omit the color to clear it. Omit the description or send an empty string to clear it. Returns `204`. |
-| `GET` and `PATCH /api/v1/links/{id}/policy` | Reads or replaces the redirect settings. Writable keys are `status`, `starts_at`, `expires_at`, `max_visits`, `forward_query`, `forward_path`, and `rules`. Read responses include `visits_used`. Omitted PATCH fields take their defaults. |
+| `GET` and `PATCH /api/v1/links/{id}/policy` | Reads or replaces the redirect settings. Writable keys are `status`, `starts_at`, `expires_at`, `max_visits`, `forward_query`, `forward_path`, `noindex`, and `rules`. Read responses include `visits_used`. Omitting `noindex` preserves its saved value. Other omitted PATCH fields take their defaults. |
 | `GET` and `PATCH /api/v1/links/{id}/protection` | Returns `password_required`, `one_time`, and `consumed`. PATCH takes `one_time` and optional `password` or `remove_password: true`. Omit both password fields to keep the current password. A permanent redirect or an attempt to remove a consumed one-time restriction returns `409`. |
 | `GET` and `DELETE /api/v1/links/{id}/history` | Browser-session access. GET returns current editable settings and up to 25 recent revisions. DELETE clears the link's history and returns `204`. |
+| `POST /api/v1/links/{id}/policy/simulate` | Evaluates draft rules and forwarding against sample request fields. Returns the destination, configured status, and one-based rule number or null for the default destination. Requires a browser session with CSRF or a scoped write key. |
 | `POST /api/v1/links/{id}/history/{revision}/restore` | Browser-session access with CSRF protection. Restores one metadata or redirect-policy revision and returns `204`. Informational protection entries return `409`. |
 | `GET /api/v1/links/{id}/qr` | Renders the configured public short URL as SVG or PNG. Supports image size, colors, transparency, error correction, quiet zone, and an optional outline. Requires a read scope or browser session. |
 | `POST /api/v1/links/{id}/qr/logo` | Renders the same short URL with a centered logo from a raw PNG request body. Requires a browser session, the exact admin Origin, and CSRF protection. |
 | `GET` and `POST /api/v1/qr/templates` | Browser-session access. GET returns `items`, newest first. POST creates a QR design template and returns it with an `id`. |
 | `DELETE /api/v1/qr/templates/{id}` | Removes a saved template and returns `204`. Requires a browser session. |
+| `GET` or `HEAD /robots.txt` | Returns the crawler preference and headers for an active public host. |
 | `GET` or `HEAD /{slug}` | Resolves the link's redirect policy. The default is `302` with the stored `Location` and `Cache-Control: no-store`. A protected link returns a confirmation page for GET or an empty response for HEAD. |
 | `POST /{slug}` | Accepts a protected-link confirmation from the exact public origin. A successful confirmation returns `303` to continue with GET. |
 
@@ -123,11 +125,19 @@ CSV uses the columns `version,host,slug,target,title,tags,enabled,analytics_enab
 
 An exact path takes precedence. When the exact path is missing, the longest stored prefix that allows extra paths can handle the request. Disabled or out-of-window links and exhausted visit limits return `404`. Unknown paths and the root path can use their configured domain fallback and otherwise return `404`. Disabled domains return `404` and remain editable on the admin listener.
 
-A policy supports `301`, `302`, `307`, or `308`. Start and expiration are inclusive and exclusive respectively, expressed as UTC Unix seconds. Rules, time windows, and visit limits require a temporary status. Browsers or intermediaries can retain permanent redirects. A limited link increments its counter atomically for each successful GET while the limit is active. HEAD checks the same conditions without incrementing it. Editing or pausing a limit preserves its counter.
+A policy supports `301`, `302`, `307`, or `308`. Start and expiration are inclusive and exclusive respectively, expressed as UTC Unix seconds. Time windows and visit limits require a temporary status. Browsers or intermediaries can retain permanent redirects. A limited link increments its counter atomically for each successful GET while the limit is active. HEAD checks the same conditions without incrementing it. Editing or pausing a limit preserves its counter.
 
 A rule contains a stored `target` and 1 to 8 `conditions`. The first of up to 16 rules whose conditions all match supplies the destination. Without a match, the link uses its stored target. Condition types are `language`, `device`, `os`, `browser`, and `query`. All have a `value`. Query conditions also have a `key`. Client characteristics are estimates from request headers. Language uses the preferred valid language from `Accept-Language`.
 
 Query and extra path forwarding are both off by default. Query forwarding appends the incoming raw query before the stored fragment. Extra path forwarding appends validated path segments before the stored query and fragment. Leave forwarding off for destinations whose parameters or path are signed.
+
+### Redirect simulator and crawler preferences
+
+Use `POST /api/v1/links/{id}/policy/simulate` with the draft `policy` and optional `query`, `accept_language`, `user_agent`, and `extra_path` fields. Submit the query without the leading question mark. An extra path requires the draft to enable extra path forwarding and the combined short path to fit within 200 characters. The simulator reads the saved default destination and uses the same first-matching-rule logic as public GET and HEAD. It returns JSON. Live requests also evaluate route priority, availability, limits, and access protection.
+
+The public listener serves `robots.txt` for active configured hosts. A domain with `block_crawlers` enabled requests that crawlers skip all paths. The file contains no individual shortcodes. A redirect with `noindex` enabled sends `X-Robots-Tag: noindex, nofollow`. Crawler adherence varies. Crawlers need to fetch a response to see its header, and indexing behavior can vary for redirects. Use access protection for sensitive redirects. [RFC 9309](https://www.rfc-editor.org/rfc/rfc9309.html) · [Google Search Central](https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag)
+
+### Protected links
 
 Protected links require a temporary redirect policy and an HTTPS public origin, with an HTTP loopback exception for development. Passwords require 12 or more characters and at most 1,024 UTF-8 bytes. The confirmation is valid for five minutes and bound to the public origin, path, query, and protection revision. Password checks are rate-limited. After one confirmed access, a one-time link returns `404`; create a new link to issue another one-time access. A protected short link controls access through ShortCircuit. The destination is responsible for its own access control.
 

@@ -104,6 +104,7 @@
       add(t.historyVisitLimit, old.max_visits, next.max_visits, count);
       add(t.forwardQuery, old.forward_query, next.forward_query, status);
       add(t.forwardPath, old.forward_path, next.forward_path, status);
+      if (old.noindex !== undefined) add(t.requestNoIndex, old.noindex, next.noindex ?? false, status);
       add(t.redirectRules, old.rules, next.rules, rules);
     }
     return changes;

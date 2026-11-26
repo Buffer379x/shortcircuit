@@ -232,10 +232,26 @@ async function verify() {
 
     await page.getByRole('button', { name: 'Redirect settings', exact: true }).click();
     const policy = page.getByRole('dialog', { name: 'Redirect settings', exact: true });
+    await policy.getByRole('button', { name: 'Add rule', exact: true }).click();
+    const firstRule = policy.getByRole('group', { name: 'Rule 1', exact: true });
+    await firstRule.getByLabel('Destination URL', { exact: true }).fill('https://example.test/simulator');
+    await firstRule.getByLabel('Parameter name', { exact: true }).fill('team');
+    await firstRule.getByLabel('Match value', { exact: true }).fill('ops');
+    await policy.getByText('Redirect simulator', { exact: true }).click();
+    await policy.getByLabel('Query string', { exact: true }).fill('team=ops');
+    await policy.getByRole('button', { name: 'Simulate redirect', exact: true }).click();
+    await policy.getByText('https://example.test/simulator', { exact: true }).waitFor();
+    await policy.getByText('302 · Rule 1', { exact: true }).waitFor();
+    await policy.getByLabel('Query string', { exact: true }).fill('team=other');
+    await policy.getByText('https://example.test/simulator', { exact: true }).waitFor({ state: 'hidden' });
+    await firstRule.getByRole('button', { name: 'Remove rule', exact: true }).click();
+    await policy.getByRole('checkbox', { name: 'Request exclusion from search', exact: false }).check();
     await policy.getByLabel('Maximum visits (optional)').fill('1');
     await policy.getByRole('button', { name: 'Save changes', exact: true }).click();
     await policy.waitFor({ state: 'hidden' });
-    assert.equal((await page.request.head(publicOrigin + '/test/guide', { maxRedirects: 0 })).status(), 302);
+    const headGuide = await page.request.head(publicOrigin + '/test/guide', { maxRedirects: 0 });
+    assert.equal(headGuide.status(), 302);
+    assert.equal(headGuide.headers()['x-robots-tag'], 'noindex, nofollow');
     assert.equal((await page.request.get(publicOrigin + '/test/guide', { maxRedirects: 0 })).status(), 302);
     assert.equal((await page.request.get(publicOrigin + '/test/guide', { maxRedirects: 0 })).status(), 404);
 
@@ -534,6 +550,17 @@ async function verify() {
     assert.equal(await tagField.evaluate(input => input === document.activeElement), true);
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+
+    await page.getByRole('button', { name: 'Domains', exact: true }).click();
+    const localDomain = page.locator('.catalog-row').filter({ has: page.getByText('localhost', { exact: true }) });
+    await localDomain.getByRole('button', { name: 'Edit domain', exact: true }).click();
+    const domainSettings = page.getByRole('dialog', { name: 'Edit domain', exact: true });
+    await domainSettings.getByRole('checkbox', { name: 'Discourage crawling', exact: false }).check();
+    await domainSettings.getByRole('button', { name: 'Save changes', exact: true }).click();
+    await domainSettings.waitFor({ state: 'hidden' });
+    const robots = await page.request.get(publicOrigin + '/robots.txt');
+    assert.equal(robots.status(), 200);
+    assert.equal(await robots.text(), 'User-agent: *\nDisallow: /\n');
 
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();

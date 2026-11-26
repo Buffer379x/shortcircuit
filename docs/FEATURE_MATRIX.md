@@ -22,12 +22,12 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Bulk actions | Current | P1 | Select up to 50 links, change their status or tags atomically, export native JSON or CSV, and confirm permanent deletion. |
 | Slug generation settings | Current | P1 | Set the generated length to 8 through 32 with `SHORTCODE_LENGTH`. Existing and custom slugs preserve their spelling. |
 | Tags | Current | P1 | View tag counts, edit colors and descriptions, rename or merge tags, and remove their assignments. The link form suggests existing tags as the operator types. |
-| Crawler controls | Planned | P1 | Configure crawler directives and per-link crawlability. Check reserved route collisions before serving `robots.txt`. |
+| Crawler controls | Current | P1 | Set the domain-wide crawling preference in `robots.txt`. Individual links can request search exclusion through an HTTP header. |
 | Duplicate detection | Current | P2 | Lookup matches against the exact stored destination. The creation and edit forms offer copying an existing short URL. Approximate matches and merge are planned. |
 | Duplicate a link | Current | P2 | Open a prefilled form for the destination, title, description, tags, and analytics preference. Save the copy disabled and review its redirect and access settings before enabling it. |
 | Protected links | Current | P2 | Optional password protection, explicit confirmation, and atomic consumption of one-time links. |
 | Link history | Current | P2 | Compare and restore earlier metadata and redirect policies. History lists verified actors and protection changes and supports JSON export and deletion. |
-| Rule simulation | Planned | P2 | Preview the selected destination for representative inputs. The current editor already supports rule ordering. |
+| Rule simulation | Current | P2 | Preview the status and destination selected by a draft policy using sample language, user agent, query, and path information. |
 | URL Cleaner | Current | P2 | Review known trackers and one-time exceptions locally. Use the proposed URL explicitly before saving. Leave recognized signed URLs unchanged. |
 | Favorites and archives | Current | P2 | Mark links as favorites or archive them from the default view. Archived links continue to use their current redirect and access settings. |
 | Collections | Optional | P2 | Evaluate a lightweight collections model as an additional organization option. |

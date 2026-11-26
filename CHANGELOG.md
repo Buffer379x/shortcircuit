@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add domain crawler preferences and per-link indexing hints.
+- Simulate the current redirect policy draft using sample request details.
+
 - Add optional tag colors and descriptions, preserve details during tag merges, and suggest existing tags in the link form.
 
 - Add link descriptions to the catalog, revision history, and native JSON and CSV exchange.
