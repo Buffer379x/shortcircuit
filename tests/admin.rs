@@ -152,6 +152,7 @@ async fn qr_templates_are_private_and_validate_styles_before_storing_them() {
         ("background", json!("invalid"), "invalid_qr_color"),
         ("quiet_zone", json!(3), "invalid_qr_quiet_zone"),
         ("correction", json!("X"), "invalid_qr_correction"),
+        ("frame", json!("custom"), "invalid_qr_frame"),
         ("size", json!(127), "invalid_qr_size"),
     ] {
         let mut input = qr_template("Print");
@@ -181,6 +182,7 @@ async fn qr_templates_are_private_and_validate_styles_before_storing_them() {
     let mut expected = qr_template("Druckvorlage Ä");
     expected["id"] = created["id"].clone();
     expected["background"] = json!("fff4e0");
+    expected["frame"] = json!("none");
     assert_eq!(created, expected);
     let duplicate = request(
         &app.admin,
