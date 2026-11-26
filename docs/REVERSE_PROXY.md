@@ -1,17 +1,27 @@
-# Nginx Proxy Manager Configuration Design
+# Nginx Proxy Manager configuration
 
-Configure separate TLS-terminating proxy hosts for the public and admin listeners. Keep connections from the proxy to ShortCircuit on a dedicated network. Apply the appropriate network access rules to each host. This is the planned deployment and requires verification before production use.
+Configure independent TLS proxy hosts for the public and admin listeners. Use your DNS names in `PUBLIC_HOSTS=go.example.com` and `ADMIN_ORIGIN=https://shortcircuit.example.com`. Connect Nginx Proxy Manager and ShortCircuit to the same user-defined Docker bridge. [Nginx Proxy Manager networking](https://nginxproxymanager.com/advanced-config/) · [Unraid installation](UNRAID_INSTALLATION.md)
 
-| Proxy host | Scheme and upstream | Access |
-| --- | --- | --- |
-| `go.example.com` | `http` → `shortcircuit:8080` | Public access for configured hosts and redirect paths |
-| `shortcircuit.example.com` | `http` → `shortcircuit:8081` | LAN or VPN access with application authentication |
+| Proxy host | Forward scheme | Forward hostname | Forward port | Access |
+| --- | --- | --- | --- | --- |
+| `go.example.com` | `http` | `shortcircuit` | `8080` | Public |
+| `shortcircuit.example.com` | `http` | `shortcircuit` | `8081` | LAN or VPN |
 
-1. Add a proxy host and certificate for each hostname in Nginx Proxy Manager (NPM). Enforce HTTPS after verifying DNS and TLS on both hosts. Explicitly configure any public DNS aliases needed by manually recreated links on the redirect listener.
-2. Resolve the admin hostname through split DNS or the VPN and restrict access at the proxy or network. If the proxy is shared with public services, restrict the admin host with an Access List and independently verified IPv4 and IPv6 rules. Keep the admin listener port internal.
-3. Use a shared internal Docker network. Trust only the dedicated NPM address or the smallest required CIDR range. Configure NPM to set the `Host` header and forwarded HTTPS scheme and to derive client forwarding headers from the verified proxy chain. Ignore or overwrite forwarding headers supplied by external clients. Inspect the generated Nginx configuration and verify the policy for any upstream proxy chain.
-4. The planned admin configuration binds cookies to the HTTPS origin set with `ADMIN_BASE_URL=https://...` and generates absolute URLs from stored configuration. Verify that admin routes and setup functions are reachable only through the private listener.
-5. Keep query tokens and destination URLs out of access logs. For sensitive shortcodes, review the paths the reverse proxy logs and how long it retains them. Verify that proxy redirects and rewrite rules preserve encoded path and query components on manually recreated URLs.
-6. Before switching traffic, test both hostnames using temporary DNS resolution and verify A and AAAA routes and TLS. Check the redirect status and raw `Location` value for encoded slugs. Check for redirect loops, verify Secure cookies on the private host, and test rejection of unconfigured hosts and enforcement of IPv6 network boundaries. Verify the planned rollback path after the switch.
+## Add the proxy hosts
 
-Same-domain operation is a possible later option and requires a path collision check before activation. [Nginx Proxy Manager Advanced Configuration](https://nginxproxymanager.com/advanced-config/) · [Nginx Proxy Module](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)
+1. In **Hosts → Proxy Hosts**, add each hostname with the corresponding upstream. Disable proxy caching for these hosts to apply link and policy changes immediately.
+2. Assign a valid certificate to each host and enable **Force SSL** after testing HTTPS. Resolve the admin hostname within the LAN or VPN and use an Access List or network rules to restrict it. Verify IPv4 and IPv6 access separately.
+3. Preserve the incoming host and request URI. Verify encoded paths and query strings after any custom rewrite. ShortCircuit validates browser mutations against the exact `ADMIN_ORIGIN` and issues Secure cookies for HTTPS. Use port 443 unless you have verified that the proxy preserves the alternate port in the Host header. [Nginx Proxy Manager forwarding](https://github.com/NginxProxyManager/nginx-proxy-manager/blob/develop/docker/rootfs/etc/nginx/conf.d/include/proxy.conf)
+4. Apply client-level limits at the proxy as needed. ShortCircuit's login throttling uses the direct TCP peer. Review the proxy log format and retention to keep credentials and query values out of operational logs.
+5. Sign in through the admin hostname from your LAN or VPN. Test access from outside and confirm that public redirects remain available. Add required aliases in **Domains** or `PUBLIC_HOSTS`.
+
+## Verify redirects
+
+Use HEAD to read the redirect status and exact `Location` without consuming a visit limit. Test a saved short link, an invalid path, and any configured fallback from the real client networks.
+
+~~~sh
+curl --silent --show-error --head https://go.example.com/your-slug
+curl --silent --show-error --head https://go.example.com/api/v1/auth/session
+~~~
+
+The session API is on the admin listener. The second check shows the public missing-path behavior unless that address belongs to an existing short link. Retain the public hostname and exact path for existing QR codes.
