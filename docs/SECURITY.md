@@ -57,7 +57,7 @@ The 0.2 implementation adds a CLI-issued setup token, Argon2id passwords, revoca
 
 ## Implemented outbound monitoring policy
 
-Monitoring is disabled at startup by default. Setting `MONITOR_ENABLED=true` lets an administrator enroll a saved link or check a saved public domain. A changed destination removes its enrollment. The public listener only resolves a stored destination. It never performs probes.
+Monitoring is disabled at startup by default. Setting `MONITOR_ENABLED=true` lets an administrator enroll a saved link or check a saved public domain. A changed destination removes its enrollment. The public listener only resolves a stored destination. It never performs probes. A probe that has already started can finish after enrollment is withdrawn. Its result is discarded if the enrollment was removed or replaced.
 
 Health probes use a client restricted to validated HTTP destinations on port 80 and HTTPS destinations on port 443. The resolver rejects nonpublic addresses and DNS answers containing any blocked address. The connection can use only the validated addresses, including after a redirect. Each hop establishes a new validation context. Health checks allow at most three redirects and use HEAD with a bounded GET probe when the destination rejects HEAD. Requests discard response bodies. TLS hostname and certificate verification remain enabled.
 

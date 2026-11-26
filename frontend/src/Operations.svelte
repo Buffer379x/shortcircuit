@@ -6,7 +6,9 @@
   import { problemMessage } from './format';
   import { messages } from './i18n';
   import type { Language } from './i18n';
+  import { useTimeZone } from './timezone';
 
+  const readTimeZone = useTimeZone();
   const statusLabels = {
     none: 'systemRestoreNone',
     pending_restart: 'systemRestorePending',
@@ -102,7 +104,7 @@
     if (!Number.isFinite(time.getTime())) return t.systemUnknown;
     return new Intl.DateTimeFormat(language, {
       year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-      second: '2-digit', timeZone: 'UTC', timeZoneName: 'short',
+      second: '2-digit', timeZone: readTimeZone(), timeZoneName: 'short',
     }).format(time);
   }
 

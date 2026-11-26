@@ -178,7 +178,7 @@
       <h2>{t.monitorDomain}</h2>
       <p>{t.monitorDomainHint}</p>
       <form class="stack" onsubmit={checkDomain}>
-        <label>{t.domains}<select bind:value={selectedDomain} onchange={() => { domainResult = null; }}>
+        <label>{t.domains}<select bind:value={selectedDomain} disabled={working} onchange={() => { domainResult = null; }}>
           <option value="">{t.monitorChoose}</option>
           {#each domains.hosts as host (host)}<option value={host}>{host}</option>{/each}
         </select></label>
