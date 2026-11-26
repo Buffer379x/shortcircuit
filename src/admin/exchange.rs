@@ -18,7 +18,7 @@ use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
 
 use crate::{
     domains,
-    input::{PublicHosts, link_description, normalize_host, valid_slug, valid_target},
+    input::{PublicHosts, normalize_host, plain_description, valid_slug, valid_target},
     store::Link,
 };
 
@@ -408,7 +408,7 @@ fn validate(input: &mut ImportPage) -> Result<(), Problem> {
         for tag in &mut item.tags {
             *tag = tag_name(tag).ok_or_else(invalid)?.to_owned();
         }
-        item.description = link_description(&item.description)
+        item.description = plain_description(&item.description)
             .ok_or_else(invalid)?
             .to_owned();
         item.tags.sort_unstable();

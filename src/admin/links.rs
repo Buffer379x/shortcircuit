@@ -17,7 +17,7 @@ use crate::{
     auth::{Auth, AuthError},
     domains,
     history::{self, LinkHistory, RestoreError},
-    input::{link_description, link_tags, link_title, normalize_host, valid_slug, valid_target},
+    input::{link_tags, link_title, normalize_host, plain_description, valid_slug, valid_target},
     protection::{self, PasswordChange, ProtectionDetails, ProtectionDraft, ProtectionError},
     qr::{self, Format},
     redirect::{self, Policy, PolicyDetails, PolicyError},
@@ -218,7 +218,7 @@ fn title(value: String) -> Result<String, Problem> {
 }
 
 fn description(value: String) -> Result<String, Problem> {
-    link_description(&value)
+    plain_description(&value)
         .map(str::to_owned)
         .ok_or_else(|| Problem::invalid("invalid_description"))
 }

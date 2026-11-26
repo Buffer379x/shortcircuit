@@ -13,6 +13,7 @@
   import PolicyEditor from './PolicyEditor.svelte';
   import ProtectionFields from './ProtectionFields.svelte';
   import Icon from './Icon.svelte';
+  import TagMark from './TagMark.svelte';
   import type { Language, Messages } from './i18n';
 
   let { t, language, api, domains }: { t: Messages; language: Language; api: Api; domains: Domains } = $props();
@@ -34,7 +35,7 @@
   let domain = $state('');
   let status = $state('');
   let sort = $state<LinkSort>('newest');
-  let catalogTags = $state.raw<string[]>([]);
+  let catalogTags = $state.raw<Tag[]>([]);
   let revision = $state(0);
   let notice = $state<keyof Messages | null>(null);
   let actionError = $state<keyof Messages | null>(null);
@@ -56,13 +57,26 @@
   let slug = $state('');
   let host = $state('');
   let tags = $state('');
+  let tagsInput = $state<HTMLInputElement>();
   let analyticsEnabled = $state(true);
   let oneTime = $state(false);
   let linkPassword = $state('');
 
   const availableTags = $derived([...new Set([
-    ...catalogTags, ...items.flatMap((link) => link.tags),
+    ...catalogTags.map(({ name }) => name), ...items.flatMap((link) => link.tags),
   ])].filter((tag) => !tagsFilter.includes(tag)).sort((a, b) => a.localeCompare(b, language)));
+  const tagDetails = $derived(new Map(catalogTags.map((item) => [item.name, item])));
+  const tagSuggestions = $derived.by(() => {
+    if (!formOpen || saving) return [];
+    const parts = tags.split(',');
+    const fragment = parts.pop()?.trim();
+    const query = fragment?.toLowerCase();
+    const selected = new Set(parts.map((part) => part.trim()).filter(Boolean));
+    if (!query || selected.size >= 20) return [];
+    return catalogTags
+      .filter(({ name }) => !selected.has(name) && name !== fragment && name.toLowerCase().includes(query))
+      .slice(0, 6);
+  });
   const availableDomains = $derived(Object.keys(domains.origins).sort());
   const selectedLinks = $derived(items.filter((item) => selected.has(item.selection_key)));
   const selectable = $derived(items.slice(0, maxSelection));
@@ -134,9 +148,10 @@
     try {
       const page = await api<{ items: Tag[] }>('/catalog/tags', 'GET', undefined, 'json', tagRequests.signal);
       if (!tagRequests.signal.aborted && generation === tagGeneration) {
-        catalogTags = page.items.map(({ name }) => name);
-        if (tagsFilter.some((tag) => !catalogTags.includes(tag))) {
-          tagsFilter = tagsFilter.filter((tag) => catalogTags.includes(tag));
+        catalogTags = page.items;
+        const names = new Set(page.items.map(({ name }) => name));
+        if (tagsFilter.some((tag) => !names.has(tag))) {
+          tagsFilter = tagsFilter.filter((tag) => names.has(tag));
         }
       }
     } catch {
@@ -249,6 +264,13 @@
   function toggleTag(tag: string) {
     if (tagsFilter.includes(tag)) tagsFilter = tagsFilter.filter((value) => value !== tag);
     else if (tagsFilter.length < 20) tagsFilter = [...tagsFilter, tag];
+  }
+
+  function addSuggestedTag(name: string) {
+    const parts = tags.split(',');
+    parts.pop();
+    tags = [...parts.map((part) => part.trim()).filter(Boolean), name, ''].join(', ');
+    tagsInput?.focus();
   }
 
   function openForm(link: Link | null = null, duplicate = false) {
@@ -497,7 +519,7 @@
       <div class="tags">
         {#each tagsFilter as value (value)}
           <button class="tag filter-tag" type="button" aria-label={`${t.removeTagFilter} ${value}`} onclick={() => toggleTag(value)}>
-            {value}<Icon name="close" />
+            <TagMark color={tagDetails.get(value)?.color} />{value}<Icon name="close" />
           </button>
         {/each}
       </div>
@@ -557,9 +579,16 @@
               <td role="cell">
                 <span class="cell-label" aria-hidden="true">{t.tags}</span>
                 <div class="tags">
-                  {#each link.tags as value (value)}
-                    <button class="tag" type="button" aria-pressed={tagsFilter.includes(value)}
-                      disabled={tagsFilter.length >= 20 && !tagsFilter.includes(value)} onclick={() => toggleTag(value)}>{value}</button>
+                  {#each link.tags as value, tagIndex (value)}
+                    {@const details = tagDetails.get(value)}
+                    {@const descriptionId = `link-tag-description-${link.id}-${tagIndex}`}
+                    <button class="tag tag-with-marker" type="button" aria-pressed={tagsFilter.includes(value)}
+                      aria-describedby={details?.description ? descriptionId : undefined}
+                      title={details?.description}
+                      disabled={tagsFilter.length >= 20 && !tagsFilter.includes(value)} onclick={() => toggleTag(value)}>
+                      <TagMark color={details?.color} />{value}
+                    </button>
+                    {#if details?.description}<span class="visually-hidden" id={descriptionId}>{details.description}</span>{/if}
                   {/each}
                   {#if !link.tags.length}<span class="muted" aria-hidden="true">—</span>{/if}
                 </div>
@@ -672,9 +701,18 @@
       {/if}
       <label class="field">
         <span id="tags-label">{t.tags}</span>
-        <input name="tags" bind:value={tags} disabled={saving} aria-labelledby="tags-label" aria-describedby="tags-hint" aria-invalid={formError === 'invalidTags'} />
+        <input name="tags" bind:this={tagsInput} bind:value={tags} disabled={saving} aria-labelledby="tags-label" aria-describedby="tags-hint" aria-invalid={formError === 'invalidTags'} />
         <small id="tags-hint">{t.tagsHint}</small>
       </label>
+      {#if tagSuggestions.length}
+        <div class="tags" role="group" aria-label={t.tagSuggestions}>
+          {#each tagSuggestions as item (item.name)}
+            <button class="tag tag-with-marker" type="button" onclick={() => addSuggestedTag(item.name)}>
+              <TagMark color={item.color} />{item.name}
+            </button>
+          {/each}
+        </div>
+      {/if}
       {#if editing || duplicating}<label class="row"><input type="checkbox" bind:checked={analyticsEnabled} disabled={saving} />{t.countLinkVisits}</label>{/if}
       {#if formOpen && !editing}
         <details class="protection-options">

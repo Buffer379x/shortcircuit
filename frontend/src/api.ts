@@ -25,6 +25,8 @@ export interface Domain {
 export interface Tag {
   name: string;
   link_count: number;
+  color?: string;
+  description?: string;
 }
 
 export type ConditionType = 'language' | 'device' | 'os' | 'browser' | 'query';
