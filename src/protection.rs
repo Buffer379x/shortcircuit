@@ -1,7 +1,10 @@
 use serde::Serialize;
 use sqlx::{QueryBuilder, SqliteConnection, SqlitePool};
 
-use crate::{history::{self, Action, Actor}, store::push_host_scope};
+use crate::{
+    history::{self, Action, Actor},
+    store::push_host_scope,
+};
 
 pub(crate) struct ProtectionDraft {
     pub(crate) one_time: bool,

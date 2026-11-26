@@ -291,8 +291,8 @@ pub(crate) async fn replace_policy(
     actor: &Actor,
 ) -> Result<Option<PolicyDetails>, PolicyError> {
     let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let result = replace_policy_in(&mut transaction, hosts, id, policy, actor, Action::Policy)
-        .await?;
+    let result =
+        replace_policy_in(&mut transaction, hosts, id, policy, actor, Action::Policy).await?;
     transaction.commit().await?;
     Ok(result)
 }
@@ -347,7 +347,14 @@ pub(crate) async fn replace_policy_in(
     .bind(rules)
     .execute(&mut *connection)
     .await?;
-    history::record(connection, id, actor, action, Some(Snapshot::Policy(previous.policy))).await?;
+    history::record(
+        connection,
+        id,
+        actor,
+        action,
+        Some(Snapshot::Policy(previous.policy)),
+    )
+    .await?;
     Ok(Some(PolicyDetails {
         policy,
         visits_used: previous.visits_used,
@@ -768,10 +775,16 @@ mod tests {
     }
 
     async fn configure(pool: &SqlitePool, id: i64, policy: Policy) {
-        replace_policy(pool, &[HOST.to_owned()], id, policy, &Actor::Admin("test".to_owned()))
-            .await
-            .unwrap()
-            .unwrap();
+        replace_policy(
+            pool,
+            &[HOST.to_owned()],
+            id,
+            policy,
+            &Actor::Admin("test".to_owned()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
     }
 
     fn request(slug: &str) -> RedirectRequest<'_> {
@@ -1035,10 +1048,16 @@ mod tests {
         let link = insert(&pool, "scoped", true).await;
         let unauthorized = ["other.example".to_owned()];
         assert!(
-            replace_policy(&pool, &unauthorized, link, Policy::default(), &Actor::Admin("test".to_owned()))
-                .await
-                .unwrap()
-                .is_none()
+            replace_policy(
+                &pool,
+                &unauthorized,
+                link,
+                Policy::default(),
+                &Actor::Admin("test".to_owned())
+            )
+            .await
+            .unwrap()
+            .is_none()
         );
         assert!(
             read_policy(&pool, &unauthorized, link)
@@ -1073,7 +1092,14 @@ mod tests {
             },
         ] {
             assert!(matches!(
-                replace_policy(&pool, &hosts, link, policy, &Actor::Admin("test".to_owned())).await,
+                replace_policy(
+                    &pool,
+                    &hosts,
+                    link,
+                    policy,
+                    &Actor::Admin("test".to_owned())
+                )
+                .await,
                 Err(PolicyError::Invalid(_))
             ));
         }

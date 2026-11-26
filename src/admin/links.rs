@@ -418,18 +418,25 @@ async fn replace_protection(
         (None, true) => PasswordChange::Remove,
         (None, false) => PasswordChange::Unchanged,
     };
-    protection::replace(&state.pool, &hosts, id, input.one_time, password, &access.actor)
-        .await
-        .map_err(|error| match error {
-            ProtectionError::Database => Problem::unavailable(),
-            ProtectionError::RequiresTemporaryRedirect => Problem(
-                StatusCode::CONFLICT,
-                "protection_requires_temporary_redirect",
-            ),
-            ProtectionError::Consumed => Problem(StatusCode::CONFLICT, "one_time_consumed"),
-        })?
-        .map(Json)
-        .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
+    protection::replace(
+        &state.pool,
+        &hosts,
+        id,
+        input.one_time,
+        password,
+        &access.actor,
+    )
+    .await
+    .map_err(|error| match error {
+        ProtectionError::Database => Problem::unavailable(),
+        ProtectionError::RequiresTemporaryRedirect => Problem(
+            StatusCode::CONFLICT,
+            "protection_requires_temporary_redirect",
+        ),
+        ProtectionError::Consumed => Problem(StatusCode::CONFLICT, "one_time_consumed"),
+    })?
+    .map(Json)
+    .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
 }
 
 async fn read_history(
@@ -459,7 +466,10 @@ async fn purge_history(
     }
     let id = resource_id(id)?;
     let hosts = access.allowed_hosts(&state, false).await?;
-    if !history::purge(&state.pool, &hosts, id).await.map_err(|_| Problem::unavailable())? {
+    if !history::purge(&state.pool, &hosts, id)
+        .await
+        .map_err(|_| Problem::unavailable())?
+    {
         return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
     }
     Ok(StatusCode::NO_CONTENT)
@@ -473,8 +483,7 @@ async fn restore_history(
     if !access.actor.is_admin() {
         return Err(forbidden());
     }
-    let Path((id, revision)) = path
-        .map_err(|_| Problem(StatusCode::NOT_FOUND, "not_found"))?;
+    let Path((id, revision)) = path.map_err(|_| Problem(StatusCode::NOT_FOUND, "not_found"))?;
     if id <= 0 || revision <= 0 {
         return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
     }

@@ -27,7 +27,7 @@
   } as const satisfies Record<ConditionType, keyof Messages>;
 
   const path = $derived(`/links/${link.id}/history`);
-  const dateFormat = $derived(new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'medium' }));
+  const dateFormat = $derived(new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'long' }));
   const numberFormat = $derived(new Intl.NumberFormat(language));
   const compareId = $props.id();
   let history = $state.raw<LinkHistory | null>(null);

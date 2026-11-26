@@ -89,7 +89,12 @@ impl Metadata {
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub(crate) enum Snapshot {
     Metadata(Metadata),
     Policy(Policy),
@@ -259,7 +264,10 @@ pub(crate) async fn purge(
     query.push_bind(link_id);
     push_host_scope(&mut query, hosts);
     query.push(")");
-    let visible = query.build_query_scalar::<bool>().fetch_one(&mut *transaction).await?;
+    let visible = query
+        .build_query_scalar::<bool>()
+        .fetch_one(&mut *transaction)
+        .await?;
     if !visible {
         return Ok(false);
     }
@@ -283,8 +291,12 @@ pub(crate) async fn restore(
         "SELECT history.previous FROM link_history AS history
          JOIN links ON links.id = history.link_id WHERE links.id = ",
     );
-    query.push_bind(link_id).push(" AND history.id = ").push_bind(revision)
-        .push(" AND history.created_at > unixepoch() - ").push_bind(RETENTION_SECONDS);
+    query
+        .push_bind(link_id)
+        .push(" AND history.id = ")
+        .push_bind(revision)
+        .push(" AND history.created_at > unixepoch() - ")
+        .push_bind(RETENTION_SECONDS);
     push_host_scope(&mut query, hosts);
     let previous = query
         .build_query_scalar::<Option<String>>()
@@ -295,15 +307,27 @@ pub(crate) async fn restore(
     match decode(&previous)? {
         Snapshot::Metadata(metadata) => {
             store::update_link_in(
-                &mut transaction, hosts, link_id, metadata.into_update()?, actor, Action::Restore,
+                &mut transaction,
+                hosts,
+                link_id,
+                metadata.into_update()?,
+                actor,
+                Action::Restore,
             )
             .await?
             .ok_or(RestoreError::NotFound)?;
         }
         Snapshot::Policy(policy) => {
-            redirect::replace_policy_in(&mut transaction, hosts, link_id, policy, actor, Action::Restore)
-                .await?
-                .ok_or(RestoreError::NotFound)?;
+            redirect::replace_policy_in(
+                &mut transaction,
+                hosts,
+                link_id,
+                policy,
+                actor,
+                Action::Restore,
+            )
+            .await?
+            .ok_or(RestoreError::NotFound)?;
         }
     }
     transaction.commit().await?;
@@ -372,7 +396,10 @@ mod tests {
             .unwrap();
         let visible = read(&pool, &hosts, link.id).await.unwrap().unwrap();
         assert_eq!(visible.items.len(), MAX_ENTRIES as usize - 1);
-        assert!(matches!(restore(&pool, &hosts, link.id, expired, &actor).await, Err(RestoreError::NotFound)));
+        assert!(matches!(
+            restore(&pool, &hosts, link.id, expired, &actor).await,
+            Err(RestoreError::NotFound)
+        ));
         prune(&pool).await.unwrap();
         let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM link_history WHERE link_id = ?")
             .bind(link.id)

@@ -40,7 +40,7 @@ The proposed retention periods are 90 days for visit details and 24 months for d
 
 Manually deleting an available visit event adjusts its detail and aggregate counts in one transaction. Routine detail expiration retains the daily aggregates already created. Once details expire, deletion operates on the corresponding aggregate range. Clearing all analytics removes detail records, rollups, and queued events while preserving operational access counts. History and audit records have their own retention policies. Define the order of concurrent imports, exports, and deletion requests. Older backups can still contain previously deleted data. The operator's procedure covers backup retention, deletion of affected backup generations, and reapplying deletion requests after restore. See [backup and restore](BACKUP_RESTORE.md) for protected artifacts and configuration.
 
-Link history can retain earlier destinations, including tokens in URL parameters. The application exposes up to 25 revisions from the last 30 days through an authenticated administrator browser session. Use **Clear history** to remove a link's revisions immediately from the live database. Review downloaded history files and backups separately when removing sensitive destinations.
+Link history can retain earlier destinations, including tokens in URL parameters. The application exposes up to 25 revisions from the last 30 days through an authenticated administrator browser session. **Clear history** deletes the link's revision records from the live database. This is logical deletion. Review SQLite storage, downloaded history files, and existing backups separately when removing sensitive destinations.
 
 ## Local Geo-IP and Integrations
 

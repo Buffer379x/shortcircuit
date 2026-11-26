@@ -160,7 +160,8 @@ pub(crate) async fn update_link(
     actor: &Actor,
 ) -> Result<Option<Link>, sqlx::Error> {
     let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let result = update_link_in(&mut transaction, hosts, id, update, actor, Action::Metadata).await?;
+    let result =
+        update_link_in(&mut transaction, hosts, id, update, actor, Action::Metadata).await?;
     transaction.commit().await?;
     Ok(result)
 }
@@ -219,14 +220,16 @@ pub(crate) async fn update_link_in(
         return Ok(Some(link));
     }
 
-    sqlx::query("UPDATE links SET target = ?, title = ?, enabled = ?, analytics_enabled = ? WHERE id = ?")
-        .bind(&link.target)
-        .bind(&link.title)
-        .bind(link.enabled)
-        .bind(link.analytics_enabled)
-        .bind(id)
-        .execute(&mut *connection)
-        .await?;
+    sqlx::query(
+        "UPDATE links SET target = ?, title = ?, enabled = ?, analytics_enabled = ? WHERE id = ?",
+    )
+    .bind(&link.target)
+    .bind(&link.title)
+    .bind(link.enabled)
+    .bind(link.analytics_enabled)
+    .bind(id)
+    .execute(&mut *connection)
+    .await?;
     if tags_changed {
         sqlx::query("DELETE FROM link_tags WHERE link_id = ?")
             .bind(id)
@@ -234,7 +237,14 @@ pub(crate) async fn update_link_in(
             .await?;
         link.tags = insert_tags(connection, id, link.tags).await?;
     }
-    history::record(connection, id, actor, action, Some(Snapshot::Metadata(previous))).await?;
+    history::record(
+        connection,
+        id,
+        actor,
+        action,
+        Some(Snapshot::Metadata(previous)),
+    )
+    .await?;
     Ok(Some(link))
 }
 
@@ -460,7 +470,13 @@ mod tests {
         let links = list(&pool, &hosts, 0).await.unwrap();
         assert_eq!(links[0].target, TARGET);
         assert_eq!(links[0].tags, ["docs", "work"]);
-        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM link_history").fetch_one(&pool).await.unwrap(), 0);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM link_history")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -484,7 +500,11 @@ mod tests {
             ..LinkUpdate::default()
         };
         let actor = Actor::Admin("test".to_owned());
-        assert!(update_link(&pool, &hosts, link.id, update, &actor).await.is_err());
+        assert!(
+            update_link(&pool, &hosts, link.id, update, &actor)
+                .await
+                .is_err()
+        );
         let links = list(&pool, &hosts, 0).await.unwrap();
         assert_eq!(links[0].target, TARGET);
         assert_eq!(links[0].tags, ["docs", "work"]);
