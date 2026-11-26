@@ -122,8 +122,8 @@
     const file = input.files?.[0];
     if (!file) return;
     if (file.size > maxLogoBytes || (file.type && file.type !== 'image/png')) {
+      removeLogo();
       logoError = file.size > maxLogoBytes ? 'invalidQrLogoBody' : 'invalidQrLogoType';
-      input.value = '';
       return;
     }
     logoError = null;

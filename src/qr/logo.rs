@@ -20,13 +20,19 @@ impl Image {
         }
         let mut decoder = png::Decoder::new_with_limits(
             Cursor::new(bytes),
-            png::Limits { bytes: DECODER_BUDGET },
+            png::Limits {
+                bytes: DECODER_BUDGET,
+            },
         );
         decoder.set_ignore_text_chunk(true);
         decoder.set_ignore_iccp_chunk(true);
         decoder.set_transformations(png::Transformations::normalize_to_color8());
-        let header = decoder.read_header_info().map_err(|_| QrError::InvalidLogo)?;
-        if !(1..=MAX_INPUT_SIDE).contains(&header.width) || !(1..=MAX_INPUT_SIDE).contains(&header.height) {
+        let header = decoder
+            .read_header_info()
+            .map_err(|_| QrError::InvalidLogo)?;
+        if !(1..=MAX_INPUT_SIDE).contains(&header.width)
+            || !(1..=MAX_INPUT_SIDE).contains(&header.height)
+        {
             return Err(QrError::InvalidLogoDimensions);
         }
         let mut reader = decoder.read_info().map_err(|_| QrError::InvalidLogo)?;
@@ -35,9 +41,12 @@ impl Image {
         }
         let length = reader.output_buffer_size().ok_or(QrError::InvalidLogo)?;
         let mut pixels = vec![0; length];
-        let frame = reader.next_frame(&mut pixels).map_err(|_| QrError::InvalidLogo)?;
+        let frame = reader
+            .next_frame(&mut pixels)
+            .map_err(|_| QrError::InvalidLogo)?;
         reader.finish().map_err(|_| QrError::InvalidLogo)?;
-        if reader.info().animation_control.is_some() || frame.color_type == png::ColorType::Indexed {
+        if reader.info().animation_control.is_some() || frame.color_type == png::ColorType::Indexed
+        {
             return Err(QrError::InvalidLogo);
         }
         Ok(Self {
@@ -146,8 +155,8 @@ fn fill(pixels: &mut [u8], size: usize, area: &Rectangle, color: Rgb) {
     for row in area.y..area.y + area.height {
         let first = (row * size + area.x) * 4;
         let last = first + area.width * 4;
-        for pixel in pixels[first..last].chunks_exact_mut(4) {
-            pixel.copy_from_slice(&rgba);
+        for pixel in pixels[first..last].as_chunks_mut::<4>().0 {
+            *pixel = rgba;
         }
     }
 }
@@ -157,8 +166,12 @@ pub(super) fn encode_png(size: usize, pixels: &[u8]) -> Result<Vec<u8>, QrError>
     let mut encoder = png::Encoder::new(&mut output, size as u32, size as u32);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_color(png::ColorType::Rgba);
-    let mut writer = encoder.write_header().map_err(|_| QrError::EncodingFailed)?;
-    writer.write_image_data(pixels).map_err(|_| QrError::EncodingFailed)?;
+    let mut writer = encoder
+        .write_header()
+        .map_err(|_| QrError::EncodingFailed)?;
+    writer
+        .write_image_data(pixels)
+        .map_err(|_| QrError::EncodingFailed)?;
     writer.finish().map_err(|_| QrError::EncodingFailed)?;
     Ok(output)
 }
@@ -188,11 +201,21 @@ mod tests {
     fn rejects_oversized_and_animated_pngs() {
         let options = Options::default();
         assert_eq!(
-            generate_with_logo("https://q.co/A", Format::Png, &options, &fixture(513, 2, false)),
+            generate_with_logo(
+                "https://q.co/A",
+                Format::Png,
+                &options,
+                &fixture(513, 2, false)
+            ),
             Err(QrError::InvalidLogoDimensions)
         );
         assert_eq!(
-            generate_with_logo("https://q.co/A", Format::Png, &options, &fixture(16, 8, true)),
+            generate_with_logo(
+                "https://q.co/A",
+                Format::Png,
+                &options,
+                &fixture(16, 8, true)
+            ),
             Err(QrError::InvalidLogo)
         );
     }
@@ -207,14 +230,19 @@ mod tests {
             frame: Some("outline".to_owned()),
             ..Options::default()
         };
-        let svg = String::from_utf8(generate_with_logo(VALUE, Format::Svg, &options, &logo).unwrap()).unwrap();
+        let svg =
+            String::from_utf8(generate_with_logo(VALUE, Format::Svg, &options, &logo).unwrap())
+                .unwrap();
         assert!(svg.contains(r##"fill="#90b1d2""##));
         assert!(!svg.contains("<image"));
         let png = generate_with_logo(VALUE, Format::Png, &options, &logo).unwrap();
         let mut reader = png::Decoder::new(Cursor::new(png)).read_info().unwrap();
         let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
         let frame = reader.next_frame(&mut pixels).unwrap();
-        assert_eq!((frame.width, frame.height, frame.color_type), (512, 512, png::ColorType::Rgba));
+        assert_eq!(
+            (frame.width, frame.height, frame.color_type),
+            (512, 512, png::ColorType::Rgba)
+        );
         assert_eq!(pixels[3], 0);
         let center = (256 * 512 + 256) * 4;
         assert_eq!(&pixels[center..center + 4], &[144, 177, 210, 255]);

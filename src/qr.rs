@@ -290,7 +290,16 @@ fn svg(
             .expect("writing to a String cannot fail");
     }
     output.push_str("\"/>");
-    for (Rectangle { x, y, width, height }, color) in overlay {
+    for (
+        Rectangle {
+            x,
+            y,
+            width,
+            height,
+        },
+        color,
+    ) in overlay
+    {
         write!(
             output,
             r#"<rect x="{x}" y="{y}" width="{width}" height="{height}" fill="{color}"/>"#

@@ -11,6 +11,26 @@ async function verify() {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1360, height: 900 } });
+    await page.addInitScript(() => {
+      const request = window.fetch.bind(window);
+      window.fetch = (url, options) => {
+        if (!window.delayNextLogoPreview || !String(url).includes('/qr/logo?format=png')) {
+          return request(url, options);
+        }
+        window.delayNextLogoPreview = false;
+        window.delayedLogoPreview = true;
+        return new Promise((_resolve, reject) => {
+          if (!options?.signal) {
+            reject(new Error('A logo preview must be cancellable.'));
+            return;
+          }
+          options.signal.addEventListener('abort', () => {
+            window.abortedLogoPreview = true;
+            reject(options.signal.reason);
+          }, { once: true });
+        });
+      };
+    });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => {
@@ -152,13 +172,18 @@ async function verify() {
     assert.equal(await styledPreview.getAttribute('src'), previewUrl.pathname + previewUrl.search);
     await qr.getByRole('combobox', { name: 'Error correction', exact: true }).selectOption('Q');
     const logo = qr.getByLabel('PNG logo', { exact: true });
+    await page.evaluate(() => { window.delayNextLogoPreview = true; });
     await logo.setInputFiles({
       name: 'fixture.png',
       mimeType: 'image/png',
       buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAYAAADwdn+XAAAAFUlEQVR4nGNQTFv8nxLMMGrAcDAAAC6wFJBQyGgvAAAAAElFTkSuQmCC', 'base64'),
     });
+    await page.waitForFunction(() => window.delayedLogoPreview);
+    await qr.getByRole('combobox', { name: 'Resolution in pixels', exact: true }).selectOption('768');
+    await page.waitForFunction(() => window.abortedLogoPreview);
     const logoPreview = qr.locator('[role="img"] canvas:visible');
     await logoPreview.waitFor();
+    assert.equal(await logoPreview.evaluate(canvas => canvas.width), 768);
     assert.equal(await qr.getByRole('combobox', { name: 'Error correction', exact: true }).inputValue(), 'H');
     assert.deepEqual(await logoPreview.evaluate(canvas =>
       [...canvas.getContext('2d').getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data]), [33, 102, 163, 255]);

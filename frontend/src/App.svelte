@@ -43,10 +43,10 @@
   let signOutError = $state<keyof Messages | null>(null);
 
   const request = createApi(() => user?.csrf);
-  const api: Api = async (path, method, data, responseFormat) => {
+  const api: Api = async (path, method, data, responseFormat, signal) => {
     const activeUser = user;
     try {
-      return await request(path, method, data, responseFormat);
+      return await request(path, method, data, responseFormat, signal);
     } catch (error) {
       if (activeUser && activeUser === user && error instanceof ApiError && error.status === 401) {
         if (path === '/auth/password') void refreshSession();

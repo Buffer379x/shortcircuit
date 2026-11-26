@@ -541,10 +541,15 @@ async fn link_qr_logo(
 ) -> Result<QrResponse, Problem> {
     let content_types = request.headers().get_all(header::CONTENT_TYPE);
     let mut content_types = content_types.iter();
-    if content_types.next().is_none_or(|value| value != "image/png")
+    if content_types
+        .next()
+        .is_none_or(|value| value != "image/png")
         || content_types.next().is_some()
     {
-        return Err(Problem(StatusCode::UNSUPPORTED_MEDIA_TYPE, "invalid_qr_logo_type"));
+        return Err(Problem(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid_qr_logo_type",
+        ));
     }
     let _slot = QR_LOGO_UPLOADS.try_acquire().map_err(|_| qr_busy())?;
     let image = tokio::time::timeout(QR_LOGO_TIMEOUT, Bytes::from_request(request, &state))
@@ -579,15 +584,10 @@ async fn render_qr(
             .map_err(|_| Problem::unavailable())?
             .filter(|(host, _)| access.is_none_or(|access| access.permits(host)))
             .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
-    let domain = domains::lookup(
-        &state.pool,
-        &state.hosts,
-        &host,
-        state.config.local_port,
-    )
-    .await
-    .map_err(|_| Problem::unavailable())?
-    .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
+    let domain = domains::lookup(&state.pool, &state.hosts, &host, state.config.local_port)
+        .await
+        .map_err(|_| Problem::unavailable())?
+        .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
     let value = format!("{}/{}", domain.origin, slug);
     let render_options = qr::Options {
         size: options.size,
