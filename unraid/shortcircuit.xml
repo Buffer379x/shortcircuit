@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Container version="2">
   <Name>shortcircuit</Name>
-  <Repository>ghcr.io/buffer379x/shortcircuit:0.6.0-preview.1</Repository>
+  <Repository>ghcr.io/buffer379x/shortcircuit:0.6.0-preview.2</Repository>
   <Registry>https://github.com/users/Buffer379x/packages/container/package/shortcircuit</Registry>
   <Network>bridge</Network>
   <Shell>sh</Shell>

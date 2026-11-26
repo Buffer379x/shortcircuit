@@ -1,6 +1,6 @@
 # Unraid installation
 
-ShortCircuit runs in one container on `linux/amd64`. Docker Manager pulls `ghcr.io/buffer379x/shortcircuit:0.6.0-preview.1` and creates a persistent Docker volume on first start. The image uses UID and GID 10001, public port 8080, and admin port 8081. [Download the template](https://github.com/Buffer379x/shortcircuit/releases/download/v0.6.0-preview.1/my-shortcircuit.xml) · [Docker icon](../assets/branding/unraid-docker.png) · [SVG favicon](../assets/branding/favicon.svg) · [PNG favicon](../assets/branding/favicon.png)
+ShortCircuit runs in one container on `linux/amd64`. Docker Manager pulls `ghcr.io/buffer379x/shortcircuit:0.6.0-preview.2` and creates a persistent Docker volume on first start. The image uses UID and GID 10001, public port 8080, and admin port 8081. [Download the template](https://github.com/Buffer379x/shortcircuit/releases/download/v0.6.0-preview.2/my-shortcircuit.xml) · [Docker icon](../assets/branding/unraid-docker.png) · [SVG favicon](../assets/branding/favicon.svg) · [PNG favicon](../assets/branding/favicon.png)
 
 ## Install with Docker Manager
 
@@ -33,9 +33,11 @@ Plain HTTP in **Admin origin** is allowed only for loopback addresses. An `http:
 
 The named volume `shortcircuit-data` persists across container replacement. It resides in Docker's data store. Export a verified backup outside that store before recreating it. Use a separate volume name if you install a second ShortCircuit instance. [Docker volumes](https://docs.docker.com/engine/storage/volumes/) · [Backup and restore](BACKUP_RESTORE.md)
 
-If you already have data in an appdata bind mount, edit the existing container and change only **Repository** to the published image reference. Preserve the existing `/data` mapping. For a new bind mount, remove `--volume=shortcircuit-data:/data` and add a path mapping to `/data`. Use a local pool directory writable by UID/GID 10001. [Unraid shares](https://docs.unraid.net/unraid-os/using-unraid-to/manage-storage/shares/) · [SQLite WAL](https://www.sqlite.org/wal.html)
+For a new appdata bind mount, remove `--volume=shortcircuit-data:/data` and add a path mapping to `/data`. Use a local pool directory writable by UID/GID 10001. [Unraid shares](https://docs.unraid.net/unraid-os/using-unraid-to/manage-storage/shares/) · [SQLite WAL](https://www.sqlite.org/wal.html)
 
-Take a verified backup before changing the version in **Repository**. Preserve the `/data` mount, public hostnames, and admin origin when updating.
+To upgrade from preview.1, take a verified backup with the running image. In Docker Manager, edit the existing container, set **Repository** to `ghcr.io/buffer379x/shortcircuit:0.6.0-preview.2`, and click **Apply**. Keep the existing `/data` mount, network and any fixed IP, public hostnames, and admin origin. ShortCircuit applies the SQLite migrations to schema 11 on startup.
+
+For rollback, use preview.1 with the pre-upgrade preview.1 backup in a separate data volume. Verify the restored container and its links before moving traffic to it. [Backup and rollback](BACKUP_RESTORE.md)
 
 ## Configuration
 

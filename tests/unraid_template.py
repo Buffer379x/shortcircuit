@@ -1,6 +1,7 @@
-import re
+import json
 import shlex
 import struct
+import tomllib
 import unittest
 from pathlib import Path
 from xml.etree import ElementTree
@@ -22,10 +23,11 @@ class UnraidTemplate(unittest.TestCase):
         self.assertEqual(template.findtext("Network"), "bridge")
         self.assertEqual(template.findtext("Privileged"), "false")
         version = (ROOT / "Dockerfile").read_text().split('org.opencontainers.image.version="')[1].split('"')[0]
-        self.assertRegex(
-            template.findtext("Repository"),
-            rf"^ghcr\.io/buffer379x/shortcircuit:{re.escape(version)}-preview\.[1-9][0-9]*$",
-        )
+        self.assertRegex(version, r"^\d+\.\d+\.\d+-preview\.[1-9][0-9]*$")
+        self.assertEqual(template.findtext("Repository"), f"ghcr.io/buffer379x/shortcircuit:{version}")
+        self.assertEqual(tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"], version)
+        self.assertEqual(json.loads((ROOT / "frontend" / "package.json").read_text())["version"], version)
+        self.assertIn(f"image: shortcircuit:{version}\n", (ROOT / "compose.yaml").read_text())
 
         params = shlex.split(template.findtext("ExtraParams"))
         self.assertEqual(

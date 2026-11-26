@@ -29,7 +29,8 @@ jobs:
       packages: write
     env:
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
-      VERSION: 0.6.0-preview.1
+      VERSION: 0.6.0-preview.2
+      PREVIOUS_IMAGE: ghcr.io/buffer379x/shortcircuit@sha256:950c05244202d4f654cbbe83094f8a75958357c4d51b55b3caaaaf07d3608ebe
     outputs:
       image: ${{ steps.publish.outputs.image }}
       digest: ${{ steps.publish.outputs.digest }}
@@ -82,9 +83,37 @@ jobs:
           test "$(docker inspect --format '{{.Config.User}}' shortcircuit-template)" = '10001:10001'
           docker exec shortcircuit-template test -f /data/shortcircuit.db
           docker exec shortcircuit-template test -s /usr/share/doc/shortcircuit/LICENSE
+          test "$(docker exec shortcircuit-template shortcircuit --version)" = "shortcircuit $VERSION"
           docker exec shortcircuit-template shortcircuit setup-token >/dev/null
           curl --fail --silent --show-error http://localhost:8081/favicon.png --output "$RUNNER_TEMP/favicon.png"
           cmp "$RUNNER_TEMP/favicon.png" assets/branding/favicon.png
+      - name: Upgrade a disposable volume from preview.1
+        if: steps.version.outputs.image != ''
+        env:
+          IMAGE: ${{ steps.version.outputs.image }}
+        run: |
+          set -euo pipefail
+          container=shortcircuit-preview-upgrade
+          volume=shortcircuit-preview-upgrade
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true; docker volume rm "$volume" >/dev/null 2>&1 || true' EXIT
+          docker pull --platform linux/amd64 "$PREVIOUS_IMAGE"
+          start_upgrade_test() {
+            docker run --detach --name "$container" --pull=never --read-only \
+              --cap-drop=ALL --security-opt=no-new-privileges=true \
+              --publish=127.0.0.1:8080:8080 --publish=127.0.0.1:8081:8081 \
+              --volume="$volume:/data" "$1"
+            curl --retry 30 --retry-connrefused --retry-delay 1 --max-time 5 --fail --silent --show-error \
+              http://127.0.0.1:8081/readyz
+          }
+          start_upgrade_test "$PREVIOUS_IMAGE"
+          setup_token=$(docker exec "$container" shortcircuit setup-token)
+          printf '::add-mask::%s\n' "$setup_token"
+          UPGRADE_SETUP_TOKEN="$setup_token" python3 tests/preview_upgrade.py seed
+          docker exec "$container" shortcircuit backup >/dev/null
+          docker stop "$container"
+          docker rm "$container"
+          start_upgrade_test "$IMAGE"
+          python3 tests/preview_upgrade.py verify
       - name: Upload the image and create a GitHub prerelease
         if: steps.version.outputs.image != ''
         id: publish
@@ -104,7 +133,9 @@ jobs:
           {
             printf 'Development preview for Unraid Docker Manager on linux/amd64.\n\n'
             printf -- '- Image `%s`\n- Digest `%s@%s`\n' "$IMAGE" "$registry" "$digest"
-            printf '\n[Installation and first sign-in](https://github.com/%s/blob/v%s/docs/UNRAID_INSTALLATION.md)\n' "$GITHUB_REPOSITORY" "$VERSION"
+            printf '\n## Changes\n'
+            awk -v heading="## $VERSION" '$0 == heading { release = 1; next } release && /^## / { exit } release { print }' CHANGELOG.md
+            printf '[Installation and upgrade](https://github.com/%s/blob/v%s/docs/UNRAID_INSTALLATION.md)\n' "$GITHUB_REPOSITORY" "$VERSION"
           } > "$notes"
           cp unraid/shortcircuit.xml "$RUNNER_TEMP/my-shortcircuit.xml"
           gh release create "v$VERSION" "$RUNNER_TEMP/my-shortcircuit.xml" \
