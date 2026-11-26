@@ -96,6 +96,8 @@ export const linkSorts = [
   'host_asc', 'host_desc', 'target_asc', 'target_desc', 'enabled_first', 'disabled_first',
 ] as const;
 export type LinkSort = typeof linkSorts[number];
+export type LinkView = 'unarchived' | 'favorites' | 'archived';
+export type TagMatch = 'all' | 'any';
 
 export interface LinkCursor {
   id: number;
@@ -106,7 +108,9 @@ export interface LinkCursor {
 export interface LinkSearch {
   query?: string;
   host?: string;
-  tag?: string;
+  tags?: string[];
+  tag_match?: TagMatch;
+  view: LinkView;
   enabled?: boolean;
   sort: LinkSort;
   after?: LinkCursor;
@@ -117,7 +121,12 @@ export interface LinkSearchPage {
   next_cursor: LinkCursor | null;
 }
 
-export interface CatalogLink extends Link {
+export interface LinkOrganization {
+  favorite: boolean;
+  archived: boolean;
+}
+
+export interface CatalogLink extends Link, LinkOrganization {
   selection_key: string;
 }
 

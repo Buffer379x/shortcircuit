@@ -1,6 +1,6 @@
 # ShortCircuit feature matrix
 
-Coverage as of `0.6.0-preview.2`. **Current** means the current development implementation is present in source. **Planned** means work is scheduled in the roadmap. **Optional** identifies additions subject to demonstrated need. [Project status](PROJECT_STATUS.md) · [Roadmap](ROADMAP.md)
+Coverage reflects the current development branch. **Current** means the implementation is present in source. **Planned** means work is scheduled in the roadmap. **Optional** identifies additions subject to demonstrated need. [Project status](PROJECT_STATUS.md) · [Roadmap](ROADMAP.md)
 
 Priority **P0** covers production readiness and safe operation. **P1** covers the core 1.0 feature set. **P2** covers follow-up work and enhancements. **P3** and **P4** cover longer-term options.
 
@@ -18,7 +18,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Domain management and fallbacks | Current | P0/P1 | Manage allowed public hosts from the admin UI and configure validated fallback targets per domain. Test route collisions, errors, and redirect loops. |
 | Ordered redirect rules | Current | P1 | The first matching rule wins. The administration interface edits and reorders rules. Conditions use language, device, operating system, browser, and query values. |
 | Path matching extensions and aliases | Optional | P2 | Evaluate Unicode slugs, case-insensitive or trailing-slash matching, and explicit aliases against collision, encoding, and proxy requirements. |
-| Search, filters, and sorting | Current | P1 | Search the full catalog by title, slug, domain, destination, or tag. Combine domain, status, and tag filters and sort paginated results. |
+| Search, filters, and sorting | Current | P1 | Search the full catalog by title, slug, domain, destination, or tag. Combine domain and status filters with all-tag or any-tag matching and sort paginated results. |
 | Bulk actions | Current | P1 | Select up to 50 links, change their status or tags atomically, export native JSON or CSV, and confirm permanent deletion. |
 | Slug generation settings | Planned | P1 | Allow a configurable generated length while preserving database uniqueness and bounded retries. |
 | Tags | Current | P1 | View tag counts, rename or merge tags, and remove their assignments. Tag suggestions and colors are planned. |
@@ -28,7 +28,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Link history | Current | P2 | Compare and restore earlier metadata and redirect policies. History lists verified actors and protection changes and supports JSON export and deletion. |
 | Rule simulation | Planned | P2 | Preview the selected destination for representative inputs. The current editor already supports rule ordering. |
 | URL Cleaner | Current | P2 | Review known trackers and one-time exceptions locally. Use the proposed URL explicitly before saving. Leave recognized signed URLs unchanged. |
-| Favorites and archives | Planned | P2 | Pin frequently used links and archive links from the active list. |
+| Favorites and archives | Current | P2 | Mark links as favorites or archive them from the default view. Archived links continue to use their current redirect and access settings. |
 | Collections | Optional | P2 | Evaluate a lightweight collections model as an additional organization option. |
 | Link Pages | Optional | P3 | Evaluate a bounded content model with templates, branding, and scheduled availability. |
 

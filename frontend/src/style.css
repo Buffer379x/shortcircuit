@@ -48,7 +48,7 @@
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--font); }
 button, input, select { font: inherit; color: inherit; }
 button, select { cursor: pointer; }
-button:disabled { cursor: default; opacity: .65; }
+button:disabled, button[aria-disabled='true'] { cursor: default; opacity: .65; }
 a { color: var(--accent-text); text-underline-offset: 3px; }
 a:hover { text-decoration-thickness: 2px; }
 :focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
@@ -238,6 +238,11 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 16px; }
 .toolbar select { max-width: 100%; font-size: 13px; }
 .toolbar > label { min-width: 0; }
+.tag-filters { padding-top: 0; }
+.filter-tag { display: inline-flex; align-items: center; gap: 4px; }
+.filter-tag .icon { width: 13px; height: 13px; }
+.favorite-button[aria-pressed='true'] { color: var(--accent-text); }
+.favorite-button[aria-pressed='true'] .icon { fill: currentColor; }
 .search {
   display: flex;
   flex: 1 1 190px;

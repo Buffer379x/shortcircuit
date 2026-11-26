@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add favorites and an archive view to the link catalog. Archiving preserves the public redirect and its access settings.
+- Filter the link catalog by up to 20 tags, matching all or any of them.
+
 ## 0.6.0-preview.2
 
 - Apply status or tag changes to selected links, export the selection as JSON or CSV, or confirm atomic deletion.

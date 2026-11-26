@@ -316,7 +316,7 @@ async function verify() {
         slug: 'backup-check',
         target: 'https://example.test/backup-check',
         title: 'Backup check',
-        tags: [],
+        tags: ['internal'],
         enabled: true,
         analytics_enabled: true,
       }] })),
@@ -355,6 +355,54 @@ async function verify() {
     await page.getByRole('combobox', { name: 'Sort links', exact: true }).selectOption('slug_asc');
     await linkTable.locator('.link-short').first().filter({ hasText: 'localhost/backup-check' }).waitFor();
     assert.equal(await linkTable.locator('.link-short').first().textContent(), 'localhost/backup-check');
+    const tagFilter = page.getByRole('combobox', { name: 'Filter by tags', exact: true });
+    await tagFilter.selectOption('docs');
+    await tagFilter.selectOption('internal');
+    const backupRow = linkTable.getByRole('row').filter({ hasText: 'localhost/backup-check' });
+    const guideLink = linkTable.getByRole('link', { name: 'localhost/test/guide', exact: true });
+    await guideLink.waitFor();
+    assert.equal(await backupRow.count(), 0);
+    await page.getByRole('combobox', { name: 'Match tags', exact: true }).selectOption('any');
+    await backupRow.waitFor();
+    await guideLink.waitFor();
+    await page.getByRole('button', { name: 'Remove tag filter docs', exact: true }).click();
+    await page.getByRole('button', { name: 'Remove tag filter internal', exact: true }).click();
+
+    const view = page.getByRole('combobox', { name: 'Link view', exact: true });
+    const favorite = backupRow.getByRole('button', { name: 'Favorite', exact: true });
+    await favorite.click();
+    await page.getByText('Link added to favorites.', { exact: true }).waitFor();
+    await view.selectOption('favorites');
+    await backupRow.waitFor();
+    assert.equal(await favorite.getAttribute('aria-pressed'), 'true');
+    const organizationPath = /\/api\/v1\/links\/\d+\/organization$/;
+    let releaseArchive;
+    const archivePending = new Promise(resolve => { releaseArchive = resolve; });
+    await page.route(organizationPath, async route => {
+      await archivePending;
+      await route.continue();
+    }, { times: 1 });
+    const archiveSent = page.waitForRequest(organizationPath);
+    await backupRow.getByRole('button', { name: 'Archive link', exact: true }).click();
+    await archiveSent;
+    const searchBox = page.getByRole('searchbox', { name: 'Search all links', exact: true });
+    try {
+      await searchBox.focus();
+    } finally {
+      releaseArchive();
+    }
+    await page.getByText('There are no favorites.', { exact: true }).waitFor();
+    assert.equal(await searchBox.evaluate(input => input === document.activeElement), true);
+    const archivedRedirect = await page.request.get(publicOrigin + '/backup-check', { maxRedirects: 0 });
+    assert.equal(archivedRedirect.status(), 302);
+    assert.equal(archivedRedirect.headers().location, 'https://example.test/backup-check');
+    await view.selectOption('archived');
+    await backupRow.getByRole('button', { name: 'Unarchive link', exact: true }).click();
+    await page.getByText('There are no archived links.', { exact: true }).waitFor();
+    await view.selectOption('favorites');
+    await backupRow.waitFor();
+    assert.equal(await favorite.getAttribute('aria-pressed'), 'true');
+    await view.selectOption('unarchived');
     await page.getByRole('combobox', { name: 'Filter by domain', exact: true }).selectOption('localhost');
     const searchResponse = page.waitForResponse(response => response.url() === admin + '/api/v1/links/search'
       && response.request().postDataJSON()?.query === 'chapter=intro#start');
@@ -362,7 +410,7 @@ async function verify() {
     const found = await searchResponse;
     assert.equal(found.status(), 200);
     assert.equal(found.request().method(), 'POST');
-    assert.deepEqual(found.request().postDataJSON(), { query: 'chapter=intro#start', host: 'localhost', sort: 'slug_asc' });
+    assert.deepEqual(found.request().postDataJSON(), { query: 'chapter=intro#start', host: 'localhost', view: 'unarchived', sort: 'slug_asc' });
     await linkTable.getByRole('link', { name: 'localhost/test/guide', exact: true }).waitFor();
     assert.equal(await linkTable.locator('tbody tr').count(), 1);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);

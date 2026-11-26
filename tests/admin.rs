@@ -215,6 +215,174 @@ async fn catalog_search_spans_pages_and_a_deleted_cursor_anchor() {
     assert!(next["next_cursor"].is_null());
 }
 
+#[tokio::test]
+async fn archive_and_favorite_are_independent_of_the_public_redirect() {
+    let app = App::start().await;
+    let (cookie, csrf) = app.setup().await;
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    let target = "https://example.test/?Signature=A%2f#saved";
+    let create = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links",
+        &headers,
+        Some(json!({"host":"go.example", "slug":"Team/Docs", "target":target})),
+    )
+    .await;
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let search = "/api/v1/links/search";
+    let all = request(&app.admin, Method::POST, search, &headers, Some(json!({}))).await;
+    let link = response_body(all).await["items"][0].clone();
+    assert_eq!(link["favorite"], false);
+    assert_eq!(link["archived"], false);
+    let endpoint = format!("/api/v1/links/{}/organization", link["id"]);
+    let original_key = &link["selection_key"];
+    let change = json!({"key":original_key, "favorite":true, "archived":true});
+    let denied = request(
+        &app.admin,
+        Method::PATCH,
+        &endpoint,
+        &headers[..2],
+        Some(change.clone()),
+    )
+    .await;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let updated = request(&app.admin, Method::PATCH, &endpoint, &headers, Some(change)).await;
+    assert_eq!(updated.status(), StatusCode::OK);
+    assert_eq!(
+        response_body(updated).await,
+        json!({"favorite": true, "archived": true})
+    );
+
+    for (view, count) in [
+        ("unarchived", 0),
+        ("favorites", 0),
+        ("archived", 1),
+        ("all", 1),
+    ] {
+        let page = request(
+            &app.admin,
+            Method::POST,
+            search,
+            &headers,
+            Some(json!({"view":view})),
+        )
+        .await;
+        assert_eq!(page.status(), StatusCode::OK);
+        assert_eq!(
+            response_body(page).await["items"].as_array().unwrap().len(),
+            count,
+            "{view}"
+        );
+    }
+    let redirect = request(
+        &app.public,
+        Method::GET,
+        "/Team/Docs",
+        &[("host", "go.example")],
+        None,
+    )
+    .await;
+    assert_eq!(redirect.status(), StatusCode::FOUND);
+    assert_eq!(redirect.headers()[header::LOCATION], target);
+
+    let restored = request(
+        &app.admin,
+        Method::PATCH,
+        &endpoint,
+        &headers,
+        Some(json!({"key":original_key, "archived":false})),
+    )
+    .await;
+    assert_eq!(
+        response_body(restored).await,
+        json!({"favorite": true, "archived": false})
+    );
+    let favorites = request(
+        &app.admin,
+        Method::POST,
+        search,
+        &headers,
+        Some(json!({"view":"favorites"})),
+    )
+    .await;
+    assert_eq!(
+        response_body(favorites).await["items"][0]["slug"],
+        "Team/Docs"
+    );
+
+    sqlx::raw_sql(
+        "DELETE FROM links; INSERT INTO links(host, slug, target)
+         VALUES ('go.example', 'replacement', 'https://example.test');",
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let stale = request(
+        &app.admin,
+        Method::PATCH,
+        &endpoint,
+        &headers,
+        Some(json!({"key":original_key, "favorite":true})),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let favorite: bool =
+        sqlx::query_scalar("SELECT favorite FROM links WHERE slug = 'replacement'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(!favorite);
+}
+
+#[tokio::test]
+async fn catalog_combines_multiple_tags_with_all_or_any() {
+    let app = App::start().await;
+    let (cookie, csrf) = app.setup().await;
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    sqlx::raw_sql(
+        "INSERT INTO links(id, host, slug, target) VALUES
+            (1, 'go.example', 'both', 'https://example.test/both'),
+            (2, 'go.example', 'one', 'https://example.test/one'),
+            (3, 's.example', 'elsewhere', 'https://example.test/elsewhere');
+         INSERT INTO link_tags(link_id, tag) VALUES
+            (1, 'docs'), (1, 'internal'), (2, 'docs'), (3, 'internal');",
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    for (mode, expected) in [("all", vec!["both"]), ("any", vec!["both", "one"])] {
+        let response = request(
+            &app.admin,
+            Method::POST,
+            "/api/v1/links/search",
+            &headers,
+            Some(json!({
+                "host":"go.example", "tags":["docs", "internal", " docs "],
+                "tag_match":mode, "sort":"slug_asc"
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = response_body(response).await;
+        let slugs: Vec<_> = payload["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["slug"].as_str().unwrap())
+            .collect();
+        assert_eq!(slugs, expected);
+    }
+}
+
 const QR_TEMPLATES: &str = "/api/v1/qr/templates";
 
 #[tokio::test]

@@ -22,6 +22,9 @@
     rule: 'M4 6h16 M4 12h16 M4 18h16 M8 4v4 M15 10v4 M10 16v4',
     lock: 'M6 11h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z M8 11V7a4 4 0 0 1 8 0v4 M12 15v2',
     history: 'M3 12a9 9 0 1 1 2.6 6.4 M3 4v8h8 M12 7v5l3 2',
+    star: 'M12 3l2.8 5.7 6.3.9-4.6 4.4 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.2-.9L12 3z',
+    archive: 'M4 8h16v13H4z M3 3h18v5H3z M9 12h6',
+    unarchive: 'M4 8h16v13H4z M3 3h18v5H3z M12 18v-7 M9 14l3-3 3 3',
   } as const;
 
   let { name }: { name: keyof typeof paths } = $props();

@@ -3414,6 +3414,158 @@
         "description": "Restores one category. Protection, visit counters, and the public link identity stay intact."
       }
     },
+    "/api/v1/links/{id}/organization": {
+      "patch": {
+        "operationId": "updateLinkOrganization",
+        "summary": "Set the favorite or archive state of a link",
+        "description": "Browser-session mutation. Use the selection key from catalog search to identify the exact link instance.",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Numeric link ID.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          },
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkOrganizationPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated favorite and archive flags.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkOrganization"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid browser session is required.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request Origin or X-CSRF-Token is missing or invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The JSON body exceeds the administration request limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type must be application/json.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The key or organization flags are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The link is missing, replaced, or outside the configured catalog.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/links/{id}/policy": {
       "parameters": [
         {
@@ -6378,7 +6530,8 @@
           "tag": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 40
+            "maxLength": 40,
+            "description": "Legacy exact tag filter. Supply either this field or a nonempty tags array."
           },
           "enabled": {
             "type": "boolean"
@@ -6388,6 +6541,35 @@
           },
           "after": {
             "$ref": "#/components/schemas/CatalogSearchCursor"
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "description": "Exact tag names after trimming. Duplicate values are ignored."
+          },
+          "tag_match": {
+            "type": "string",
+            "enum": [
+              "all",
+              "any"
+            ],
+            "default": "all"
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "all",
+              "unarchived",
+              "favorites",
+              "archived"
+            ],
+            "default": "all",
+            "description": "Favorites contains only unarchived favorites."
           }
         }
       },
@@ -6435,7 +6617,13 @@
           "selection_key": {
             "type": "string",
             "pattern": "^[0-9a-f]{32}$",
-            "description": "Opaque row identity for explicit bulk selection."
+            "description": "Opaque row identity for organization updates and explicit bulk selection."
+          },
+          "favorite": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -6448,7 +6636,9 @@
           "enabled",
           "analytics_enabled",
           "created_at",
-          "selection_key"
+          "selection_key",
+          "favorite",
+          "archived"
         ]
       },
       "CatalogSearchPage": {
@@ -6726,6 +6916,70 @@
             "type": "boolean"
           }
         }
+      },
+      "LinkOrganization": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "favorite": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "favorite",
+          "archived"
+        ]
+      },
+      "LinkOrganizationPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Supply at least one non-null organization flag.",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "favorite": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "archived": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "favorite"
+            ],
+            "properties": {
+              "favorite": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "required": [
+              "archived"
+            ],
+            "properties": {
+              "archived": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
       },
       "Problem": {
         "type": "object",
