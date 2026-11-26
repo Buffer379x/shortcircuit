@@ -33,6 +33,6 @@ The Git workflow checks changes before they merge into the main branch. Preview 
 
 ## Development candidate checks
 
-The GitHub Actions core workflow type-checks and builds the admin interface, runs the SQLite and Rust contract suites, and starts the container as its non-root user. An independent job checks RustSec advisories, licenses, and dependency sources with cargo-deny and checks production frontend dependencies with npm audit. The container job scans the local candidate image with Trivy for fixed high or critical findings. During release review, inspect unfixed vulnerabilities for applicability and document any accepted residual risk.
+The GitHub Actions core workflow type-checks and builds the admin interface, runs the SQLite and Rust contract suites, and starts the container as its non-root user. An independent job checks RustSec advisories, licenses, and dependency sources with cargo-deny and checks frontend dependencies and build tools with npm audit. The container job scans the local candidate image with Trivy for fixed high or critical findings. During release review, inspect unfixed vulnerabilities for applicability and document any accepted residual risk.
 
 The hosted loopback benchmark uses the smoke-test database. It validates the measurement script and reports the observed latency, local image size, and container memory. Complete the representative LAN workload in [Performance](PERFORMANCE.md) before a stable release.
