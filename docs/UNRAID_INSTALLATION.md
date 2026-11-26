@@ -5,7 +5,7 @@ ShortCircuit runs in one container on `linux/amd64`. Docker Manager pulls `ghcr.
 ## Install with Docker Manager
 
 1. Copy `my-shortcircuit.xml` to `/boot/config/plugins/dockerMan/templates-user/` using the Unraid file manager or an existing flash share. In **Docker → Add Container**, select the `shortcircuit` user template. [Unraid templates](https://docs.unraid.net/community-applications/)
-2. For Nginx Proxy Manager, select the Docker bridge shared with the proxy and remove both `--publish` entries from **Extra Parameters**. Set **Admin origin** and **WebUI** to your exact HTTPS admin URL, and **Public hosts** to your redirect hostnames. Limit the admin hostname to your LAN or VPN. [Proxy host configuration](REVERSE_PROXY.md)
+2. For Nginx Proxy Manager, select the Docker bridge shared with the proxy and remove both `--publish` entries from **Extra Parameters**. Set **Admin origin** and **WebUI** to your exact HTTPS admin URL, and **Public hosts** to your redirect hostnames. Limit the admin hostname to your LAN or VPN. If the container has its own LAN IP, follow the next section instead. [Proxy host configuration](REVERSE_PROXY.md)
 3. Click **Apply**. Docker Manager downloads the image and starts the container. Follow the first sign-in steps below.
 
 For an isolated install, keep the default bridge and IPv4 loopback bindings. Use Docker Engine 28.0.0 or newer with these bindings. Forward the two ports from your client with an SSH tunnel, then open `http://localhost:8081`. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
@@ -13,6 +13,14 @@ For an isolated install, keep the default bridge and IPv4 loopback bindings. Use
 ~~~sh
 ssh -N -L 8081:127.0.0.1:8081 -L 8080:127.0.0.1:8080 root@unraid
 ~~~
+
+## Use a fixed LAN IP
+
+1. In the Unraid container editor, keep the custom network and assigned IP. In **Advanced View**, remove both `--publish` entries from **Extra Parameters**. Retain the existing `/data` mount.
+2. In Nginx Proxy Manager, add a proxy host for your private admin hostname. Set the forward scheme to `http`, the forward IP to the container's assigned IP, and the forward port to `8081`. Assign a valid TLS certificate and restrict the hostname to your LAN or VPN. The admin hostname should resolve to the proxy.
+3. In Unraid, set **Admin origin** and **WebUI** to the exact browser address, such as `https://shortcircuit.example.com`. Apply the changes and open that address. For public redirects, forward the public hostname to port `8080` and include the hostname in **Public hosts**.
+
+Plain HTTP in **Admin origin** is allowed only for loopback addresses. An `http://` LAN address there causes startup to fail with `ADMIN_ORIGIN requires HTTPS outside loopback`. The default `http://localhost:8081` is for local or tunneled access. From a LAN client, `http://<container-ip>:8081/readyz` tests the backend connection without opening the admin interface. If the proxy returns `502`, check whether it can reach the custom network. A shared user-defined Docker bridge is an alternative when the proxy cannot reach the LAN IP. [Unraid container networking](https://docs.unraid.net/unraid-os/using-unraid-to/run-docker-containers/managing-and-customizing-containers/) · [Proxy host configuration](REVERSE_PROXY.md)
 
 ## First sign-in
 
