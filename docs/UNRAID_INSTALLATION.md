@@ -1,6 +1,6 @@
 # Unraid installation
 
-ShortCircuit runs in one container on `linux/amd64`. Docker Manager pulls `ghcr.io/buffer379x/shortcircuit:0.6.0-preview.2` and creates a persistent Docker volume on first start. The image uses UID and GID 10001, public port 8080, and admin port 8081. [Download the template](https://github.com/Buffer379x/shortcircuit/releases/download/v0.6.0-preview.2/my-shortcircuit.xml) · [Docker icon](../assets/branding/unraid-docker.png) · [SVG favicon](../assets/branding/favicon.svg) · [PNG favicon](../assets/branding/favicon.png)
+ShortCircuit runs in one container on `linux/amd64`. Docker Manager pulls `ghcr.io/buffer379x/shortcircuit:0.7.0-preview.1` and creates a persistent Docker volume on first start. The image uses UID and GID 10001, public port 8080, and admin port 8081. [Download the template](https://github.com/Buffer379x/shortcircuit/releases/download/v0.6.0-preview.2/my-shortcircuit.xml) · [Docker icon](../assets/branding/unraid-docker.png) · [SVG favicon](../assets/branding/favicon.svg) · [PNG favicon](../assets/branding/favicon.png)
 
 ## Install with Docker Manager
 
@@ -35,9 +35,9 @@ The named volume `shortcircuit-data` persists across container replacement. It r
 
 For a new appdata bind mount, remove `--volume=shortcircuit-data:/data` and add a path mapping to `/data`. Use a local pool directory writable by UID/GID 10001. [Unraid shares](https://docs.unraid.net/unraid-os/using-unraid-to/manage-storage/shares/) · [SQLite WAL](https://www.sqlite.org/wal.html)
 
-To upgrade from preview.1, take a verified backup with the running image. In Docker Manager, edit the existing container, set **Repository** to `ghcr.io/buffer379x/shortcircuit:0.6.0-preview.2`, and click **Apply**. Keep the existing `/data` mount, network and any fixed IP, public hostnames, and admin origin. ShortCircuit applies the SQLite migrations to schema 11 on startup.
+To upgrade from 0.6.0-preview.2, download a verified backup on **System and backups** and copy it outside the Docker data store. Note the current image digest. In Docker Manager, edit the existing container, set **Repository** to `ghcr.io/buffer379x/shortcircuit:0.7.0-preview.1`, and click **Apply**. Keep the existing `/data` mount, network and any fixed IP, public hostnames, and admin origin. Startup writes a verified snapshot to `/data/backups/pre-upgrade` and migrates schema 11 to 24. Optionally add **Trusted proxies** and **Backup interval** from the updated template: an existing container keeps its own settings.
 
-For rollback, use preview.1 with the pre-upgrade preview.1 backup in a separate data volume. Verify the restored container and its links before moving traffic to it. [Backup and rollback](BACKUP_RESTORE.md)
+For rollback, follow [Release verification](RELEASE_VERIFICATION.md#rollback): restore the pre-upgrade snapshot into a separate data volume with the 0.6.0-preview.2 image. The older image refuses an upgraded volume. Verify the restored container and its links before moving traffic to it. [Backup and rollback](BACKUP_RESTORE.md)
 
 ## Configuration
 
@@ -68,13 +68,12 @@ For rollback, use preview.1 with the pre-upgrade preview.1 backup in a separate 
 
 Settings marked as added after preview.2, and the monitor, notification, title lookup, and proxy settings, apply to source builds after preview.2. The published preview.2 image ignores them. [Monitoring and rate limits](SECURITY.md#implemented-outbound-monitoring-policy)
 
-## Before the next release
+## Storage, proxy, and ports
 
 - **Keep data outside `docker.img`.** The template stores `/data`, every backup, and every rollback copy in the named volume `shortcircuit-data` inside Docker's data store. Recreating `docker.img` deletes all of them. Map `/data` to a local appdata path such as `/mnt/<pool>/appdata/shortcircuit` owned by UID and GID 10001, or copy backups from `/data/backups` to other storage regularly. Set `BACKUP_INTERVAL_HOURS` to enable scheduled backups.
 - **Trust the proxy.** Behind Nginx Proxy Manager, add the variable `TRUSTED_PROXIES` with the proxy container address or its bridge network, for example `172.18.0.0/16`. Without it, every client shares the proxy's rate-limit budget for sign-in and protected links.
 - **Changed ports.** If you publish other host ports, set **Admin origin** and **WebUI** to the same address, and set the domain origin on **Domains**, so copied and QR short URLs use the published port.
-- **Upgrade from preview.2.** Take a verified backup and note the image digest. Change only **Repository** to the approved tag. Startup writes a pre-upgrade snapshot to `/data/backups/pre-upgrade` and migrates schema 11 to 24. To roll back, follow [Release verification](RELEASE_VERIFICATION.md#rollback). The preview.2 image refuses an upgraded volume with `VersionMissing`.
 
 - **Admin page shows "not found".** The browser address must match **Admin origin** exactly, including `localhost` versus `127.0.0.1` and the port. The log records the first mismatched request with the expected origin.
 
-The template itself is unchanged. Changing its defaults is an owner decision recorded in the [improvement plan](IMPROVEMENT_PLAN.md).
+Since 0.7.0-preview.1 the template enables daily scheduled backups and offers the **Trusted proxies** field. It keeps the Docker volume by default, because a new appdata directory is owned by `nobody:users` and the container runs as UID 10001.

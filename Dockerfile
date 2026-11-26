@@ -34,7 +34,7 @@ LABEL org.opencontainers.image.title="ShortCircuit" \
       org.opencontainers.image.description="Self-hosted URL shortener and link management" \
       org.opencontainers.image.source="https://github.com/Buffer379x/shortcircuit" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="0.6.0-preview.2"
+      org.opencontainers.image.version="0.7.0-preview.1"
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && install -d -m 0700 -o 10001 -g 10001 /data

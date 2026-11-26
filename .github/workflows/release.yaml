@@ -29,8 +29,9 @@ jobs:
       packages: write
     env:
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
-      VERSION: 0.6.0-preview.2
-      PREVIOUS_IMAGE: ghcr.io/buffer379x/shortcircuit@sha256:950c05244202d4f654cbbe83094f8a75958357c4d51b55b3caaaaf07d3608ebe
+      VERSION: 0.7.0-preview.1
+      # The published 0.6.0-preview.2 image that current installations run.
+      PREVIOUS_IMAGE: ghcr.io/buffer379x/shortcircuit@sha256:e27333a0723e322a7e9709c7ceb403666047328afcce56cf9ec01389279b9f18
     outputs:
       version: ${{ steps.version.outputs.version }}
       image: ${{ steps.publish.outputs.image }}
@@ -75,7 +76,7 @@ jobs:
           for arg in shlex.split(template.findtext("ExtraParams")):
               print(arg)
           for config in template.findall("./Config[@Type=\"Variable\"]"):
-              print("--env={}={}".format(config.attrib["Target"], config.text))
+              print("--env={}={}".format(config.attrib["Target"], config.text or ""))
           ')
           mapfile -t template_args <<< "$args"
           trap 'docker rm -f shortcircuit-template >/dev/null; docker volume rm shortcircuit-data >/dev/null' EXIT
@@ -89,7 +90,7 @@ jobs:
           docker exec shortcircuit-template shortcircuit setup-token >/dev/null
           curl --fail --silent --show-error http://localhost:8081/favicon.png --output "$RUNNER_TEMP/favicon.png"
           cmp "$RUNNER_TEMP/favicon.png" assets/branding/favicon.png
-      - name: Upgrade a disposable volume from preview.1
+      - name: Upgrade a disposable volume from 0.6.0-preview.2
         if: steps.version.outputs.image != ''
         env:
           IMAGE: ${{ steps.version.outputs.image }}

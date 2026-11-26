@@ -1,6 +1,6 @@
 [package]
 name = "shortcircuit"
-version = "0.6.0-preview.2"
+version = "0.7.0-preview.1"
 edition = "2024"
 rust-version = "1.100"
 publish = false
