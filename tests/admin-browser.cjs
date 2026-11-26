@@ -21,6 +21,14 @@ async function verify() {
     const pageResponse = await page.goto(admin);
     assert.ok(pageResponse.ok());
     assert.match(pageResponse.headers()['content-security-policy'], /frame-ancestors 'none'/);
+    for (const [name, type] of [['favicon.svg', 'image/svg+xml'], ['favicon.png', 'image/png']]) {
+      assert.equal(await page.locator(`link[rel="icon"][href="/${name}"]`).count(), 1);
+      const favicon = await page.request.get(admin + '/' + name);
+      assert.equal(favicon.status(), 200);
+      assert.equal(favicon.headers()['content-type'], type);
+      assert.deepEqual(await favicon.body(), await readFile('assets/branding/' + name));
+      assert.equal((await page.request.get(publicOrigin + '/' + name)).status(), 404);
+    }
     await page.getByLabel('Setup token', { exact: true }).fill(setupToken);
     await page.getByLabel('Username', { exact: true }).fill('Test administrator');
     await page.getByLabel('Password', { exact: true }).fill('ci-browser-password-example');
