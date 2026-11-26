@@ -18,6 +18,7 @@
 | GitHub | [The repository](https://github.com/Buffer379x/shortcircuit) exists. The owner approved public source development in this repository. The owner set the MIT license in the initial commit. Release artifacts still require approval. |
 | UI and branding | The embedded Svelte admin interface includes account setup, authentication, links, and API keys with English and German UI text and dark, light, or system appearance. The separate design preview covers additional planned screens. |
 | Browser verification | CI exercises the integrated administration workflow in Chromium. The [capture instructions](../README.md) cover the separate design preview. |
+| Unraid | A Docker Manager template uses the locally built image, loopback port bindings, and the existing PNG container icon. Testing in Unraid Docker Manager is pending. |
 | Performance and release | The benchmark method and resource estimates are documented. Production measurements and operating approval are pending. |
 
 [Core implementation plan](superpowers/plans/2026-11-25-core-foundation.md) · [Roadmap](ROADMAP.md) · [Decisions](DECISIONS.md)

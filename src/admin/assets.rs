@@ -11,7 +11,8 @@ use axum::{
 const INDEX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/admin.html"));
 const JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/admin.js"));
 const CSS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/admin.css"));
-const ICON: &[u8] = include_bytes!("../../assets/branding/favicon.svg");
+const ICON_PNG: &[u8] = include_bytes!("../../assets/branding/favicon.png");
+const ICON_SVG: &[u8] = include_bytes!("../../assets/branding/favicon.svg");
 
 pub(super) fn routes() -> Router {
     Router::new()
@@ -28,8 +29,12 @@ pub(super) fn routes() -> Router {
             get(|| async { asset("text/css; charset=utf-8", CSS) }),
         )
         .route(
+            "/favicon.png",
+            get(|| async { asset("image/png", ICON_PNG) }),
+        )
+        .route(
             "/favicon.svg",
-            get(|| async { asset("image/svg+xml", ICON) }),
+            get(|| async { asset("image/svg+xml", ICON_SVG) }),
         )
 }
 

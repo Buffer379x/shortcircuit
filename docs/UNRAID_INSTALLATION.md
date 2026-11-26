@@ -1,6 +1,6 @@
 # Unraid installation
 
-ShortCircuit runs as one container. The image uses UID and GID 10001, public port 8080, and admin port 8081. The Unraid template and a test on Unraid are release work. [Project repository](https://github.com/Buffer379x/shortcircuit)
+ShortCircuit runs as one container. The image uses UID and GID 10001, public port 8080, and admin port 8081. The Docker Manager template uses the locally built image. [Template XML](../unraid/shortcircuit.xml) · [Docker icon](../assets/branding/unraid-docker.png) · [SVG favicon](../assets/branding/favicon.svg) · [PNG favicon](../assets/branding/favicon.png)
 
 ## Prepare storage and networking
 
@@ -8,7 +8,21 @@ Select a local pool for SQLite. Use a direct path such as `/mnt/cache/appdata/sh
 
 Connect ShortCircuit and Nginx Proxy Manager to a shared user-defined Docker bridge. Restrict the admin hostname to the LAN or VPN. The example assumes an existing bridge named `shortcircuit-proxy`. On a custom VLAN, verify the firewall rules for IPv4 and IPv6. [Unraid container networking](https://docs.unraid.net/unraid-os/using-unraid-to/run-docker-containers/managing-and-customizing-containers/) · [Reverse proxy configuration](REVERSE_PROXY.md)
 
-## Build and start
+## Install with Docker Manager
+
+1. Build the image on Unraid from the repository root with `docker build --tag shortcircuit:0.6.0 .`. Prepare the local appdata directory as shown below.
+2. For a new installation, save the XML as `my-shortcircuit.xml` in `/boot/config/plugins/dockerMan/templates-user/`. In **Docker → Add Container**, select the ShortCircuit user template and set **Appdata** to your local pool path.
+3. For tunnel access, keep the default bridge and admin origin. The two `--publish` options in **Extra Parameters** bind to IPv4 loopback. Use Docker Engine 28.0.0 or newer for this setup. Forward the ports from your client, then use `http://localhost:8081` for administration. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
+
+   ~~~sh
+   ssh -N -L 8081:127.0.0.1:8081 -L 8080:127.0.0.1:8080 root@unraid
+   ~~~
+
+4. For Nginx Proxy Manager, select the bridge shared with the proxy and remove the two `--publish` options. Set **Admin origin** and the Docker Manager **WebUI** field to your exact HTTPS admin URL. Set **Public hosts** to your redirect domains. Keep the admin hostname restricted to the LAN or VPN. [Proxy host configuration](REVERSE_PROXY.md)
+
+To update a local build, rebuild the image under the configured tag and recreate the container with the same appdata path.
+
+## Build and start from the command line
 
 Use the Dockerfile from the revision you intend to run. Substitute the storage directory, bridge name, and DNS names for your installation.
 

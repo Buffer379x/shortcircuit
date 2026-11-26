@@ -30,6 +30,7 @@ jobs:
       - run: rustup toolchain install 1.100.0 --profile minimal --component rustfmt,clippy
       - run: cargo test --locked --all-targets
       - run: python3 tests/openapi.py
+      - run: python3 tests/unraid_template.py
       - run: python3 tests/schema.py
         if: always()
       - run: python3 tests/analytics_schema.py
