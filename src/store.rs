@@ -13,7 +13,10 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 
-use crate::protection::{self, ProtectionDraft};
+use crate::{
+    history::{self, Action, Actor, Metadata, Snapshot},
+    protection::{self, ProtectionDraft},
+};
 
 static MIGRATIONS: Migrator = sqlx::migrate!();
 const MIN_SQLITE: [u32; 3] = [3, 51, 3];
@@ -154,45 +157,85 @@ pub(crate) async fn update_link(
     hosts: &[String],
     id: i64,
     update: LinkUpdate,
+    actor: &Actor,
 ) -> Result<Option<Link>, sqlx::Error> {
-    let mut transaction = pool.begin().await?;
-    let mut query = QueryBuilder::new("UPDATE links SET target = COALESCE(");
-    query
-        .push_bind(update.target)
-        .push(", target), title = COALESCE(")
-        .push_bind(update.title)
-        .push(", title), enabled = COALESCE(")
-        .push_bind(update.enabled)
-        .push(", enabled), analytics_enabled = COALESCE(")
-        .push_bind(update.analytics_enabled)
-        .push(", analytics_enabled) WHERE id = ")
-        .push_bind(id);
-    push_host_scope(&mut query, hosts);
-    query.push(" RETURNING id, host, slug, target, created_at, title, enabled, analytics_enabled");
-    let rows = query
-        .build_query_as::<Link>()
-        .fetch_all(&mut *transaction)
-        .await?;
-    let link = rows.into_iter().next();
-    let result = if let Some(mut link) = link {
-        link.tags = if let Some(tags) = update.tags {
-            sqlx::query("DELETE FROM link_tags WHERE link_id = ?")
-                .bind(id)
-                .execute(&mut *transaction)
-                .await?;
-            insert_tags(&mut transaction, id, tags).await?
-        } else {
-            sqlx::query_scalar("SELECT tag FROM link_tags WHERE link_id = ? ORDER BY tag")
-                .bind(id)
-                .fetch_all(&mut *transaction)
-                .await?
-        };
-        Some(link)
-    } else {
-        None
-    };
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let result = update_link_in(&mut transaction, hosts, id, update, actor, Action::Metadata).await?;
     transaction.commit().await?;
     Ok(result)
+}
+
+pub(crate) async fn read_link(
+    connection: &mut SqliteConnection,
+    hosts: &[String],
+    id: i64,
+) -> Result<Option<Link>, sqlx::Error> {
+    let mut query = QueryBuilder::new(
+        "SELECT id, host, slug, target, created_at, title, enabled, analytics_enabled
+         FROM links WHERE id = ",
+    );
+    query.push_bind(id);
+    push_host_scope(&mut query, hosts);
+    let Some(mut link) = query
+        .build_query_as::<Link>()
+        .fetch_optional(&mut *connection)
+        .await?
+    else {
+        return Ok(None);
+    };
+    link.tags = sqlx::query_scalar("SELECT tag FROM link_tags WHERE link_id = ? ORDER BY tag")
+        .bind(id)
+        .fetch_all(connection)
+        .await?;
+    Ok(Some(link))
+}
+
+pub(crate) async fn update_link_in(
+    connection: &mut SqliteConnection,
+    hosts: &[String],
+    id: i64,
+    update: LinkUpdate,
+    actor: &Actor,
+    action: Action,
+) -> Result<Option<Link>, sqlx::Error> {
+    let Some(mut link) = read_link(connection, hosts, id).await? else {
+        return Ok(None);
+    };
+    let previous = Metadata::from(&link);
+    link.target = update.target.unwrap_or(link.target);
+    link.title = update.title.unwrap_or(link.title);
+    link.enabled = update.enabled.unwrap_or(link.enabled);
+    link.analytics_enabled = update.analytics_enabled.unwrap_or(link.analytics_enabled);
+    let tags_changed = if let Some(mut tags) = update.tags {
+        tags.sort_unstable();
+        tags.dedup();
+        let changed = tags != link.tags;
+        link.tags = tags;
+        changed
+    } else {
+        false
+    };
+    if previous == Metadata::from(&link) {
+        return Ok(Some(link));
+    }
+
+    sqlx::query("UPDATE links SET target = ?, title = ?, enabled = ?, analytics_enabled = ? WHERE id = ?")
+        .bind(&link.target)
+        .bind(&link.title)
+        .bind(link.enabled)
+        .bind(link.analytics_enabled)
+        .bind(id)
+        .execute(&mut *connection)
+        .await?;
+    if tags_changed {
+        sqlx::query("DELETE FROM link_tags WHERE link_id = ?")
+            .bind(id)
+            .execute(&mut *connection)
+            .await?;
+        link.tags = insert_tags(connection, id, link.tags).await?;
+    }
+    history::record(connection, id, actor, action, Some(Snapshot::Metadata(previous))).await?;
+    Ok(Some(link))
 }
 
 async fn insert_tags(
@@ -359,6 +402,7 @@ mod tests {
                 analytics_enabled: Some(false),
                 tags: None,
             },
+            &Actor::Admin("test".to_owned()),
         )
         .await
         .unwrap()
@@ -408,10 +452,39 @@ mod tests {
                 analytics_enabled: None,
                 tags: Some(vec!["reject".to_owned()]),
             },
+            &Actor::Admin("test".to_owned()),
         )
         .await;
 
         assert!(result.is_err());
+        let links = list(&pool, &hosts, 0).await.unwrap();
+        assert_eq!(links[0].target, TARGET);
+        assert_eq!(links[0].tags, ["docs", "work"]);
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM link_history").fetch_one(&pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn failed_history_write_rolls_back_metadata_and_tags() {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = open_database(&directory.path().join("links.sqlite"))
+            .await
+            .unwrap();
+        let hosts = [HOST.to_owned()];
+        let link = insert_link(&pool, &draft(), None).await.unwrap().unwrap();
+        sqlx::raw_sql(
+            "CREATE TRIGGER reject_link_history BEFORE INSERT ON link_history
+             BEGIN SELECT RAISE(ABORT, 'history write failed'); END;",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let update = LinkUpdate {
+            target: Some("https://target.example/changed".to_owned()),
+            tags: Some(vec!["edited".to_owned()]),
+            ..LinkUpdate::default()
+        };
+        let actor = Actor::Admin("test".to_owned());
+        assert!(update_link(&pool, &hosts, link.id, update, &actor).await.is_err());
         let links = list(&pool, &hosts, 0).await.unwrap();
         assert_eq!(links[0].target, TARGET);
         assert_eq!(links[0].tags, ["docs", "work"]);

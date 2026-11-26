@@ -117,14 +117,7 @@ async fn list_tags(State(state): State<CatalogState>) -> Result<Json<Catalog<Tag
     Ok(Json(Catalog { items }))
 }
 
-pub(super) fn tag_name(value: &str) -> Option<&str> {
-    let value = value.trim();
-    let valid = !value.is_empty()
-        && value.chars().count() <= 40
-        && !value.contains(',')
-        && !value.chars().any(char::is_control);
-    valid.then_some(value)
-}
+pub(super) use crate::input::tag_name;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

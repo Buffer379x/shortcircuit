@@ -109,6 +109,33 @@ pub(crate) fn valid_slug(slug: &str) -> bool {
         })
 }
 
+pub(crate) fn link_title(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (value.chars().count() <= 160 && !value.chars().any(char::is_control)).then_some(value)
+}
+
+pub(crate) fn tag_name(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let valid = !value.is_empty()
+        && value.chars().count() <= 40
+        && !value.contains(',')
+        && !value.chars().any(char::is_control);
+    valid.then_some(value)
+}
+
+pub(crate) fn link_tags(values: Vec<String>) -> Option<Vec<String>> {
+    if values.len() > 20 {
+        return None;
+    }
+    let mut checked = values
+        .into_iter()
+        .map(|tag| tag_name(&tag).map(str::to_owned))
+        .collect::<Option<Vec<_>>>()?;
+    checked.sort_unstable();
+    checked.dedup();
+    Some(checked)
+}
+
 pub(crate) fn valid_target(value: &str) -> bool {
     if value.len() > 4096
         || !value

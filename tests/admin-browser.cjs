@@ -89,6 +89,40 @@ async function verify() {
     assert.equal(pngBytes.readUInt32BE(16), 512);
     await qr.getByRole('button', { name: 'Close', exact: true }).click();
 
+    const guideRow = page.getByRole('row').filter({ hasText: 'localhost/test/guide' });
+    await guideRow.getByRole('button', { name: 'Edit link', exact: true }).click();
+    const editGuide = page.getByRole('dialog', { name: 'Edit link', exact: true });
+    await editGuide.getByLabel('Destination URL', { exact: true }).fill('https://example.test/new-guide');
+    await editGuide.getByLabel('Title (optional)', { exact: true }).fill('Updated guide');
+    await editGuide.getByRole('button', { name: 'Save changes', exact: true }).click();
+    await editGuide.waitFor({ state: 'hidden' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await guideRow.getByRole('button', { name: 'Link history', exact: true }).click();
+    const history = page.getByRole('dialog', { name: 'Link history', exact: true });
+    await history.getByRole('button', { name: 'Compare', exact: true }).click();
+    await history.getByRole('heading', { name: 'Compare with current settings', exact: true }).waitFor();
+    assert.equal(await history.evaluate(dialog => dialog.scrollWidth > dialog.clientWidth), false);
+    await history.getByText(target, { exact: true }).waitFor();
+    await history.getByText('https://example.test/new-guide', { exact: true }).waitFor();
+    const exportHistory = page.waitForEvent('download');
+    await history.getByRole('button', { name: 'Export history', exact: true }).click();
+    const historyFile = await exportHistory;
+    const historyJson = JSON.parse(await readFile(await historyFile.path(), 'utf8'));
+    assert.equal(historyJson.items[0].previous.value.target, target);
+    await history.getByRole('button', { name: 'Restore', exact: true }).last().click();
+    const restore = page.getByRole('dialog', { name: 'Restore this revision?', exact: true });
+    await restore.getByRole('button', { name: 'Restore', exact: true }).click();
+    await restore.waitFor({ state: 'hidden' });
+    await history.getByText('Revision restored.', { exact: true }).waitFor();
+    await history.getByRole('button', { name: 'Clear history', exact: true }).click();
+    const clearHistory = page.getByRole('dialog', { name: 'Clear link history?', exact: true });
+    await clearHistory.getByRole('button', { name: 'Clear history', exact: true }).click();
+    await history.getByText('No changes recorded yet.', { exact: true }).waitFor();
+    await history.getByRole('button', { name: 'Close', exact: true }).click();
+    await guideRow.getByText('Test guide', { exact: true }).waitFor();
+    await page.setViewportSize({ width: 1360, height: 900 });
+    assert.equal((await page.request.get(publicOrigin + '/test/guide', { maxRedirects: 0 })).headers().location, target);
+
     await page.getByRole('button', { name: 'Redirect settings', exact: true }).click();
     const policy = page.getByRole('dialog', { name: 'Redirect settings', exact: true });
     await policy.getByLabel('Maximum visits (optional)').fill('1');
@@ -215,7 +249,7 @@ async function verify() {
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);
     assert.equal((await page.request.get(admin + '/api/v1/openapi.json')).status(), 401);
     assert.deepEqual(errors, []);
-    console.log('Browser smoke passed: setup, create link, QR, visit limits, protected links, analytics controls, JSON and CSV exchange, URL tools, mobile layout and sign-out.');
+    console.log('Browser smoke passed: setup, create link, QR, link history, visit limits, protected links, analytics controls, JSON and CSV exchange, URL tools, mobile layout and sign-out.');
   } finally {
     await browser.close();
   }

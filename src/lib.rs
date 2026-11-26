@@ -7,6 +7,7 @@ mod backup;
 mod backup_schedule;
 mod confirmation;
 mod domains;
+mod history;
 mod http;
 mod input;
 mod protection;

@@ -121,12 +121,16 @@ async fn read_json(resp: Response) -> Value {
 async fn link_history_restores_exact_metadata_and_can_be_cleared() {
     let app = Fixture::start().await;
     let target = "https://example.test/one?Signature=A%2fb#Original";
-    let id = app.create("go.example", "history/Case", target, &["first"]).await;
+    let id = app
+        .create("go.example", "history/Case", target, &["first"])
+        .await;
     let link = format!("/api/v1/links/{id}");
     let history = format!("{link}/history");
     let edit = json!({"target":"https://example.test/two","title":"Updated","tags":["second"],"enabled":false,"analytics_enabled":false});
     for _ in 0..2 {
-        let response = app.admin_request(Method::PATCH, &link, Some(edit.clone())).await;
+        let response = app
+            .admin_request(Method::PATCH, &link, Some(edit.clone()))
+            .await;
         assert_eq!(response.status(), StatusCode::OK);
     }
     let response = app.admin_request(Method::GET, &history, None).await;
@@ -142,43 +146,131 @@ async fn link_history_restores_exact_metadata_and_can_be_cleared() {
 
     let revision = items[0]["id"].as_i64().unwrap();
     let restore = format!("{history}/{revision}/restore");
-    let missing_csrf = send(&app.admin, Method::POST, &restore, &[("host", ADMIN), ("origin", ORIGIN), ("cookie", &app.cookie)], None).await;
+    let other = app
+        .create("s.example", "other", "https://example.test/other", &[])
+        .await;
+    let wrong_link = format!("/api/v1/links/{other}/history/{revision}/restore");
+    assert_eq!(
+        app.admin_request(Method::POST, &wrong_link, None)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let missing_csrf = send(
+        &app.admin,
+        Method::POST,
+        &restore,
+        &[("host", ADMIN), ("origin", ORIGIN), ("cookie", &app.cookie)],
+        None,
+    )
+    .await;
     assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
-    assert_eq!(app.admin_request(Method::POST, &restore, None).await.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.admin_request(Method::POST, &restore, None)
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
     let restored = read_json(app.admin_request(Method::GET, &history, None).await).await;
-    assert_eq!(restored["current"]["metadata"], items[0]["previous"]["value"]);
+    assert_eq!(
+        restored["current"]["metadata"],
+        items[0]["previous"]["value"]
+    );
     assert_eq!(restored["items"][0]["action"], "restore");
-    assert_eq!(app.visit("go.example", Method::GET, "/history/Case").await.headers()[header::LOCATION], target);
+    assert_eq!(
+        app.visit("go.example", Method::GET, "/history/Case")
+            .await
+            .headers()[header::LOCATION],
+        target
+    );
 
-    assert_eq!(app.admin_request(Method::DELETE, &history, None).await.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.admin_request(Method::DELETE, &history, None)
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
     let after_clear = read_json(app.admin_request(Method::GET, &history, None).await).await;
     assert_eq!(after_clear["items"], json!([]));
     assert_eq!(after_clear["current"]["metadata"]["target"], target);
-    assert_eq!(app.admin_request(Method::POST, &restore, None).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        app.admin_request(Method::POST, &restore, None)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]
 async fn link_history_does_not_restore_one_time_consumption_or_expose_credentials() {
     let app = Fixture::start().await;
-    let id = app.create("go.example", "private-history", "https://example.test/original", &[]).await;
+    let id = app
+        .create(
+            "go.example",
+            "private-history",
+            "https://example.test/original",
+            &[],
+        )
+        .await;
     let base = format!("/api/v1/links/{id}");
     let history = format!("{base}/history");
-    let key = app.auth.create_key("Automation", vec!["read".into(), "write".into()], Some("go.example".into()), None).await.unwrap();
+    let key = app
+        .auth
+        .create_key(
+            "Automation",
+            vec!["read".into(), "write".into()],
+            Some("go.example".into()),
+            None,
+        )
+        .await
+        .unwrap();
     let bearer = format!("Bearer {}", key.token);
     let headers = [("host", ADMIN), ("authorization", bearer.as_str())];
-    let update = send(&app.admin, Method::PATCH, &base, &headers, Some(json!({"target":"https://example.test/new"}))).await;
+    let update = send(
+        &app.admin,
+        Method::PATCH,
+        &base,
+        &headers,
+        Some(json!({"target":"https://example.test/new"})),
+    )
+    .await;
     assert_eq!(update.status(), StatusCode::OK);
-    assert_eq!(send(&app.admin, Method::GET, &history, &headers, None).await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        send(&app.admin, Method::GET, &history, &headers, None)
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
 
-    let protection = app.admin_request(Method::PATCH, &format!("{base}/protection"), Some(json!({"one_time":true,"password":"history-secret-password"}))).await;
+    let protection = app
+        .admin_request(
+            Method::PATCH,
+            &format!("{base}/protection"),
+            Some(json!({"one_time":true,"password":"history-secret-password"})),
+        )
+        .await;
     assert_eq!(protection.status(), StatusCode::OK);
     let proof = confirmation(&app, "/private-history").await;
-    assert_eq!(confirm(&app, "/private-history", "https://go.example", &proof, "history-secret-password").await.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        confirm(
+            &app,
+            "/private-history",
+            "https://go.example",
+            &proof,
+            "history-secret-password"
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
     let payload = read_json(app.admin_request(Method::GET, &history, None).await).await;
     let items = payload["items"].as_array().unwrap();
     assert_eq!(items[0]["action"], "protection");
     assert_eq!(items[0]["previous"], Value::Null);
-    assert_eq!(items[1]["actor"], json!({"kind":"api_key","label":key.key.id.to_string()}));
+    assert_eq!(
+        items[1]["actor"],
+        json!({"kind":"api_key","label":key.key.id.to_string()})
+    );
     let dump = payload.to_string();
     assert!(!dump.contains("history-secret-password"));
     assert!(!dump.contains("argon2id"));
@@ -186,32 +278,87 @@ async fn link_history_does_not_restore_one_time_consumption_or_expose_credential
 
     let revision = items[1]["id"].as_i64().unwrap();
     let restore = format!("{history}/{revision}/restore");
-    assert_eq!(app.admin_request(Method::POST, &restore, None).await.status(), StatusCode::NO_CONTENT);
-    let result = read_json(app.admin_request(Method::GET, &format!("{base}/protection"), None).await).await;
-    assert_eq!(result, json!({"password_required":true,"one_time":true,"consumed":true}));
-    assert_eq!(app.visit("go.example", Method::GET, "/private-history").await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        app.admin_request(Method::POST, &restore, None)
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let result = read_json(
+        app.admin_request(Method::GET, &format!("{base}/protection"), None)
+            .await,
+    )
+    .await;
+    assert_eq!(
+        result,
+        json!({"password_required":true,"one_time":true,"consumed":true})
+    );
+    assert_eq!(
+        app.visit("go.example", Method::GET, "/private-history")
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]
 async fn link_history_restores_redirect_rules_without_resetting_visits() {
     let app = Fixture::start().await;
-    let id = app.create("go.example", "limited-history", "https://example.test/target", &[]).await;
+    let id = app
+        .create(
+            "go.example",
+            "limited-history",
+            "https://example.test/target",
+            &[],
+        )
+        .await;
     let base = format!("/api/v1/links/{id}");
     let policy = format!("{base}/policy");
     let history = format!("{base}/history");
-    assert_eq!(app.admin_request(Method::PATCH, &policy, Some(json!({"max_visits":2,"forward_query":true}))).await.status(), StatusCode::OK);
-    assert_eq!(app.visit("go.example", Method::GET, "/limited-history?raw=yes").await.headers()[header::LOCATION], "https://example.test/target?raw=yes");
-    assert_eq!(app.admin_request(Method::PATCH, &policy, Some(json!({"max_visits":9}))).await.status(), StatusCode::OK);
+    assert_eq!(
+        app.admin_request(
+            Method::PATCH,
+            &policy,
+            Some(json!({"max_visits":2,"forward_query":true}))
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.visit("go.example", Method::GET, "/limited-history?raw=yes")
+            .await
+            .headers()[header::LOCATION],
+        "https://example.test/target?raw=yes"
+    );
+    assert_eq!(
+        app.admin_request(Method::PATCH, &policy, Some(json!({"max_visits":9})))
+            .await
+            .status(),
+        StatusCode::OK
+    );
     let recorded = read_json(app.admin_request(Method::GET, &history, None).await).await;
     assert_eq!(recorded["items"][0]["previous"]["value"]["max_visits"], 2);
     let revision = recorded["items"][0]["id"].as_i64().unwrap();
-    let restored = app.admin_request(Method::POST, &format!("{history}/{revision}/restore"), None).await;
+    let restored = app
+        .admin_request(Method::POST, &format!("{history}/{revision}/restore"), None)
+        .await;
     assert_eq!(restored.status(), StatusCode::NO_CONTENT);
     let current = read_json(app.admin_request(Method::GET, &policy, None).await).await;
     assert_eq!(current["max_visits"], 2);
     assert_eq!(current["visits_used"], 1);
-    assert_eq!(app.visit("go.example", Method::GET, "/limited-history").await.status(), StatusCode::FOUND);
-    assert_eq!(app.visit("go.example", Method::GET, "/limited-history").await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        app.visit("go.example", Method::GET, "/limited-history")
+            .await
+            .status(),
+        StatusCode::FOUND
+    );
+    assert_eq!(
+        app.visit("go.example", Method::GET, "/limited-history")
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]

@@ -21,6 +21,7 @@
     analytics: 'M4 19h16 M6 15V9 M12 15V4 M18 15v-4',
     rule: 'M4 6h16 M4 12h16 M4 18h16 M8 4v4 M15 10v4 M10 16v4',
     lock: 'M6 11h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z M8 11V7a4 4 0 0 1 8 0v4 M12 15v2',
+    history: 'M3 12a9 9 0 1 1 2.6 6.4 M3 4v8h8 M12 7v5l3 2',
   } as const;
 
   let { name }: { name: keyof typeof paths } = $props();
