@@ -188,6 +188,9 @@ struct Diagnostics {
     system_operation_in_progress: bool,
     restore_status: RestoreStatus,
     max_snapshot_bytes: u64,
+    storage: crate::resources::Storage,
+    cpu: crate::resources::Cpu,
+    container_memory: crate::resources::ContainerMemory,
 }
 
 #[derive(sqlx::FromRow)]
@@ -220,27 +223,28 @@ async fn diagnostics(
     .await
     .map_err(|_| Problem::unavailable())?;
     let database = operations.shared.database.clone();
-    let (backup, restore_status, process_rss_bytes) = tokio::task::spawn_blocking(move || {
+    let database_bytes = u64::try_from(metrics.database_bytes).unwrap_or_default();
+    let cpu = crate::resources::sample_cpu();
+    let readings = tokio::task::spawn_blocking(move || {
+        let directory = database
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."))
+            .to_owned();
         (
             backup_health(&database.with_file_name("backups")),
             restore_status(&database),
             read_process_rss(),
+            crate::resources::storage(&directory, database_bytes),
+            crate::resources::container_memory(),
         )
-    })
-    .await
-    .map_err(|_| Problem::unavailable())?;
+    });
+    let (cpu, readings) = tokio::join!(cpu, readings);
+    let (backup, restore_status, process_rss_bytes, storage, container_memory) =
+        readings.map_err(|_| Problem::unavailable())?;
     Ok(Json(Diagnostics {
         version: env!("CARGO_PKG_VERSION"),
-        build_revision: [
-            option_env!("SHORTCIRCUIT_BUILD_REVISION"),
-            option_env!("GITHUB_SHA"),
-        ]
-        .into_iter()
-        .flatten()
-        .find(|revision| {
-            (7..=64).contains(&revision.len())
-                && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
-        }),
+        build_revision: crate::build_revision(),
         started_at: operations.shared.started_at,
         uptime_seconds: operations.shared.started.elapsed().as_secs(),
         process_rss_bytes,
@@ -258,6 +262,9 @@ async fn diagnostics(
         system_operation_in_progress: operations.shared.transfer.available_permits() == 0,
         restore_status,
         max_snapshot_bytes: MAX_SNAPSHOT_BYTES,
+        storage,
+        cpu,
+        container_memory,
     }))
 }
 
@@ -418,17 +425,29 @@ async fn download(
         },
         download_chunk,
     ));
+    // Distinct names keep several downloads apart and state the schema they need.
+    let schema: i64 = sqlx::query_scalar("SELECT coalesce(max(version), 0) FROM _sqlx_migrations")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or_default();
+    let created = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    let disposition = HeaderValue::from_str(&format!(
+        "attachment; filename=\"shortcircuit-schema{schema}-{created}.sqlite\""
+    ))
+    .map_err(|_| Problem::unavailable())?;
     let mut response = (
-        [
-            (header::CONTENT_TYPE, SNAPSHOT_MEDIA_TYPE),
-            (
-                header::CONTENT_DISPOSITION,
-                "attachment; filename=\"shortcircuit-backup.sqlite\"",
-            ),
-        ],
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(SNAPSHOT_MEDIA_TYPE),
+        )],
         body,
     )
         .into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_DISPOSITION, disposition);
     response
         .headers_mut()
         .insert(header::CONTENT_LENGTH, HeaderValue::from(length));
@@ -699,13 +718,14 @@ mod tests {
         let password = "synthetic-test-password";
         let account = auth.setup(&setup, "owner", password).await.unwrap();
         let cookie = format!("__Host-shortcircuit_session={}", account.token);
-        let router = super::super::build_admin_router(
+        let router = super::super::admin_router_with(
             pool,
             PublicHosts::parse("go.example").unwrap(),
             AdminConfig::new("https://admin.example", 8080).unwrap(),
-            None,
-            Some(Operations::new(database.clone(), false)),
-            None,
+            super::super::AdminServices {
+                operations: Some(Operations::new(database.clone(), false)),
+                ..Default::default()
+            },
         );
 
         let request = |method: Method, path: &str| {
@@ -802,9 +822,31 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(diagnostics.status(), StatusCode::OK);
-        let contents = to_bytes(diagnostics.into_body(), 4096).await.unwrap();
+        let contents = to_bytes(diagnostics.into_body(), 8192).await.unwrap();
         let report: Value = serde_json::from_slice(&contents).unwrap();
         assert_eq!(report["restore_status"], "pending_restart");
+        // Resource readings state their availability, scope, and sampling window.
+        assert!(
+            ["healthy", "low"].contains(&report["storage"]["status"].as_str().unwrap()),
+            "{}",
+            report["storage"]
+        );
+        assert!(report["storage"]["available_bytes"].as_u64().is_some());
+        assert!(report["storage"]["low_threshold_bytes"].as_u64().unwrap() >= 512 * 1024 * 1024);
+        assert!(report["cpu"]["window_ms"].as_u64().unwrap() >= 250);
+        for scope in ["process", "container"] {
+            let state = report["cpu"][scope].as_str().unwrap();
+            assert!(["measured", "unavailable"].contains(&state));
+            assert_eq!(
+                state == "measured",
+                report["cpu"][format!("{scope}_percent")].is_number()
+            );
+        }
+        let memory = &report["container_memory"];
+        assert_eq!(
+            memory["status"] == "measured",
+            memory["current_bytes"].is_u64()
+        );
         assert_eq!(report["link_count"], 0);
         assert_eq!(report["raw_event_count"], 0);
         assert_eq!(report["last_backup_status"], "verified");

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::{
+    destinations,
     domains::{self, Domain},
     input::{PublicHosts, normalize_host, plain_description, valid_target},
 };
@@ -84,6 +85,30 @@ async fn save_domain(
         .is_some_and(|target| domains::fallback_loops(&host, "/", target))
     {
         return Err(Problem::invalid("fallback_loop"));
+    }
+    let saved = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT root_target, missing_target FROM domains WHERE host = ?",
+    )
+    .bind(&host)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|_| Problem::unavailable())?
+    .unwrap_or_default();
+    let unchanged: Vec<&str> = [&saved.0, &saved.1]
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    let requested = [&input.root_target, &input.missing_target]
+        .into_iter()
+        .flatten()
+        .map(String::as_str);
+    if destinations::check_writes(&state.pool, requested, &unchanged)
+        .await
+        .map_err(|_| Problem::unavailable())?
+        .is_err()
+    {
+        return Err(Problem::invalid("destination_not_allowed"));
     }
     let domain = Domain {
         host,

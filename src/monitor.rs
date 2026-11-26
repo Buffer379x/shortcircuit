@@ -6,9 +6,11 @@ use tokio::{
     sync::{Notify, Semaphore, watch},
     time,
 };
-use url::Url;
 
-use crate::outbound::{Failure, Fetcher, Probe};
+use crate::{
+    notifications::{Event, Notifier},
+    outbound::{Failure, Fetcher, Probe},
+};
 
 const MIN_RECHECK: i64 = 60;
 const MAX_DUE: i64 = 16;
@@ -18,7 +20,7 @@ pub struct Monitor(Arc<Service>);
 
 struct Service {
     enabled: bool,
-    webhook: Option<String>,
+    notifier: Option<Notifier>,
     interval: i64,
     priority_interval: i64,
     fetcher: Fetcher,
@@ -69,23 +71,16 @@ impl From<sqlx::Error> for CheckError {
 impl Monitor {
     pub fn new(
         enabled: bool,
-        webhook: Option<String>,
+        notifier: Option<Notifier>,
         interval_hours: u16,
         priority_hours: u16,
     ) -> Result<Self, &'static str> {
         if !(1..=720).contains(&interval_hours) || !(1..=interval_hours).contains(&priority_hours) {
             return Err("monitor intervals require 1 <= priority hours <= regular hours <= 720");
         }
-        if let Some(target) = &webhook
-            && (!enabled
-                || !crate::input::valid_target(target)
-                || !Url::parse(target).is_ok_and(|url| url.scheme() == "https"))
-        {
-            return Err("MONITOR_WEBHOOK_URL requires enabled monitoring and a valid HTTPS URL");
-        }
         Ok(Self(Arc::new(Service {
             enabled,
-            webhook,
+            notifier,
             interval: i64::from(interval_hours) * 3_600,
             priority_interval: i64::from(priority_hours) * 3_600,
             fetcher: Fetcher::new(),
@@ -266,13 +261,17 @@ impl Monitor {
 
     async fn process_rows(&self, pool: &SqlitePool, rows: &[&DueLink]) -> Result<(), sqlx::Error> {
         let result = self.0.fetcher.probe(&rows[0].target).await;
-        let mut changes = Vec::new();
+        let checked_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs() as i64);
         for row in rows {
             let (status, failures, failure) = classify(&result, row.consecutive_failures);
             let (http_status, elapsed_ms, redirects) =
                 result.as_ref().map_or((None, None, None), |p| {
                     (Some(p.status), Some(p.elapsed_ms as i64), Some(p.redirects))
                 });
+            // The status change and its notification commit together or not at all.
+            let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
             let updated = sqlx::query(
                 "UPDATE link_monitor SET status = ?, last_checked = unixepoch(),
                     next_check = unixepoch() + ?, http_status = ?, elapsed_ms = ?, redirects = ?,
@@ -296,14 +295,21 @@ impl Monitor {
             .bind(&row.revision)
             .bind(row.id)
             .bind(&row.target)
-            .execute(pool)
+            .execute(&mut *transaction)
             .await?;
-            if updated.rows_affected() != 0 && changed_health(&row.status, status) {
-                changes.push(serde_json::json!({ "link_id": row.id, "status": status }));
+            if updated.rows_affected() != 0
+                && changed_health(&row.status, status)
+                && let Some(notifier) = &self.0.notifier
+            {
+                let event = Event::LinkHealth {
+                    link_id: row.id,
+                    status,
+                    revision: row.revision.clone(),
+                    checked_at,
+                };
+                notifier.record(&mut *transaction, event).await?;
             }
-        }
-        if !changes.is_empty() {
-            self.notify(changes).await;
+            transaction.commit().await?;
         }
         Ok(())
     }
@@ -320,28 +326,6 @@ impl Monitor {
             self.0.interval
         };
         seconds + jitter
-    }
-
-    async fn notify(&self, changes: Vec<serde_json::Value>) {
-        let Some(webhook) = &self.0.webhook else {
-            return;
-        };
-        let payload = serde_json::json!({
-            "version": 1, "event": "link_health_changed", "changes": changes
-        })
-        .to_string()
-        .into_bytes();
-        for attempt in 0..2 {
-            if attempt > 0 {
-                time::sleep(Duration::from_secs(2)).await;
-            }
-            match self.0.fetcher.deliver(webhook, payload.clone()).await {
-                Ok(()) => return,
-                Err(Failure::Blocked) => break,
-                Err(_) => {}
-            }
-        }
-        tracing::warn!("link health notification delivery failed");
     }
 }
 
@@ -380,6 +364,7 @@ fn classify(
                 Failure::Timeout => "timeout",
                 Failure::Connection => "connection",
                 Failure::Protocol => "protocol",
+                Failure::NotHtml => "protocol",
             };
             let status = match error {
                 Failure::Blocked | Failure::Busy => "unknown",

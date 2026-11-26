@@ -7,6 +7,7 @@
   import { messages } from './i18n';
   import type { Language } from './i18n';
   import { useTimeZone } from './timezone';
+  import Notifications from './Notifications.svelte';
 
   const readTimeZone = useTimeZone();
   const statusLabels = {
@@ -51,6 +52,13 @@
     system_operation_in_progress: boolean;
     restore_status: keyof typeof statusLabels;
     max_snapshot_bytes: number;
+    storage: { status: 'healthy' | 'low' | 'unavailable'; available_bytes: number | null; total_bytes: number | null; low_threshold_bytes: number };
+    cpu: {
+      window_ms: number; available_cores: number | null;
+      process: 'measured' | 'unavailable'; process_percent: number | null;
+      container: 'measured' | 'unavailable'; container_percent: number | null;
+    };
+    container_memory: { status: 'measured' | 'unavailable'; current_bytes: number | null; limit_bytes: number | null };
   }
 
   const actionLabels = { backup: 'systemDownload', upload: 'systemStage', discard: 'systemDiscard' } as const;
@@ -96,6 +104,29 @@
     const unit = value >= 1024 ** 3 ? 'GiB' : 'MiB';
     const scale = unit === 'GiB' ? 1024 ** 3 : 1024 ** 2;
     return `${new Intl.NumberFormat(language, { maximumFractionDigits: 2 }).format(value / scale)} ${unit}`;
+  }
+
+  function fill(template: string, values: Record<string, string>) {
+    return template.replace(/\{(\w+)\}/g, (match, key: string) => values[key] ?? match);
+  }
+
+  function cpu(percent: number | null, windowMs: number) {
+    if (percent === null) return t.systemUnknown;
+    return fill(t.systemCpuValue, {
+      percent: new Intl.NumberFormat(language, { style: 'percent', maximumFractionDigits: 1 }).format(percent / 100),
+      window: new Intl.NumberFormat(language, { style: 'unit', unit: 'millisecond' }).format(windowMs),
+    });
+  }
+
+  function storageValue(storage: Diagnostics['storage']) {
+    if (storage.available_bytes === null || storage.total_bytes === null) return t.systemUnknown;
+    return fill(t.systemStorageValue, { available: bytes(storage.available_bytes), total: bytes(storage.total_bytes) });
+  }
+
+  function containerMemory(memory: Diagnostics['container_memory']) {
+    if (memory.current_bytes === null) return t.systemUnknown;
+    if (memory.limit_bytes === null) return fill(t.systemContainerMemoryUnlimited, { current: bytes(memory.current_bytes) });
+    return fill(t.systemContainerMemoryValue, { current: bytes(memory.current_bytes), limit: bytes(memory.limit_bytes) });
   }
 
   function dateTime(value: number | null) {
@@ -205,7 +236,6 @@
         {@render metric(t.systemBuildRevision, diagnostics.build_revision ?? t.systemUnknown)}
         {@render metric(t.systemStartedAt, dateTime(diagnostics.started_at))}
         {@render metric(t.systemUptime, uptime(diagnostics.uptime_seconds))}
-        {@render metric(t.systemResidentMemory, diagnostics.process_rss_bytes === null ? t.systemUnknown : bytes(diagnostics.process_rss_bytes))}
         {@render metric(t.systemSqlite, diagnostics.sqlite_version)}
         {@render metric(t.systemSchema, diagnostics.schema_version)}
         {@render metric(t.systemDatabaseSize, bytes(diagnostics.database_bytes))}
@@ -222,10 +252,27 @@
         {@render metric(t.systemOperationStatus, diagnostics.system_operation_in_progress ? t.systemOperationActive : t.systemOperationIdle)}
         {@render metric(t.systemRestoreStatus, t[statusLabels[diagnostics.restore_status]])}
       </dl>
+      <h3 id={ids + '-resources'}>{t.systemResources}</h3>
+      <p class="muted">{t.systemResourcesHint}</p>
+      {#if diagnostics.storage.status === 'low'}
+        <p class="notice error" role="alert">{fill(t.systemStorageLowHint, { threshold: bytes(diagnostics.storage.low_threshold_bytes) })}</p>
+      {/if}
+      <dl class="diagnostics" aria-labelledby={ids + '-resources'}>
+        {@render metric(t.systemStorage, storageValue(diagnostics.storage))}
+        {@render metric(t.systemStorageStatus, diagnostics.storage.status === 'healthy' ? t.systemStorageHealthy
+          : diagnostics.storage.status === 'low' ? t.systemStorageLow : t.systemUnknown)}
+        {@render metric(t.systemCpuProcess, cpu(diagnostics.cpu.process_percent, diagnostics.cpu.window_ms))}
+        {@render metric(t.systemCpuContainer, cpu(diagnostics.cpu.container_percent, diagnostics.cpu.window_ms))}
+        {@render metric(t.systemCores, diagnostics.cpu.available_cores?.toLocaleString(language) ?? t.systemUnknown)}
+        {@render metric(t.systemResidentMemory, diagnostics.process_rss_bytes === null ? t.systemUnknown : bytes(diagnostics.process_rss_bytes))}
+        {@render metric(t.systemContainerMemory, containerMemory(diagnostics.container_memory))}
+      </dl>
     {:else if refreshing}
       <p role="status">{t.loading}</p>
     {/if}
   </section>
+
+  <div class="notifications-panel"><Notifications {api} {t} {language} /></div>
 
   <section class="panel panel-pad stack" aria-labelledby={ids + '-backup'}>
     <h2 id={ids + '-backup'}>{t.systemBackup}</h2>
@@ -278,7 +325,7 @@
 
 <style>
   .operations-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); align-items: start; gap: 16px; }
-  .diagnostics-panel { grid-column: 1 / -1; }
+  .diagnostics-panel, .notifications-panel { grid-column: 1 / -1; }
   .operations-notice { margin-bottom: 16px; }
   .diagnostics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 10px 28px; margin: 0; }
   .diagnostics div { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

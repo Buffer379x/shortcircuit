@@ -16,6 +16,7 @@ use tokio::{
 pub struct BackupSchedule {
     interval: Duration,
     keep: usize,
+    notifier: Option<crate::notifications::Notifier>,
 }
 
 impl BackupSchedule {
@@ -32,7 +33,14 @@ impl BackupSchedule {
         Ok(Some(Self {
             interval: Duration::from_secs(interval_hours * 3600),
             keep,
+            notifier: None,
         }))
+    }
+
+    /// Reports failed scheduled backups through the notification outbox.
+    pub fn with_notifier(mut self, notifier: Option<crate::notifications::Notifier>) -> Self {
+        self.notifier = notifier;
+        self
     }
 
     pub async fn run(
@@ -42,7 +50,20 @@ impl BackupSchedule {
         mut shutdown: watch::Receiver<bool>,
     ) {
         let scheduled = backup_dir.join("scheduled");
-        let mut timer = time::interval_at(Instant::now() + self.interval, self.interval);
+        // Continue the schedule from the newest scheduled snapshot, so restarts cannot postpone
+        // backups indefinitely. An overdue backup runs shortly after startup.
+        let newest = {
+            let scheduled = scheduled.clone();
+            task::spawn_blocking(move || newest_snapshot(&scheduled))
+                .await
+                .ok()
+                .flatten()
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs());
+        let first = first_delay(newest, now, self.interval);
+        let mut timer = time::interval_at(Instant::now() + first, self.interval);
         timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             tokio::select! {
@@ -59,6 +80,15 @@ impl BackupSchedule {
                 }
                 Err(_) => {
                     tracing::warn!("scheduled backup creation failed");
+                    if let Some(notifier) = &self.notifier {
+                        let at = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |elapsed| elapsed.as_secs() as i64);
+                        let event = crate::notifications::Event::BackupFailed { at };
+                        if notifier.record(&pool, event).await.is_err() {
+                            tracing::warn!("could not record a backup failure notification");
+                        }
+                    }
                     continue;
                 }
             };
@@ -71,6 +101,28 @@ impl BackupSchedule {
             }
         }
     }
+}
+
+/// Delay before the first scheduled backup after startup.
+const STARTUP_DELAY: Duration = Duration::from_secs(60);
+
+fn first_delay(newest: Option<u64>, now: u64, interval: Duration) -> Duration {
+    match newest {
+        Some(created) => {
+            let due = created.saturating_add(interval.as_secs());
+            Duration::from_secs(due.saturating_sub(now)).max(STARTUP_DELAY)
+        }
+        None => interval,
+    }
+}
+
+fn newest_snapshot(directory: &Path) -> Option<u64> {
+    fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter_map(|entry| backup_timestamp(&entry.file_name()))
+        .max()
 }
 
 fn backup_timestamp(name: &OsStr) -> Option<u64> {
@@ -89,10 +141,14 @@ fn backup_timestamp(name: &OsStr) -> Option<u64> {
     timestamp.parse().ok()
 }
 
-fn prune(completed: &Path, keep: usize) -> io::Result<()> {
+/// Keeps the `keep` newest snapshots in the scheduled or pre-upgrade directory of `completed`.
+pub(crate) fn prune(completed: &Path, keep: usize) -> io::Result<()> {
     let directory = completed
         .parent()
-        .filter(|parent| parent.file_name() == Some(OsStr::new("scheduled")))
+        .filter(|parent| {
+            [OsStr::new("scheduled"), OsStr::new("pre-upgrade")]
+                .contains(&parent.file_name().unwrap_or_default())
+        })
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid schedule directory"))?;
     let protected = completed
         .file_name()
@@ -163,6 +219,7 @@ mod tests {
             BackupSchedule {
                 interval: Duration::from_millis(400),
                 keep: 2,
+                notifier: None,
             }
             .run(pool, target.clone(), signal),
         );
@@ -187,6 +244,31 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[test]
+    fn restarts_continue_the_schedule_and_run_overdue_backups_soon() {
+        let day = Duration::from_secs(24 * 3600);
+        let now = 1_800_000_000;
+        // No scheduled snapshot yet: wait one interval.
+        assert_eq!(first_delay(None, now, day), day);
+        // The last scheduled snapshot is 25 hours old: run after the startup delay.
+        assert_eq!(first_delay(Some(now - 25 * 3600), now, day), STARTUP_DELAY);
+        // One hour old: continue the existing schedule instead of starting over.
+        assert_eq!(
+            first_delay(Some(now - 3600), now, day),
+            Duration::from_secs(23 * 3600)
+        );
+        let directory = tempfile::tempdir().unwrap();
+        for name in [
+            "shortcircuit-1700000000-0123456789abcdef0123456789abcdef.sqlite",
+            "shortcircuit-1700000100-0123456789abcdef0123456789abcdef.sqlite",
+            "notes.txt",
+        ] {
+            fs::write(directory.path().join(name), b"").unwrap();
+        }
+        assert_eq!(newest_snapshot(directory.path()), Some(1_700_000_100));
+        assert_eq!(newest_snapshot(&directory.path().join("missing")), None);
     }
 
     #[test]

@@ -31,6 +31,16 @@ async function verify() {
         });
       };
     });
+    // Below 760 px the navigation sits behind the Menu button.
+    const navigate = async (name) => {
+      const menu = page.getByRole('button', { name: /^Menu/ });
+      if (await menu.isVisible()) {
+        await menu.click();
+        assert.equal(await menu.getAttribute('aria-expanded'), 'true');
+      }
+      await page.locator('#main-navigation').getByRole('button', { name, exact: true }).click();
+      if (await menu.isVisible()) assert.equal(await menu.getAttribute('aria-expanded'), 'false');
+    };
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => {
@@ -336,7 +346,7 @@ async function verify() {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.setViewportSize({ width: 1360, height: 900 });
 
-    await page.getByRole('button', { name: 'Analytics', exact: true }).click();
+    await navigate('Analytics');
     await page.getByRole('heading', { name: 'Traffic summary', exact: true }).waitFor();
     await page.getByRole('checkbox', { name: 'Honor Do Not Track', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Clear analytics data', exact: true }).click();
@@ -347,7 +357,7 @@ async function verify() {
     assert.equal((await cleared).status(), 204);
     await page.getByText('Analytics data cleared.', { exact: true }).waitFor();
 
-    await page.getByRole('button', { name: 'Data exchange', exact: true }).click();
+    await navigate('Data exchange');
     await page.getByLabel('Link data file', { exact: true }).setInputFiles({
       name: 'links.json',
       mimeType: 'application/json',
@@ -390,7 +400,7 @@ async function verify() {
     const csvRedirect = await page.request.get(publicOrigin + '/csv-check', { maxRedirects: 0 });
     assert.equal(csvRedirect.headers().location, 'https://example.test/csv-check');
 
-    await page.getByRole('button', { name: 'Links', exact: true }).click();
+    await navigate('Links');
     const linkTable = page.getByRole('table', { name: 'Links', exact: true });
     await linkTable.getByRole('columnheader', { name: 'Clicks', exact: true }).waitFor();
     await linkTable.getByRole('columnheader', { name: 'Last used', exact: true }).waitFor();
@@ -521,7 +531,7 @@ async function verify() {
     assert.equal(await selectProtected.count(), 0);
     await linkTable.getByRole('link', { name: 'localhost/backup-check', exact: true }).waitFor();
 
-    await page.getByRole('button', { name: 'Tags', exact: true }).click();
+    await navigate('Tags');
     const tagRow = page.locator('.catalog-row').filter({ has: page.getByText('internal', { exact: true }) });
     const editTagDetails = tagRow.getByRole('button', { name: 'Edit tag details', exact: true });
     await editTagDetails.focus();
@@ -535,7 +545,7 @@ async function verify() {
     await tagRow.getByText('Team links', { exact: true }).waitFor();
     assert.equal(await editTagDetails.evaluate(button => button === document.activeElement), true);
 
-    await page.getByRole('button', { name: 'Links', exact: true }).click();
+    await navigate('Links');
     const internalTag = linkTable.getByRole('button', { name: 'internal', exact: true });
     await internalTag.locator('span').waitFor();
     assert.equal(await internalTag.getAttribute('title'), 'Team links');
@@ -552,7 +562,7 @@ async function verify() {
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
 
-    await page.getByRole('button', { name: 'Domains', exact: true }).click();
+    await navigate('Domains');
     const localDomain = page.locator('.catalog-row').filter({ has: page.getByText('localhost', { exact: true }) });
     await localDomain.getByRole('button', { name: 'Edit domain', exact: true }).click();
     const domainSettings = page.getByRole('dialog', { name: 'Edit domain', exact: true });
@@ -564,7 +574,7 @@ async function verify() {
     assert.equal(await robots.text(), 'User-agent: *\nDisallow: /\n');
 
     {
-      await page.getByRole('button', { name: 'Data exchange', exact: true }).click();
+      await navigate('Data exchange');
       await page.getByLabel('Link data file', { exact: true }).setInputFiles({
         name: 'mapped.csv',
         mimeType: 'text/csv',
@@ -584,13 +594,13 @@ async function verify() {
     }
 
     {
-      await page.getByRole('button', { name: 'Link monitor', exact: true }).click();
+      await navigate('Link monitor');
       await page.getByText('Monitoring is off.', { exact: false }).waitFor();
       const monitor = await page.request.get(admin + '/api/v1/monitoring');
       assert.deepEqual(await monitor.json(), { enabled: false, items: [], next_after: null });
       assert.equal((await page.request.get(publicOrigin + '/api/v1/monitoring')).status(), 404);
 
-      await page.getByRole('button', { name: 'System and backups', exact: true }).click();
+      await navigate('System and backups');
       await page.getByRole('heading', { name: 'Diagnostics', exact: true }).waitFor();
       await page.getByRole('button', { name: 'Download backup', exact: true }).click();
       const operations = page.getByRole('dialog', { name: 'Download backup', exact: true });
@@ -598,7 +608,7 @@ async function verify() {
       const backupEvent = page.waitForEvent('download');
       await operations.getByRole('button', { name: 'Download backup', exact: true }).click();
       const backupFile = await backupEvent;
-      assert.equal(backupFile.suggestedFilename(), 'shortcircuit-backup.sqlite');
+      assert.match(backupFile.suggestedFilename(), /^shortcircuit-schema[0-9]+-[0-9]+\.sqlite$/);
       const backupBytes = await readFile(await backupFile.path());
       assert.equal(backupBytes.subarray(0, 16).toString(), 'SQLite format 3\0');
 
@@ -617,7 +627,7 @@ async function verify() {
       await discard.getByRole('button', { name: 'Discard pending restore', exact: true }).click();
       await page.getByText('Pending restore discarded.', { exact: true }).waitFor();
 
-      await page.getByRole('button', { name: 'Audit log', exact: true }).click();
+      await navigate('Audit log');
       await page.getByText('Restore discarded', { exact: true }).waitFor();
       await page.getByText('Backup download', { exact: true }).waitFor();
       for (const [width, height] of [[1920,1080], [1440,900], [1280,800], [1024,768], [768,1024], [390,844], [320,568]]) {
@@ -627,7 +637,7 @@ async function verify() {
       await page.setViewportSize({ width: 1360, height: 900 });
     }
 
-    await page.getByRole('button', { name: 'Account', exact: true }).click();
+    await navigate('Account');
     await page.getByLabel('Display timezone', { exact: true }).selectOption('UTC');
     await page.waitForFunction(() => localStorage.getItem('shortcircuit-timezone') === 'UTC');
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();

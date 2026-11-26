@@ -357,6 +357,19 @@ async fn apply_import(
     let outcomes = compare_existing(&mut transaction, &input.items)
         .await
         .map_err(|_| Problem::unavailable())?;
+    let created = input
+        .items
+        .iter()
+        .zip(&outcomes)
+        .filter(|(_, outcome)| **outcome == ImportOutcome::Create)
+        .map(|(item, _)| item.target.as_str());
+    if crate::destinations::check_writes(&mut *transaction, created, &[])
+        .await
+        .map_err(|_| Problem::unavailable())?
+        .is_err()
+    {
+        return Err(Problem::invalid("destination_not_allowed"));
+    }
     let conflict = outcomes.contains(&ImportOutcome::Conflict);
     let applied = !input.preview && !conflict;
     if applied {

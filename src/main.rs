@@ -10,10 +10,10 @@ use std::{
 };
 
 use shortcircuit::{
-    AdminConfig, Analytics, Auth, BackupSchedule, BootstrapKind, Monitor, Operations,
-    PublicControls, PublicHosts, RateLimit, TrustedProxies, admin_router_with_services,
-    apply_pending_restore, create_snapshot, data_lock, open_database_with_timeout,
-    public_router_with_controls, restore_snapshot,
+    AdminConfig, AdminServices, Analytics, Auth, BackupSchedule, BootstrapKind, Monitor, Notifier,
+    Operations, PublicControls, PublicHosts, RateLimit, TitleLookup, TrustedProxies,
+    admin_router_with, apply_pending_restore, create_snapshot, data_lock,
+    open_database_with_timeout, public_router_with_controls, restore_snapshot,
 };
 use tokio::{net::TcpListener, sync::watch, time};
 use tracing_subscriber::EnvFilter;
@@ -56,9 +56,23 @@ async fn issue_bootstrap(kind: BootstrapKind) -> Result<(), AppError> {
     let database = database_path();
     let _lock = data_lock(&database, false)?;
     let pool = open_database_with_timeout(&database, busy_timeout()?).await?;
-    let token = Auth::new(pool.clone()).issue_bootstrap(kind).await?;
+    let issued = Auth::new(pool.clone()).issue_bootstrap(kind).await;
     pool.close().await;
+    let token = issued.map_err(|error| -> AppError {
+        match (error, kind) {
+            (shortcircuit::AuthError::Conflict, BootstrapKind::Setup) => io::Error::other(
+                "an administrator already exists. Run `shortcircuit recovery-token` to reset the password",
+            )
+            .into(),
+            (shortcircuit::AuthError::Conflict, BootstrapKind::Recovery) => io::Error::other(
+                "no administrator exists yet. Run `shortcircuit setup-token` to create one",
+            )
+            .into(),
+            (error, _) => error.into(),
+        }
+    })?;
     println!("{token}");
+    eprintln!("The token is valid for 15 minutes and can be used once.");
     Ok(())
 }
 
@@ -119,12 +133,8 @@ fn rate_limit(variable: &str) -> Result<Option<RateLimit>, AppError> {
     .map_err(|reason| io::Error::other(format!("invalid {variable}: {reason}")).into())
 }
 
-fn monitor_settings() -> Result<Monitor, AppError> {
-    let enabled = match setting("MONITOR_ENABLED", "false")?.as_str() {
-        "true" => true,
-        "false" => false,
-        _ => return Err(io::Error::other("MONITOR_ENABLED must be true or false").into()),
-    };
+fn monitor_settings(notifier: Option<Notifier>) -> Result<Monitor, AppError> {
+    let enabled = flag("MONITOR_ENABLED")?;
     let hourly = |name, default| -> Result<u16, AppError> {
         setting(name, default)?
             .parse::<u16>()
@@ -133,33 +143,26 @@ fn monitor_settings() -> Result<Monitor, AppError> {
     let interval_hours = hourly("MONITOR_INTERVAL_HOURS", "24")?;
     let priority_default = interval_hours.min(6).to_string();
     let priority_hours = hourly("MONITOR_PRIORITY_HOURS", &priority_default)?;
-    let configured = setting("MONITOR_WEBHOOK_URL", "")?;
-    let webhook = if let Some(file) = env::var_os("MONITOR_WEBHOOK_URL_FILE") {
-        if !configured.is_empty() {
-            return Err(io::Error::other("set only one monitor webhook URL configuration").into());
-        }
-        let source = std::fs::File::open(file)
-            .map_err(|_| io::Error::other("could not open MONITOR_WEBHOOK_URL_FILE"))?;
-        let mut value = String::new();
-        source
-            .take(4098)
-            .read_to_string(&mut value)
-            .map_err(|_| io::Error::other("could not read MONITOR_WEBHOOK_URL_FILE"))?;
-        if value.len() > 4097 || value.trim_end_matches(['\r', '\n']).is_empty() {
-            return Err(io::Error::other("invalid MONITOR_WEBHOOK_URL_FILE").into());
-        }
-        Some(value.trim_end_matches(['\r', '\n']).to_owned())
-    } else {
-        (!configured.is_empty()).then_some(configured)
-    };
-    Monitor::new(enabled, webhook, interval_hours, priority_hours)
+    Monitor::new(enabled, notifier, interval_hours, priority_hours)
         .map_err(|error| io::Error::other(error).into())
+}
+
+fn flag(variable: &str) -> Result<bool, AppError> {
+    match setting(variable, "false")?.as_str() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(io::Error::other(format!("{variable} must be true or false")).into()),
+    }
 }
 
 async fn serve() -> Result<(), AppError> {
     let database_busy_timeout = busy_timeout()?;
-    let backup_schedule = backup_schedule()?;
-    let monitor = monitor_settings()?;
+    let titles = TitleLookup::new(flag("TITLE_LOOKUP_ENABLED")?);
+    // A configured webhook activates notifications. MONITOR_WEBHOOK_URL remains an alias.
+    let notifier = Notifier::from_env(|name| env::var(name).ok()).map_err(io::Error::other)?;
+    let backup_schedule =
+        backup_schedule()?.map(|schedule| schedule.with_notifier(notifier.clone()));
+    let monitor = monitor_settings(notifier.clone())?;
     let proxies =
         TrustedProxies::parse(&setting("TRUSTED_PROXIES", "")?).map_err(io::Error::other)?;
     let public_controls = PublicControls {
@@ -171,31 +174,9 @@ async fn serve() -> Result<(), AppError> {
     let admin_addr = bind_address("ADMIN_BIND", "127.0.0.1:8081")?;
     let hosts = PublicHosts::parse(&setting("PUBLIC_HOSTS", "localhost,127.0.0.1,[::1]")?)
         .map_err(io::Error::other)?;
-    let public_socket = TcpListener::bind(public_addr).await?;
-    let public_port = public_socket.local_addr()?.port();
-    let config = AdminConfig::new(
-        &setting("ADMIN_ORIGIN", "http://localhost:8081")?,
-        public_port,
-    )
-    .map_err(io::Error::other)?
-    .with_access_controls(
-        proxies,
-        rate_limit("RATE_LIMIT_LOGIN")?.unwrap_or(RateLimit::PASSWORD_DEFAULT),
-        rate_limit("RATE_LIMIT_SENSITIVE")?.unwrap_or(RateLimit::SENSITIVE_DEFAULT),
-        rate_limit("RATE_LIMIT_API")?.unwrap_or(RateLimit::ADMIN_DEFAULT),
-    );
-    let config = match env::var("SHORTCODE_LENGTH") {
-        Ok(value) => {
-            let length = value.parse().map_err(|_| {
-                io::Error::other("SHORTCODE_LENGTH must be an integer from 8 to 32")
-            })?;
-            config
-                .with_shortcode_length(length)
-                .map_err(io::Error::other)?
-        }
-        Err(env::VarError::NotPresent) => config,
-        Err(error) => return Err(error.into()),
-    };
+    let admin_origin = setting("ADMIN_ORIGIN", "http://localhost:8081")?;
+    // Validate the origin before any migration runs.
+    AdminConfig::new(&admin_origin, 0).map_err(io::Error::other)?;
     if env::var_os("ADMIN_TOKEN_FILE").is_some() {
         return Err(io::Error::other(
             "Remove ADMIN_TOKEN_FILE. Use setup-token and create scoped API keys.",
@@ -210,6 +191,29 @@ async fn serve() -> Result<(), AppError> {
     if let Some(applied) = restore_applied {
         Operations::record_startup_restore(&pool, applied).await;
     }
+    // Listen only after restores and migrations, so early requests are refused, not stalled.
+    let public_socket = TcpListener::bind(public_addr).await?;
+    let public_port = public_socket.local_addr()?.port();
+    let config = AdminConfig::new(&admin_origin, public_port)
+        .map_err(io::Error::other)?
+        .with_access_controls(
+            proxies,
+            rate_limit("RATE_LIMIT_LOGIN")?.unwrap_or(RateLimit::PASSWORD_DEFAULT),
+            rate_limit("RATE_LIMIT_SENSITIVE")?.unwrap_or(RateLimit::SENSITIVE_DEFAULT),
+            rate_limit("RATE_LIMIT_API")?.unwrap_or(RateLimit::ADMIN_DEFAULT),
+        );
+    let config = match env::var("SHORTCODE_LENGTH") {
+        Ok(value) => {
+            let length = value.parse().map_err(|_| {
+                io::Error::other("SHORTCODE_LENGTH must be an integer from 8 to 32")
+            })?;
+            config
+                .with_shortcode_length(length)
+                .map_err(io::Error::other)?
+        }
+        Err(env::VarError::NotPresent) => config,
+        Err(error) => return Err(error.into()),
+    };
 
     let admin_socket = TcpListener::bind(admin_addr).await?;
     tracing::info!(
@@ -226,6 +230,22 @@ async fn serve() -> Result<(), AppError> {
         let pool = pool.clone();
         let receiver = receiver.clone();
         tokio::spawn(async move { monitor.run(pool, receiver).await })
+    });
+    let notification_job = notifier.clone().map(|notifier| {
+        let pool = pool.clone();
+        let receiver = receiver.clone();
+        let directory = database
+            .parent()
+            .map_or_else(|| PathBuf::from("."), PathBuf::from);
+        // Only the counter, so the notifier never keeps the analytics writer alive.
+        let dropped = analytics.dropped_counter();
+        tokio::spawn(async move { notifier.run(pool, directory, Some(dropped), receiver).await })
+    });
+    let title_job = titles.enabled().then(|| {
+        let titles = titles.clone();
+        let pool = pool.clone();
+        let receiver = receiver.clone();
+        tokio::spawn(async move { titles.run(pool, receiver).await })
     });
     let scheduled = backup_schedule.map(|schedule| {
         tokio::spawn(schedule.run(
@@ -248,8 +268,19 @@ async fn serve() -> Result<(), AppError> {
     .with_graceful_shutdown(wait_for_stop(receiver.clone()));
     let admin = axum::serve(
         admin_socket,
-        admin_router_with_services(pool.clone(), hosts, config, analytics, operations, monitor)
-            .into_make_service_with_connect_info::<SocketAddr>(),
+        admin_router_with(
+            pool.clone(),
+            hosts,
+            config,
+            AdminServices {
+                analytics: Some(analytics),
+                operations: Some(operations),
+                monitor: Some(monitor),
+                titles: Some(titles),
+                notifications: notifier,
+            },
+        )
+        .into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(wait_for_stop(receiver));
     let stop_deadline = async move {
@@ -274,7 +305,10 @@ async fn serve() -> Result<(), AppError> {
             tracing::warn!("analytics flush deadline reached");
         }
     }
-    if let Some(task) = monitoring {
+    for task in [monitoring, title_job, notification_job]
+        .into_iter()
+        .flatten()
+    {
         task.abort();
         let _ = task.await;
     }
@@ -313,6 +347,17 @@ async fn backup() -> Result<(), AppError> {
 }
 
 async fn restore(source: PathBuf) -> Result<(), AppError> {
+    if let Err(error) = std::fs::File::open(&source) {
+        return Err(io::Error::new(
+            error.kind(),
+            format!(
+                "cannot read {}: {error}. The file must be readable by the user that runs \
+                 ShortCircuit (UID 10001 in the container image), for example after chmod 644",
+                source.display()
+            ),
+        )
+        .into());
+    }
     let result = restore_snapshot(&database_path(), &source).await?;
     println!(
         "Restored database schema {} from snapshot created at UTC Unix timestamp {}",
@@ -350,7 +395,18 @@ fn healthcheck() -> Result<(), AppError> {
     Ok(())
 }
 
-fn main() -> Result<(), AppError> {
+fn main() -> std::process::ExitCode {
+    // Print errors with their message rather than a debug representation.
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<(), AppError> {
     let mut arguments = env::args_os().skip(1);
     let command = arguments.next();
     let target = arguments.next();
@@ -365,7 +421,10 @@ fn main() -> Result<(), AppError> {
             runtime()?.block_on(issue_bootstrap(BootstrapKind::Recovery))
         }
         (Some(command), None, None, None) if command == "--version" => {
-            println!("shortcircuit {}", env!("CARGO_PKG_VERSION"));
+            match shortcircuit::build_revision() {
+                Some(revision) => println!("shortcircuit {} ({revision})", env!("CARGO_PKG_VERSION")),
+                None => println!("shortcircuit {}", env!("CARGO_PKG_VERSION")),
+            }
             Ok(())
         }
         (Some(command), None, None, None) if command == "backup" => {

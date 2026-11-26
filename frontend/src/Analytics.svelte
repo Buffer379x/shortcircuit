@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { ApiError } from './api';
   import type { Api } from './api';
+  import UnusualTraffic from './UnusualTraffic.svelte';
   import Dialog from './Dialog.svelte';
   import { downloadFile, problemMessage } from './format';
   import Icon from './Icon.svelte';
@@ -27,14 +28,14 @@
     start_day: number;
     end_day: number;
     host: string | null;
-    totals: Record<'redirect' | 'blocked' | 'missing' | 'human' | 'bot' | 'unknown', number>;
+    totals: Record<'redirect' | 'blocked' | 'missing' | 'root_fallback' | 'root_missing' | 'human' | 'bot' | 'unknown', number>;
     previous_redirects: number;
     daily: { day: number; redirect: number }[];
     top_links: { id: number; slug: string; host: string; title: string; total: number }[];
     top_domains: { host: string; total: number }[];
     top_tags: { tag: string; total: number }[];
     breakdowns: Record<Dimension, { category: Category; total: number }[]>;
-    dropped: number;
+    dropped: number | null;
   }
 
   interface Settings {
@@ -56,6 +57,7 @@
   const ranges = [7, 30, 90, 365];
   const metrics = [
     ['redirect', 'analyticsRedirects'], ['blocked', 'analyticsBlocked'], ['missing', 'analyticsMissing'],
+    ['root_fallback', 'analyticsRootFallback'], ['root_missing', 'analyticsRootMissing'],
     ['human', 'analyticsHuman'], ['bot', 'analyticsBot'], ['unknown', 'analyticsUnknown'],
   ] as const;
   const collectionFields = [
@@ -317,7 +319,7 @@
               : t.analyticsNoPriorRedirects}
           </dd>
         </div>
-        <div><dt>{t.analyticsDropped}</dt><dd>{whole.format(summary.dropped)}</dd></div>
+        {#if summary.dropped !== null}<div><dt>{t.analyticsDropped}</dt><dd>{whole.format(summary.dropped)}</dd></div>{/if}
       </dl>
       {#if settings && settings.aggregate_days < summary.today - summary.start_day + summary.days + 1}
         <p class="muted">{t.analyticsRetentionNotice} {dayCount.format(settings.aggregate_days)}.</p>
@@ -329,6 +331,7 @@
         {#if exportError}<p class="notice error" role="alert">{t[exportError]}</p>{/if}
       </div>
     </section>
+    <UnusualTraffic {t} {api} {language} {host} />
 
     <div class="report-tables">
       <section class="panel" aria-labelledby={panelId + '-daily'}>

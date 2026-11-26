@@ -603,7 +603,7 @@ async fn simulator_checks_draft_rule_precedence_and_leaves_the_live_link_unchang
         response_body(result).await,
         json!({
             "target":"https://example.test/first/Guide/PDF?base=1&team=ops&sig=A%2f#keep",
-            "status":307,"rule":1
+            "status":307,"rule":1,"permitted":true
         })
     );
     let fallback = request(
@@ -617,7 +617,7 @@ async fn simulator_checks_draft_rule_precedence_and_leaves_the_live_link_unchang
     assert_eq!(
         response_body(fallback).await,
         json!({
-            "target":"https://example.test/default","status":302,"rule":null
+            "target":"https://example.test/default","status":302,"rule":null,"permitted":true
         })
     );
     let long_rule = json!({

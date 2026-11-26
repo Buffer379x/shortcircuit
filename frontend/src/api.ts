@@ -165,7 +165,38 @@ export interface QrTemplate extends QrStyle {
   name: string;
 }
 
-export const scopes = ['read', 'write', 'delete'] as const;
+export interface DestinationRule {
+  host: string;
+  subdomains: boolean;
+  action: 'allow' | 'block';
+}
+
+export interface DestinationPolicy {
+  enabled: boolean;
+  rules: DestinationRule[];
+}
+
+export interface DestinationPolicyReport extends DestinationPolicy {
+  impact: {
+    links: number;
+    rule_links: number;
+    fallbacks: number;
+    examples: { id: number; host: string; slug: string }[];
+  };
+}
+
+export interface TrafficReport {
+  day: number;
+  baseline_days: number;
+  minimum_redirects: number;
+  multiplier: number;
+  host: string | null;
+  analytics_enabled: boolean;
+  items: { id: number; host: string; slug: string; title: string; today: number; baseline_average: number }[];
+  has_more: boolean;
+}
+
+export const scopes = ['read', 'write', 'delete', 'analytics'] as const;
 export type Scope = typeof scopes[number];
 
 export interface Key {

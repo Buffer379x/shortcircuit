@@ -46,6 +46,7 @@ pub fn data_lock(database: &Path, exclusive: bool) -> io::Result<File> {
         .recursive(true)
         .mode(0o700)
         .create(parent(&path))?;
+    crate::store::prepare_temp_directory()?;
     regular_metadata(&path)?;
 
     let lock = File::options()
@@ -366,6 +367,26 @@ async fn validate_snapshot(
         })
         .ok_or_else(|| invalid_data("snapshot format marker is missing or invalid"))?;
     actual_schema.remove(marker);
+    // Name both schema versions so an operator knows which release can restore the file.
+    let snapshot_version: Option<i64> =
+        sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success = 1")
+            .fetch_one(&mut snapshot)
+            .await
+            .ok()
+            .flatten();
+    let expected_version = migrations.last().map(|migration| migration.0);
+    if let (Some(found), Some(expected)) = (snapshot_version, expected_version)
+        && found != expected
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "snapshot uses schema {found}, but this ShortCircuit version uses schema {expected}. \
+                 Restore it with the release that created it, then upgrade"
+            ),
+        )
+        .into());
+    }
     if actual_schema.as_slice() != schema {
         return Err(
             invalid_data("snapshot schema does not match this ShortCircuit version").into(),
@@ -423,6 +444,9 @@ async fn scrub_snapshot(path: &Path) -> Result<(), RestoreError> {
     )
     .execute(&mut *transaction)
     .await?;
+    // Outbound work queued in the snapshot belongs to an earlier timeline.
+    crate::notifications::after_restore(&mut *transaction).await?;
+    crate::titles::discard_pending(&mut *transaction).await?;
     transaction.commit().await?;
     // Rebuild the file to discard free pages belonging to older temporary credentials.
     sqlx::query("VACUUM").execute(&mut snapshot).await?;
