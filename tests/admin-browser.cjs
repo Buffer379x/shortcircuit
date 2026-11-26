@@ -349,14 +349,29 @@ async function verify() {
     const csvRedirect = await page.request.get(publicOrigin + '/csv-check', { maxRedirects: 0 });
     assert.equal(csvRedirect.headers().location, 'https://example.test/csv-check');
 
+    await page.getByRole('button', { name: 'Links', exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });
+    const linkTable = page.getByRole('table', { name: 'Links', exact: true });
+    await page.getByRole('combobox', { name: 'Sort links', exact: true }).selectOption('slug_asc');
+    await linkTable.locator('.link-short').first().filter({ hasText: 'localhost/backup-check' }).waitFor();
+    assert.equal(await linkTable.locator('.link-short').first().textContent(), 'localhost/backup-check');
+    await page.getByRole('combobox', { name: 'Filter by domain', exact: true }).selectOption('localhost');
+    const searchResponse = page.waitForResponse(response => response.url() === admin + '/api/v1/links/search'
+      && response.request().postDataJSON()?.query === 'chapter=intro#start');
+    await page.getByRole('searchbox', { name: 'Search all links', exact: true }).fill('chapter=intro#start');
+    const found = await searchResponse;
+    assert.equal(found.status(), 200);
+    assert.equal(found.request().method(), 'POST');
+    assert.deepEqual(found.request().postDataJSON(), { query: 'chapter=intro#start', host: 'localhost', sort: 'slug_asc' });
+    await linkTable.getByRole('link', { name: 'localhost/test/guide', exact: true }).waitFor();
+    assert.equal(await linkTable.locator('tbody tr').count(), 1);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);
     assert.equal((await page.request.get(admin + '/api/v1/openapi.json')).status(), 401);
     assert.deepEqual(errors, []);
-    console.log('Browser smoke passed: setup, create link, styled QR preview, templates, download and validation, link history, visit limits, protected links, analytics controls, JSON and CSV exchange, URL tools, mobile layout and sign-out.');
+    console.log('Browser smoke passed: setup, create link, styled QR preview, templates, download and validation, link history, visit limits, protected links, analytics controls, JSON and CSV exchange, URL tools, catalog search, mobile layout and sign-out.');
   } finally {
     await browser.close();
   }

@@ -1,6 +1,7 @@
 mod access;
 mod assets;
 mod catalog;
+mod catalog_search;
 mod duplicates;
 mod exchange;
 mod links;
@@ -88,6 +89,7 @@ fn build_admin_router(
         .route("/api/v1/keys/{id}", delete(revoke_key))
         .merge(qr_templates::routes())
         .merge(links::qr_logo_routes())
+        .merge(catalog_search::routes())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             access::browser_access,

@@ -5,7 +5,7 @@
 | Area | Status |
 |---|---|
 | Public foundation | Host-bound redirects, a versioned SQLite database with WAL and full synchronization, and separate public and admin listeners. |
-| Link management | Create, list, edit, enable, disable, tag, and delete links. The admin interface can export the displayed links as JSON. |
+| Link management | Create, edit, enable, disable, tag, and delete links. Search, filter, and sort the full catalog with cursor pagination. Export displayed links as JSON. |
 | Link tools | The link forms can find exact destination matches or preview the removal of known tracking parameters. |
 | Redirect controls | Managed domains and fallbacks, time windows, atomic visit limits, ordered rules, and opt-in query and path forwarding. |
 | Protected links | Optional passwords and confirmed one-time access. The public form verifies a short-lived signature and the configured origin before redirecting. SQLite enforces consumption independently of analytics. |

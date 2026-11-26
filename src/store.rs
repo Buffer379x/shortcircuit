@@ -18,6 +18,8 @@ use crate::{
     protection::{self, ProtectionDraft},
 };
 
+pub(crate) mod catalog;
+
 static MIGRATIONS: Migrator = sqlx::migrate!();
 const MIN_SQLITE: [u32; 3] = [3, 51, 3];
 const DATABASE_TIMEOUT: Duration = Duration::from_secs(2);

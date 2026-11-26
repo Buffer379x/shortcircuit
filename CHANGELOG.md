@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Search, filter, and sort all links in the catalog with stable cursor pagination and keep search terms in the request body.
 - Add optional PNG logos to the QR dialog with verified output in PNG and SVG.
 - Add an optional QR outline outside the quiet zone. The preview, PNG, SVG, and saved templates support the same setting.
 - Save and reuse named QR design templates across links. Include templates in SQLite backups.

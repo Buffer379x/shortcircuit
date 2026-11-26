@@ -101,12 +101,22 @@ async fn response_body(response: Response) -> Value {
 async fn catalog_search_spans_pages_and_a_deleted_cursor_anchor() {
     let app = App::start().await;
     let (cookie, csrf) = app.setup().await;
-    let headers = [("cookie", cookie.as_str()), ("origin", ORIGIN), ("x-csrf-token", csrf.as_str())];
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
     let endpoint = "/api/v1/links/search";
     assert_eq!(
-        request(&app.admin, Method::POST, endpoint, &headers[..2], Some(json!({})))
-            .await
-            .status(),
+        request(
+            &app.admin,
+            Method::POST,
+            endpoint,
+            &headers[..2],
+            Some(json!({}))
+        )
+        .await
+        .status(),
         StatusCode::FORBIDDEN
     );
     sqlx::raw_sql(
@@ -120,27 +130,57 @@ async fn catalog_search_spans_pages_and_a_deleted_cursor_anchor() {
     .execute(&app.pool)
     .await
     .unwrap();
-    let search = request(&app.admin, Method::POST, endpoint, &headers, Some(json!({
-        "query":"signature=a%2B", "host":"s.example", "enabled":false, "tag":"release"
-    }))).await;
+    let search = request(
+        &app.admin,
+        Method::POST,
+        endpoint,
+        &headers,
+        Some(json!({
+            "query":"signature=a%2B", "host":"s.example", "enabled":false, "tag":"release"
+        })),
+    )
+    .await;
     assert_eq!(search.status(), StatusCode::OK);
     assert_eq!(search.headers()[header::CACHE_CONTROL], "no-store");
     let result = response_body(search).await;
     assert_eq!(result["items"].as_array().unwrap().len(), 1);
     assert_eq!(result["items"][0]["slug"], "Release_Notes");
     assert!(result["next_cursor"].is_null());
-    let literal = request(&app.admin, Method::POST, endpoint, &headers, Some(json!({"query":"%_"}))).await;
+    let literal = request(
+        &app.admin,
+        Method::POST,
+        endpoint,
+        &headers,
+        Some(json!({"query":"%_"})),
+    )
+    .await;
     assert_eq!(response_body(literal).await["items"], json!([]));
 
-    let first = request(&app.admin, Method::POST, endpoint, &headers,
-        Some(json!({"sort":"title_asc","host":"go.example"}))).await;
+    let first = request(
+        &app.admin,
+        Method::POST,
+        endpoint,
+        &headers,
+        Some(json!({"sort":"title_asc","host":"go.example"})),
+    )
+    .await;
     let first = response_body(first).await;
     assert_eq!(first["items"].as_array().unwrap().len(), 100);
     assert_eq!(first["items"][99]["slug"], "item-100");
-    sqlx::query("DELETE FROM links WHERE slug = 'item-100'").execute(&app.pool).await.unwrap();
-    let next = request(&app.admin, Method::POST, endpoint, &headers, Some(json!({
-        "sort":"title_asc","host":"go.example","after":first["next_cursor"]
-    }))).await;
+    sqlx::query("DELETE FROM links WHERE slug = 'item-100'")
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let next = request(
+        &app.admin,
+        Method::POST,
+        endpoint,
+        &headers,
+        Some(json!({
+            "sort":"title_asc","host":"go.example","after":first["next_cursor"]
+        })),
+    )
+    .await;
     let next = response_body(next).await;
     assert_eq!(next["items"].as_array().unwrap().len(), 2);
     assert_eq!(next["items"][0]["slug"], "item-101");

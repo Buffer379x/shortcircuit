@@ -18,7 +18,8 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Domain management and fallbacks | Current | P0/P1 | Manage allowed public hosts from the admin UI and configure validated fallback targets per domain. Test route collisions, errors, and redirect loops. |
 | Ordered redirect rules | Current | P1 | The first matching rule wins. The administration interface edits and reorders rules. Conditions use language, device, operating system, browser, and query values. |
 | Path matching extensions and aliases | Optional | P2 | Evaluate Unicode slugs, case-insensitive or trailing-slash matching, and explicit aliases against collision, encoding, and proxy requirements. |
-| Search and bulk actions | Planned | P1 | Search, filter, and sort links by fields such as status, tag, and domain. Preview bulk actions and audit sensitive changes, including deletion and expired-link cleanup. |
+| Search, filters, and sorting | Current | P1 | Search the full catalog by title, slug, domain, destination, or tag. Combine domain, status, and tag filters and sort paginated results. |
+| Bulk actions | Planned | P1 | Select links, preview changes, and audit sensitive actions such as deletion and expired-link cleanup. |
 | Slug generation settings | Planned | P1 | Allow a configurable generated length while preserving database uniqueness and bounded retries. |
 | Tags | Current | P1 | View tag counts, rename or merge tags, and remove their assignments. Tag suggestions and colors are planned. |
 | Crawler controls | Planned | P1 | Configure crawler directives and per-link crawlability. Check reserved route collisions before serving `robots.txt`. |

@@ -2555,6 +2555,137 @@
         }
       }
     },
+    "/api/v1/links/search": {
+      "post": {
+        "operationId": "searchLinkCatalog",
+        "summary": "Search, filter, and sort all links",
+        "description": "Read-only, browser-session search. Reuse the response cursor with the same filters and sort. The cursor stores the sort key so paging can continue after the anchor is deleted.",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogSearchInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Up to 100 links and a continuation cursor if more results match.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSearchPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid browser session is required.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request Origin or X-CSRF-Token is missing or invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The JSON body exceeds the administration request limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type must be application/json.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The search, filters, sort, or cursor is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/links/{id}": {
       "parameters": [
         {
@@ -5726,6 +5857,101 @@
           "target",
           "conditions"
         ]
+      },
+      "CatalogSearchCursor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "key",
+          "sort"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "key": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "sort": {
+            "$ref": "#/components/schemas/CatalogSearchSort"
+          }
+        }
+      },
+      "CatalogSearchInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "Literal substring. The server caps the UTF-8 input at 4096 bytes."
+          },
+          "host": {
+            "$ref": "#/components/schemas/CatalogHost"
+          },
+          "tag": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "sort": {
+            "$ref": "#/components/schemas/CatalogSearchSort"
+          },
+          "after": {
+            "$ref": "#/components/schemas/CatalogSearchCursor"
+          }
+        }
+      },
+      "CatalogSearchPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/CatalogLink"
+            }
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogSearchCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "CatalogSearchSort": {
+        "type": "string",
+        "enum": [
+          "newest",
+          "oldest",
+          "title_asc",
+          "title_desc",
+          "slug_asc",
+          "slug_desc",
+          "host_asc",
+          "host_desc",
+          "target_asc",
+          "target_desc",
+          "enabled_first",
+          "disabled_first"
+        ],
+        "default": "newest"
       },
       "CatalogSlug": {
         "type": "string",
