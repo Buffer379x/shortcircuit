@@ -6,7 +6,8 @@ use axum::{
 };
 use serde_json::{Value, json};
 use shortcircuit::{
-    AdminConfig, Auth, BootstrapKind, PublicHosts, admin_router, open_database, public_router_on_port,
+    AdminConfig, Auth, BootstrapKind, PublicHosts, admin_router, open_database,
+    public_router_on_port,
 };
 use tower::ServiceExt;
 
@@ -129,7 +130,9 @@ async fn loopback_confirmation_form_uses_the_configured_port() {
         )
         .await;
     assert_eq!(created.status(), StatusCode::CREATED);
-    let response = app.visit("localhost:9471", Method::GET, "/once?x=1&y=2").await;
+    let response = app
+        .visit("localhost:9471", Method::GET, "/once?x=1&y=2")
+        .await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), 10_000).await.unwrap();
     assert!(

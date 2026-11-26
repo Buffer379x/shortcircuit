@@ -11,8 +11,8 @@ use std::{
 
 use shortcircuit::{
     AdminConfig, Analytics, Auth, BackupSchedule, BootstrapKind, PublicHosts,
-    admin_router_with_analytics, create_snapshot, data_lock, open_database,
-    public_router_on_port, restore_snapshot,
+    admin_router_with_analytics, create_snapshot, data_lock, open_database, public_router_on_port,
+    restore_snapshot,
 };
 use tokio::{net::TcpListener, sync::watch, time};
 use tracing_subscriber::EnvFilter;

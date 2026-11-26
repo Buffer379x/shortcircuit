@@ -153,7 +153,8 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         if let Some(peer) = peer {
             result = match confirm(&state, action, lookup, &parts.headers, body, peer).await {
                 Ok(confirmed) => confirmed,
-                Err(response) => return response,
+                Err(StatusCode::UNAUTHORIZED) => return action.page(lookup.language, true),
+                Err(status) => return status.into_response(),
             };
         } else if parts.method == Method::HEAD {
             return StatusCode::OK.into_response();
@@ -201,16 +202,10 @@ async fn confirm(
     headers: &HeaderMap,
     body: Body,
     peer: IpAddr,
-) -> Result<Resolution, Response> {
-    let password = action
-        .submit(headers, body)
-        .await
-        .map_err(IntoResponse::into_response)?;
+) -> Result<Resolution, StatusCode> {
+    let password = action.submit(headers, body).await?;
     if action.link.password_required {
-        state
-            .attempts
-            .allow(peer)
-            .map_err(IntoResponse::into_response)?;
+        state.attempts.allow(peer)?;
         let hash = sqlx::query_scalar::<_, String>(
             "SELECT password_hash FROM link_protection
              WHERE link_id = ? AND revision = ? AND password_hash IS NOT NULL",
@@ -219,18 +214,18 @@ async fn confirm(
         .bind(action.link.revision)
         .fetch_optional(&state.pool)
         .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())?
-        .ok_or_else(|| StatusCode::FORBIDDEN.into_response())?;
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .ok_or(StatusCode::FORBIDDEN)?;
         match state.auth.verify_password(&password, &hash, false).await {
             Ok(_) => {}
-            Err(AuthError::Unauthorized) => return Err(action.page(lookup.language, true)),
-            Err(AuthError::Busy) => return Err(StatusCode::TOO_MANY_REQUESTS.into_response()),
-            Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE.into_response()),
+            Err(AuthError::Unauthorized) => return Err(StatusCode::UNAUTHORIZED),
+            Err(AuthError::Busy) => return Err(StatusCode::TOO_MANY_REQUESTS),
+            Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
         }
     }
     redirect::confirm(&state.pool, lookup, action.link, action.origin)
         .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
 }
 
 fn method_not_allowed() -> Response {
