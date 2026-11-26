@@ -21,7 +21,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Search, filters, and sorting | Current | P1 | Search the full catalog by title, slug, domain, destination, or tag. Combine domain and status filters with all-tag or any-tag matching and sort paginated results. |
 | Bulk actions | Current | P1 | Select up to 50 links, change their status or tags atomically, export native JSON or CSV, and confirm permanent deletion. |
 | Slug generation settings | Current | P1 | Set the generated length to 8 through 32 with `SHORTCODE_LENGTH`. Existing and custom slugs preserve their spelling. |
-| Tags | Current | P1 | View tag counts, rename or merge tags, and remove their assignments. Tag suggestions and colors are planned. |
+| Tags | Current | P1 | View tag counts, edit colors and descriptions, rename or merge tags, and remove their assignments. The link form suggests existing tags as the operator types. |
 | Crawler controls | Planned | P1 | Configure crawler directives and per-link crawlability. Check reserved route collisions before serving `robots.txt`. |
 | Duplicate detection | Current | P2 | Lookup matches against the exact stored destination. The creation and edit forms offer copying an existing short URL. Approximate matches and merge are planned. |
 | Duplicate a link | Current | P2 | Open a prefilled form for the destination, title, description, tags, and analytics preference. Save the copy disabled and review its redirect and access settings before enabling it. |

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{QueryBuilder, SqliteConnection, SqlitePool};
 
 use crate::{
-    input::{link_description, link_tags, link_title, valid_target},
+    input::{link_tags, link_title, plain_description, valid_target},
     redirect::{self, Policy, PolicyError},
     store::{self, Link, LinkUpdate, push_host_scope},
 };
@@ -84,7 +84,7 @@ impl Metadata {
             .description
             .as_deref()
             .map(|value| {
-                link_description(value)
+                plain_description(value)
                     .map(str::to_owned)
                     .ok_or(RestoreError::Invalid("invalid_description"))
             })

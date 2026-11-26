@@ -25,7 +25,8 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `GET` and `POST /api/v1/keys` | Require a browser session. Listing returns key metadata. Creation accepts `name`, `scopes`, optional `host`, and optional `expires_at` in Unix seconds. The response contains `key` and the one-time `token`. |
 | `DELETE /api/v1/keys/{id}` | Revokes the key and returns `204`. |
 | `GET` and `POST /api/v1/catalog/domains` | Browser-session catalog. GET returns `items`. POST sets `host`, `origin`, `enabled`, and optional `root_target` and `missing_target`. Domain origins contain the same host and an optional port. |
-| `GET`, `PATCH`, and `DELETE /api/v1/catalog/tags` | Browser-session catalog. GET returns tag names and link counts. PATCH renames or merges using `name` and `new_name`. DELETE uses `name` and removes the tag from its assigned links. Mutations return `204`. |
+| `GET`, `PATCH`, and `DELETE /api/v1/catalog/tags` | Browser-session catalog. GET returns tag names, link counts, and any saved color or description. PATCH renames or merges using `name` and `new_name`. DELETE uses `name` and removes the tag and its assignments. Mutations return `204`. |
+| `PATCH /api/v1/catalog/tags/details` | Replaces saved details for an existing tag. The body contains `name`, optional `color` as a six-digit hex color with a leading `#`, and an optional plain-text `description` of up to 500 Unicode characters. Use null or omit the color to clear it. Omit the description or send an empty string to clear it. Returns `204`. |
 | `GET` and `PATCH /api/v1/links/{id}/policy` | Reads or replaces the redirect settings. Writable keys are `status`, `starts_at`, `expires_at`, `max_visits`, `forward_query`, `forward_path`, and `rules`. Read responses include `visits_used`. Omitted PATCH fields take their defaults. |
 | `GET` and `PATCH /api/v1/links/{id}/protection` | Returns `password_required`, `one_time`, and `consumed`. PATCH takes `one_time` and optional `password` or `remove_password: true`. Omit both password fields to keep the current password. A permanent redirect or an attempt to remove a consumed one-time restriction returns `409`. |
 | `GET` and `DELETE /api/v1/links/{id}/history` | Browser-session access. GET returns current editable settings and up to 25 recent revisions. DELETE clears the link's history and returns `204`. |
@@ -40,6 +41,10 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 Link objects contain `id`, `host`, `slug`, `target`, `created_at`, `title`, `description`, `enabled`, `analytics_enabled`, and `tags`. Slugs use case-sensitive ASCII letters, digits, hyphens, underscores, and segment separators. Their maximum is 200 bytes. With no custom slug, the server uses its configured generated length (10 by default). Destinations are absolute HTTP or HTTPS URIs up to 4,096 bytes, with valid percent encoding and credentials excluded. A link can carry up to 20 tags. Titles and tags use limits of 160 and 40 Unicode characters respectively. Descriptions support up to 500 Unicode characters and line feeds after trimming. Send an empty string to clear a description. Link creation accepts optional `enabled` and `analytics_enabled` flags that default to true.
 
 An API key uses `Authorization: Bearer <token>`. A key can hold `read` for list operations, `write` for creation and edits, and `delete` for link deletion. An optional host restriction applies to both reads and changes. The browser supplies an exact `Origin` and `X-CSRF-Token` for session-authenticated changes. Errors use `application/problem+json` with `status`, `title`, and `code`. [Security design](SECURITY.md)
+
+### Tags
+
+Tag details keep a tag in the catalog even when its link count is zero. A merge keeps the destination's existing color and description and fills any empty fields from the source. Native link exchange keeps tag names. A full SQLite backup preserves the saved tag details.
 
 ### Catalog search
 

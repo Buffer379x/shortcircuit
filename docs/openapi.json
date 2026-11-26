@@ -1272,7 +1272,7 @@
     "/api/v1/catalog/tags": {
       "get": {
         "operationId": "listCatalogTags",
-        "summary": "List assigned tags",
+        "summary": "List tags and saved details",
         "tags": [
           "Tags"
         ],
@@ -1305,7 +1305,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Tags with saved details can have zero link assignments."
       },
       "patch": {
         "operationId": "renameCatalogTag",
@@ -1388,7 +1389,7 @@
             }
           }
         },
-        "description": "If the new name already exists, applicable assignments are merged.",
+        "description": "Rename the tag or merge its assignments into the destination. Destination details take precedence field by field.",
         "parameters": [
           {
             "name": "Origin",
@@ -1414,7 +1415,7 @@
       },
       "delete": {
         "operationId": "deleteCatalogTag",
-        "summary": "Remove a tag from every link",
+        "summary": "Remove a tag, its details, and all assignments",
         "tags": [
           "Tags"
         ],
@@ -1511,6 +1512,113 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/CatalogTagDelete"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/tags/details": {
+      "patch": {
+        "operationId": "replaceCatalogTagDetails",
+        "summary": "Set the color and description of an existing tag",
+        "tags": [
+          "Tags"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The tag details were replaced."
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The source tag has no assignments.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The tag name, color, or description is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Replaces both saved fields. Omit either field to clear it. A color starts with # and contains six hexadecimal digits.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Exact configured admin origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogTagDetails"
               }
             }
           }
@@ -6792,6 +6900,33 @@
           "name"
         ]
       },
+      "CatalogTagDetails": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nonempty tag up to 40 Unicode characters after trimming, with no commas or control characters."
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": {
+            "$ref": "#/components/schemas/CatalogDescription"
+          }
+        }
+      },
       "CatalogTagList": {
         "type": "object",
         "additionalProperties": false,
@@ -6809,7 +6944,14 @@
                 "link_count": {
                   "type": "integer",
                   "format": "int64",
-                  "minimum": 1
+                  "minimum": 0
+                },
+                "color": {
+                  "type": "string",
+                  "pattern": "^#[0-9a-fA-F]{6}$"
+                },
+                "description": {
+                  "$ref": "#/components/schemas/CatalogDescription"
                 }
               },
               "required": [

@@ -503,6 +503,33 @@ async function verify() {
     await selectCsv.waitFor({ state: 'hidden' });
     assert.equal(await selectProtected.count(), 0);
     await linkTable.getByRole('link', { name: 'localhost/backup-check', exact: true }).waitFor();
+
+    await page.getByRole('button', { name: 'Tags', exact: true }).click();
+    const tagRow = page.locator('.catalog-row').filter({ has: page.getByText('internal', { exact: true }) });
+    await tagRow.getByRole('button', { name: 'Edit tag details', exact: true }).click();
+    const tagDetails = page.getByRole('dialog', { name: 'Edit tag details', exact: true });
+    await tagDetails.getByLabel('Use a custom color', { exact: true }).check();
+    await tagDetails.getByLabel('Tag color', { exact: true }).fill('#2d7aed');
+    await tagDetails.getByLabel('Tag description', { exact: true }).fill('Team links');
+    await tagDetails.getByRole('button', { name: 'Save changes', exact: true }).click();
+    await tagDetails.waitFor({ state: 'hidden' });
+    await tagRow.getByText('Team links', { exact: true }).waitFor();
+
+    await page.getByRole('button', { name: 'Links', exact: true }).click();
+    const internalTag = linkTable.getByRole('button', { name: 'internal', exact: true });
+    await internalTag.waitFor();
+    assert.equal(await internalTag.getAttribute('title'), 'Team links');
+    assert.equal(await internalTag.locator('span').evaluate(mark => mark.style.getPropertyValue('--tag-color')), '#2d7aed');
+    await page.getByRole('button', { name: 'Create link', exact: true }).click();
+    const tagField = dialog.getByLabel('Tags', { exact: true });
+    await tagField.fill('other, inte');
+    await dialog.getByRole('group', { name: 'Suggested tags', exact: true })
+      .getByRole('button', { name: 'internal', exact: true }).click();
+    assert.equal((await tagField.inputValue()).trimEnd(), 'other, internal,');
+    assert.equal(await tagField.evaluate(input => input === document.activeElement), true);
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);

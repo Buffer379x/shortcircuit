@@ -11,6 +11,7 @@ QR_FRAMES = MIGRATION.with_name("0010_qr_frames.sql")
 LINK_SELECTION = MIGRATION.with_name("0011_link_selection.sql")
 LINK_ORGANIZATION = MIGRATION.with_name("0012_link_organization.sql")
 LINK_DESCRIPTION = MIGRATION.with_name("0013_link_description.sql")
+TAG_DETAILS = MIGRATION.with_name("0014_tag_details.sql")
 
 
 class LinkSchemaTests(unittest.TestCase):
@@ -201,6 +202,28 @@ class LinkSchemaTests(unittest.TestCase):
             db.execute("UPDATE links SET description = ?", ("ü" * 501,))
         with self.assertRaises(sqlite3.IntegrityError):
             db.execute("UPDATE links SET description = ?", ("with\x00NUL",))
+
+
+    def test_tag_details_upgrade_preserves_assignments_and_rejects_malformed_styles(self):
+        db = self.database()
+        for migration in sorted(MIGRATION.parent.glob("*.sql")):
+            if MIGRATION < migration < TAG_DETAILS:
+                db.executescript(migration.read_text())
+        self.insert(db, "go.example", "existing")
+        db.execute("INSERT INTO link_tags(link_id, tag) VALUES (1, 'work')")
+        self.assertTrue(TAG_DETAILS.is_file(), "expected a versioned tag details migration")
+        db.executescript(TAG_DETAILS.read_text())
+        self.assertEqual(db.execute("SELECT link_id, tag FROM link_tags").fetchall(), [(1, "work")])
+        db.execute("INSERT INTO tag_details(name, color, description) VALUES ('work', '#4f9cec', '')")
+        for row in [
+            ("script", "var(--ink)", "Invalid color"),
+            ("nullcolor", "#112233\x00trail", "Invalid color"),
+            ("empty", None, ""),
+            ("\x00tag", None, "NUL"),
+            ("overlong", None, "ü" * 501),
+        ]:
+            with self.subTest(name=row[0]), self.assertRaises(sqlite3.IntegrityError):
+                db.execute("INSERT INTO tag_details(name, color, description) VALUES (?, ?, ?)", row)
 
 
 if __name__ == "__main__":

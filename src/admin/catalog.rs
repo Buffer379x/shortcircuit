@@ -2,19 +2,17 @@ use axum::{
     Json, Router,
     extract::{State, rejection::JsonRejection},
     http::StatusCode,
-    routing::get,
+    routing::{get, patch},
 };
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::{
     domains::{self, Domain},
-    input::{PublicHosts, normalize_host, valid_target},
+    input::{PublicHosts, normalize_host, plain_description, valid_target},
 };
 
 use super::{Problem, json_payload};
-
-const DELETE_TAG: &str = "DELETE FROM link_tags WHERE tag = ?";
 
 #[derive(Clone)]
 struct CatalogState {
@@ -33,6 +31,7 @@ pub(super) fn routes(pool: SqlitePool, hosts: PublicHosts, local_port: u16) -> R
             "/api/v1/catalog/tags",
             get(list_tags).patch(rename_tag).delete(remove_tag),
         )
+        .route("/api/v1/catalog/tags/details", patch(save_tag_details))
         .with_state(CatalogState {
             pool,
             hosts,
@@ -105,11 +104,20 @@ async fn save_domain(
 struct Tag {
     name: String,
     link_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    description: String,
 }
 
 async fn list_tags(State(state): State<CatalogState>) -> Result<Json<Catalog<Tag>>, Problem> {
     let items = sqlx::query_as(
-        "SELECT tag AS name, COUNT(*) AS link_count FROM link_tags GROUP BY tag ORDER BY tag",
+        "WITH counts AS (SELECT tag AS name, count(*) AS total FROM link_tags GROUP BY tag),
+         names AS (SELECT name FROM counts UNION SELECT name FROM tag_details)
+         SELECT names.name, coalesce(counts.total, 0) AS link_count,
+                tag_details.color, coalesce(tag_details.description, '') AS description
+         FROM names LEFT JOIN counts USING (name) LEFT JOIN tag_details USING (name)
+         ORDER BY names.name",
     )
     .fetch_all(&state.pool)
     .await
@@ -118,6 +126,61 @@ async fn list_tags(State(state): State<CatalogState>) -> Result<Json<Catalog<Tag
 }
 
 pub(super) use crate::input::tag_name;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TagDetails {
+    name: String,
+    color: Option<String>,
+    #[serde(default)]
+    description: String,
+}
+
+async fn save_tag_details(
+    State(state): State<CatalogState>,
+    body: Result<Json<TagDetails>, JsonRejection>,
+) -> Result<StatusCode, Problem> {
+    let input = json_payload(body)?;
+    let name = tag_name(&input.name).ok_or_else(|| Problem::invalid("invalid_tags"))?;
+    let color = input
+        .color
+        .map(|color| {
+            let color = color.trim();
+            if color
+                .strip_prefix('#')
+                .is_some_and(|hex| hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            {
+                Ok(color.to_ascii_lowercase())
+            } else {
+                Err(Problem::invalid("invalid_tag_color"))
+            }
+        })
+        .transpose()?;
+    let description = plain_description(&input.description)
+        .ok_or_else(|| Problem::invalid("invalid_description"))?;
+    let mut transaction = state
+        .pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|_| Problem::unavailable())?;
+    require_tag(&mut transaction, name).await?;
+    if color.is_none() && description.is_empty() {
+        clear_tag_details(&mut transaction, name).await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO tag_details (name, color, description) VALUES (?, ?, ?)
+             ON CONFLICT (name) DO UPDATE SET color = excluded.color, description = excluded.description",
+        )
+        .bind(name)
+        .bind(color)
+        .bind(description)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| Problem::unavailable())?;
+    }
+    transaction.commit().await.map_err(|_| Problem::unavailable())?;
+    Ok(StatusCode::NO_CONTENT)
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -134,21 +197,15 @@ async fn rename_tag(
     let name = tag_name(&input.name).ok_or_else(|| Problem::invalid("invalid_tags"))?;
     let new_name = tag_name(&input.new_name).ok_or_else(|| Problem::invalid("invalid_tags"))?;
 
-    if name == new_name {
-        let exists =
-            sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM link_tags WHERE tag = ?)")
-                .bind(name)
-                .fetch_one(&state.pool)
-                .await
-                .map_err(|_| Problem::unavailable())?;
-        return tag_status(exists);
-    }
-
     let mut transaction = state
         .pool
-        .begin()
+        .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|_| Problem::unavailable())?;
+    require_tag(&mut transaction, name).await?;
+    if name == new_name {
+        return Ok(StatusCode::NO_CONTENT);
+    }
     sqlx::query(
         "INSERT INTO link_tags (link_id, tag)
          SELECT link_id, ? FROM link_tags WHERE tag = ?
@@ -159,16 +216,56 @@ async fn rename_tag(
     .execute(&mut *transaction)
     .await
     .map_err(|_| Problem::unavailable())?;
-    let deleted = sqlx::query(DELETE_TAG)
+    sqlx::query(
+        "INSERT INTO tag_details (name, color, description)
+         SELECT ?, color, description FROM tag_details WHERE name = ?
+         ON CONFLICT (name) DO UPDATE SET color = coalesce(tag_details.color, excluded.color),
+            description = CASE WHEN tag_details.description = '' THEN excluded.description
+                               ELSE tag_details.description END",
+    )
+    .bind(new_name)
+    .bind(name)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|_| Problem::unavailable())?;
+    delete_tag(&mut transaction, name).await?;
+    transaction.commit().await.map_err(|_| Problem::unavailable())?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn require_tag(connection: &mut SqliteConnection, name: &str) -> Result<(), Problem> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM link_tags WHERE tag = ?
+                        UNION ALL SELECT 1 FROM tag_details WHERE name = ?)",
+    )
+    .bind(name)
+    .bind(name)
+    .fetch_one(connection)
+    .await
+    .map_err(|_| Problem::unavailable())?;
+    if exists {
+        Ok(())
+    } else {
+        Err(Problem(StatusCode::NOT_FOUND, "not_found"))
+    }
+}
+
+async fn clear_tag_details(connection: &mut SqliteConnection, name: &str) -> Result<(), Problem> {
+    sqlx::query("DELETE FROM tag_details WHERE name = ?")
         .bind(name)
-        .execute(&mut *transaction)
+        .execute(connection)
         .await
         .map_err(|_| Problem::unavailable())?;
-    transaction
-        .commit()
+    Ok(())
+}
+
+async fn delete_tag(connection: &mut SqliteConnection, name: &str) -> Result<(), Problem> {
+    sqlx::query("DELETE FROM link_tags WHERE tag = ?")
+        .bind(name)
+        .execute(&mut *connection)
         .await
         .map_err(|_| Problem::unavailable())?;
-    tag_status(deleted.rows_affected() != 0)
+    clear_tag_details(connection, name).await
 }
 
 #[derive(Deserialize)]
@@ -183,20 +280,15 @@ async fn remove_tag(
 ) -> Result<StatusCode, Problem> {
     let input = json_payload(body)?;
     let name = tag_name(&input.name).ok_or_else(|| Problem::invalid("invalid_tags"))?;
-    let deleted = sqlx::query(DELETE_TAG)
-        .bind(name)
-        .execute(&state.pool)
+    let mut transaction = state
+        .pool
+        .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|_| Problem::unavailable())?;
-    tag_status(deleted.rows_affected() != 0)
-}
-
-fn tag_status(exists: bool) -> Result<StatusCode, Problem> {
-    if exists {
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(Problem(StatusCode::NOT_FOUND, "not_found"))
-    }
+    require_tag(&mut transaction, name).await?;
+    delete_tag(&mut transaction, name).await?;
+    transaction.commit().await.map_err(|_| Problem::unavailable())?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
@@ -271,6 +363,66 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, [(1, "keep".to_owned())]);
+    }
+
+    #[tokio::test]
+    async fn tag_details_are_merged_retained_and_removed_with_the_tag() {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = crate::open_database(&directory.path().join("catalog.sqlite"))
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO links (id, host, slug, target) VALUES
+                (1, 'go.example', 'one', 'https://example.test');
+             INSERT INTO link_tags (link_id, tag) VALUES (1, 'source'), (1, 'destination');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let router = routes(pool.clone(), PublicHosts::parse("go.example").unwrap(), 8080);
+        let path = "/api/v1/catalog/tags";
+        let details = "/api/v1/catalog/tags/details";
+        for (body, expected) in [
+            (json!({"name":"source", "color":"#D3FC51", "description":"  Team\nnotes  "}), StatusCode::NO_CONTENT),
+            (json!({"name":"destination", "color":"#40c98a"}), StatusCode::NO_CONTENT),
+            (json!({"name":"missing", "color":"#ffffff"}), StatusCode::NOT_FOUND),
+            (json!({"name":"source", "color":"var(--ink)"}), StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            let saved = request(&router, Method::PATCH, details, body).await;
+            assert_eq!(saved.status(), expected);
+        }
+        let color: String = sqlx::query_scalar("SELECT color FROM tag_details WHERE name = 'source'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(color, "#d3fc51");
+        let merged = request(
+            &router, Method::PATCH, path, json!({"name":"source", "new_name":"destination"}),
+        )
+        .await;
+        assert_eq!(merged.status(), StatusCode::NO_CONTENT);
+        sqlx::query("DELETE FROM link_tags WHERE tag = 'destination'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let renamed = request(
+            &router, Method::PATCH, path, json!({"name":"destination", "new_name":"saved"}),
+        )
+        .await;
+        assert_eq!(renamed.status(), StatusCode::NO_CONTENT);
+        let listed = request(&router, Method::GET, path, Value::Null).await;
+        let listed: Value =
+            serde_json::from_slice(&to_bytes(listed.into_body(), 8192).await.unwrap()).unwrap();
+        assert_eq!(listed, json!({"items":[
+            {"name":"saved", "link_count":0, "color":"#40c98a", "description":"Team\nnotes"}
+        ]}));
+        let removed = request(&router, Method::DELETE, path, json!({"name":"saved"})).await;
+        assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM tag_details")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]

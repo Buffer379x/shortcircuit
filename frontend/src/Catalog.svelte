@@ -4,6 +4,7 @@
   import Dialog from './Dialog.svelte';
   import { problemMessage } from './format';
   import Icon from './Icon.svelte';
+  import TagMark from './TagMark.svelte';
   import type { Language, Messages } from './i18n';
 
   let { t, api, language, kind, onDomainSaved }: {
@@ -15,12 +16,15 @@
   let loading = $state(false);
   let error = $state<keyof Messages | null>(null);
   let formError = $state<keyof Messages | null>(null);
-  let action = $state<'domain' | 'rename' | 'delete' | null>(null);
+  let action = $state<'domain' | 'rename' | 'tag-details' | 'delete' | null>(null);
   let saving = $state(false);
   let existing = $state(false);
   let domain = $state<Domain>();
   let tag = $state('');
   let newName = $state('');
+  let useTagColor = $state(false);
+  let tagColor = $state('#60a5fa');
+  let tagDescription = $state('');
   const count = $derived(new Intl.NumberFormat(language));
 
   onMount(() => { void load(); });
@@ -45,9 +49,12 @@
     action = 'domain';
   }
 
-  function editTag(name: string, mode: 'rename' | 'delete') {
-    tag = name;
-    newName = name;
+  function editTag(item: Tag, mode: 'rename' | 'tag-details' | 'delete') {
+    tag = item.name;
+    newName = item.name;
+    useTagColor = Boolean(item.color);
+    tagColor = item.color ?? '#60a5fa';
+    tagDescription = item.description ?? '';
     formError = null;
     action = mode;
   }
@@ -72,6 +79,15 @@
         onDomainSaved();
       } else if (action === 'rename') {
         await api('/catalog/tags', 'PATCH', { name: tag, new_name: newName.trim() });
+        await load();
+      } else if (action === 'tag-details') {
+        if ([...tagDescription.trim()].length > 500) {
+          formError = 'invalidDescription';
+          return;
+        }
+        await api('/catalog/tags/details', 'PATCH', {
+          name: tag, color: useTagColor ? tagColor : null, description: tagDescription.trim(),
+        });
         await load();
       } else if (action === 'delete') {
         await api('/catalog/tags', 'DELETE', { name: tag });
@@ -119,12 +135,14 @@
     {#each tags as item (item.name)}
       <div class="catalog-row between">
         <div class="stack compact catalog-label">
-          <strong>{item.name}</strong>
+          <strong class="tag-name"><TagMark color={item.color} />{item.name}</strong>
           <span>{count.format(item.link_count)} · {t.links}</span>
+          {#if item.description}<p class="tag-description">{item.description}</p>{/if}
         </div>
         <div class="row catalog-actions">
-          <button class="button" type="button" onclick={() => editTag(item.name, 'rename')}>{t.renameTag}</button>
-          <button class="icon-button ghost delete-button" type="button" aria-label={t.deleteTag} title={t.deleteTag} onclick={() => editTag(item.name, 'delete')}><Icon name="trash" /></button>
+          <button class="button" type="button" onclick={() => editTag(item, 'tag-details')}>{t.editTagDetails}</button>
+          <button class="button" type="button" onclick={() => editTag(item, 'rename')}>{t.renameTag}</button>
+          <button class="icon-button ghost delete-button" type="button" aria-label={t.deleteTag} title={t.deleteTag} onclick={() => editTag(item, 'delete')}><Icon name="trash" /></button>
         </div>
       </div>
     {/each}
@@ -133,7 +151,7 @@
   {/if}
 </section>
 
-<Dialog {t} title={action === 'rename' ? t.renameTag : action === 'delete' ? t.deleteTag : existing ? t.editDomain : t.addDomain}
+<Dialog {t} title={action === 'rename' ? t.renameTag : action === 'tag-details' ? t.editTagDetails : action === 'delete' ? t.deleteTag : existing ? t.editDomain : t.addDomain}
   open={action !== null} busy={saving} onclose={() => action = null}>
   <form onsubmit={save} aria-busy={saving}>
     <div class="dialog-body stack">
@@ -146,6 +164,16 @@
       {:else if action === 'rename'}
         <label class="field"><span>{t.tagName}</span><input bind:value={newName} required maxlength="40" disabled={saving} /></label>
         <p>{t.mergeTagHint}</p>
+      {:else if action === 'tag-details'}
+        <strong>{tag}</strong>
+        <label class="row"><input type="checkbox" bind:checked={useTagColor} disabled={saving} />{t.useTagColor}</label>
+        {#if useTagColor}
+          <label class="row"><input class="tag-color-input" type="color" bind:value={tagColor} disabled={saving} />{t.tagColor}</label>
+        {/if}
+        <label class="field">
+          <span>{t.tagDescription}</span>
+          <textarea rows="2" maxlength="1000" bind:value={tagDescription} disabled={saving}></textarea>
+        </label>
       {:else if action === 'delete'}
         <strong>{tag}</strong><p>{t.deleteTagHint}</p>
       {/if}
@@ -166,4 +194,7 @@
   .catalog-label { overflow-wrap: anywhere; min-inline-size: 0; }
   .catalog-label span { color: var(--muted); font-size: .875rem; }
   .catalog-actions { flex-wrap: wrap; }
+  .tag-name { display: flex; align-items: center; gap: 8px; }
+  .tag-description { white-space: pre-line; }
+  .tag-color-input { width: var(--hit); padding: 4px; }
 </style>

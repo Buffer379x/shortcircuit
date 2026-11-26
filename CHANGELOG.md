@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add optional tag colors and descriptions, preserve details during tag merges, and suggest existing tags in the link form.
+
 - Add link descriptions to the catalog, revision history, and native JSON and CSV exchange.
 - Create disabled duplicates from the catalog with editable metadata and a fresh shortcode.
 - Show recorded redirects and the last recorded use in the catalog.
