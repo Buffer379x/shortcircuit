@@ -2879,7 +2879,7 @@
             }
           },
           "422": {
-            "description": "A redirect status, time window, visit limit, or rule is invalid.",
+            "description": "A redirect status, time window, visit limit, or rule is invalid. Permanent redirects require an unprotected link.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2918,6 +2918,197 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/CatalogRedirectPolicy"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/links/{id}/protection": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Numeric link ID.",
+          "schema": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getLinkProtection",
+        "summary": "Read link protection metadata",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Protection metadata without any password or hash.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogLinkProtectionDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Link ID is invalid, absent, or outside the caller's visible hosts.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Bearer API keys require the read scope and honor any configured host restriction."
+      },
+      "patch": {
+        "operationId": "replaceLinkProtection",
+        "summary": "Set link protection",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Protection metadata without any password or hash.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogLinkProtectionDetails"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Link ID is invalid, absent, or outside the caller's visible hosts.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The password or protection fields are invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A one-time link is consumed or the current redirect status is permanent.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Bearer API keys require the write scope and honor any configured host restriction. Omit password to keep it. Set remove_password to clear it.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "description": "Exact configured admin origin, required with browser session authentication.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogLinkProtectionPatch"
               }
             }
           }
@@ -4097,6 +4288,9 @@
                 "type": "null"
               }
             ]
+          },
+          "protection": {
+            "$ref": "#/components/schemas/CatalogLinkProtectionCreate"
           }
         },
         "required": [
@@ -4293,6 +4487,69 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "CatalogLinkProtectionCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "one_time"
+        ],
+        "properties": {
+          "one_time": {
+            "type": "boolean"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 12,
+            "maxLength": 1024,
+            "writeOnly": true,
+            "description": "The UTF-8 byte length may not exceed 1,024."
+          }
+        }
+      },
+      "CatalogLinkProtectionDetails": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "password_required",
+          "one_time",
+          "consumed"
+        ],
+        "properties": {
+          "password_required": {
+            "type": "boolean"
+          },
+          "one_time": {
+            "type": "boolean"
+          },
+          "consumed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CatalogLinkProtectionPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "one_time"
+        ],
+        "properties": {
+          "one_time": {
+            "type": "boolean"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 12,
+            "maxLength": 1024,
+            "writeOnly": true,
+            "description": "The UTF-8 byte length may not exceed 1,024."
+          },
+          "remove_password": {
+            "type": "boolean",
+            "default": false,
+            "description": "Clear the existing password. Mutually exclusive with password."
           }
         }
       },

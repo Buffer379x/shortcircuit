@@ -20,7 +20,7 @@ The bounded queue has capacity for 1,024 events. It writes in batches of up to 6
 | Referrer | Keep the validated hostname only. Treat missing or unparseable values as unknown. | Referrer collection can be disabled. Hostnames can contain sensitive information and are subject to retention and export controls. |
 | Unmatched requests and errors | Record the domain, time bucket, and reason. Discard arbitrary unmatched paths and query strings. | Disable individual error classes. Aggregate to handle potentially high cardinality and stay within the write budget. |
 | Geo-IP | Disabled. Opt in to local MMDB lookups for country and region. City data requires its own opt-in. | The operator selects and updates the local database. Visitor IPs stay local. |
-| Tracking cookies | Disabled. Private sessions and protected link flows use necessary, purpose-specific tokens. | The v1 design excludes client-side analytics and fingerprinting. |
+| Tracking cookies | Disabled. Private sessions use session cookies. Protected link confirmations use a short-lived signed form field. | The v1 design excludes client-side analytics and fingerprinting. |
 | Do Not Track | Honor a recognized `DNT: 1` header by suppressing the analytics event. | Document this as a configurable product setting. Security checks and operational access limits continue to apply. |
 | Telemetry and outbound requests | Disable telemetry, update reporting, monitoring, title retrieval, and provider integrations by default. | Before activation, describe the purpose, destination, and transmitted fields for each optional integration. |
 
@@ -30,7 +30,7 @@ Destination URLs can contain confidential query parameters, paths, and fragments
 
 - **All Visits** covers recorded successful ShortCircuit visits of every class. **Human Visits** is an estimate. **Bot Visits** includes detected bots, crawlers, link previews, and monitoring traffic, with filters for supported groups. **Unknown Visits** covers visits that cannot be reliably classified. Report explicit outcomes such as blocked or unmatched requests in their own metrics.
 - A GET redirect counts as a visit when ShortCircuit returns a valid destination and collection is enabled. For a protected link, count the confirmed redirect. Exclude HEAD from visit counts and optionally record it in an independently configurable operational metric. Internal health jobs generate no public visit events.
-- Access limits and one-time use depend on an atomic authorization decision independent of analytics. A preview or scanner may register as a bot event while leaving a confirmation-protected one-time link available. Treat user-agent signals as hints. Require explicit confirmation for flows that need high assurance.
+- Access limits and one-time use depend on an atomic authorization decision independent of analytics. Loading the confirmation page and failed form submissions do not register as visits. A scanner that submits the form can consume a passwordless one-time link. Use password protection when access must depend on a separate shared secret.
 - Manually recreating an existing short link starts a new analytics history on ShortCircuit.
 - Analytics events can be lost when the queue fills, the process terminates, the flush deadline expires, or the database becomes unwritable. Show loss and error counters with affected time ranges when available and redact sensitive details. Mark any unmeasurable losses after an abrupt termination as unknown. Treat click rates and comparisons as estimates under these conditions.
 

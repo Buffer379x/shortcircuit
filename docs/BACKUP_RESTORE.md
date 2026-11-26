@@ -20,6 +20,8 @@ docker compose up --detach --wait
 
 The restore refuses a busy data directory, accepts standalone snapshots up to 8 GiB, and validates a private staging copy. It prints a restorable rollback snapshot when the previous database can be verified. If the previous database cannot be snapshotted, it preserves a private database file for manual recovery. Sign in again after restart. The snapshot restores API credential state at the time of capture. Revoke any previously revoked credentials that were active when the snapshot was created. Record an independent backup and exercise recovery in a disposable target before production use.
 
+Take a verified snapshot with the current image before applying an upgrade. To roll back a schema upgrade, use the previous image to restore its pre-upgrade snapshot into a separate data volume. Verify the restored instance before routing traffic to it. Restoring a snapshot returns one-time links to their state at capture time. Disable any one-time links that were consumed after the snapshot before reopening public traffic.
+
 ## Automatic backups
 
 Set `BACKUP_INTERVAL_HOURS` to an interval from 1 to 720 hours and restart the container. The default `0` disables the scheduler. The first backup starts after one interval. The scheduler creates at most one backup at a time and skips missed intervals.

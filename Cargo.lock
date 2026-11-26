@@ -1303,6 +1303,7 @@ dependencies = [
  "axum",
  "csv",
  "getrandom",
+ "hmac",
  "png",
  "qrcode",
  "rqrr",

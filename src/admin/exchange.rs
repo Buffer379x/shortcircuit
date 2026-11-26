@@ -124,7 +124,11 @@ async fn export_rows(
     }
     let rows = sqlx::query_as::<_, TaggedLink>(
         "WITH page AS (
-             SELECT id, host, slug, target, title, enabled, analytics_enabled
+             SELECT id, host, slug, target, title, analytics_enabled,
+                 (enabled AND NOT EXISTS (
+                     SELECT 1 FROM link_protection AS protection WHERE protection.link_id = links.id
+                     AND (protection.one_time = 1 OR protection.password_hash IS NOT NULL)
+                 )) AS enabled
              FROM links WHERE id > ? ORDER BY id LIMIT ?
          )
          SELECT page.*, link_tags.tag FROM page

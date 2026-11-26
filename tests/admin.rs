@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use shortcircuit::{
     AdminConfig, Auth, BootstrapKind, PublicHosts, admin_router, open_database, public_router,
 };
+use sqlx::SqlitePool;
 use tower::ServiceExt;
 
 const ORIGIN: &str = "https://admin.example";
@@ -19,6 +20,7 @@ struct App {
     auth: Auth,
     admin: Router,
     public: Router,
+    pool: SqlitePool,
 }
 
 impl App {
@@ -31,7 +33,8 @@ impl App {
             _temp: temp,
             auth: Auth::new(pool.clone()),
             admin: admin_router(pool.clone(), hosts.clone(), config),
-            public: public_router(pool, hosts),
+            public: public_router(pool.clone(), hosts),
+            pool,
         }
     }
 
@@ -332,6 +335,63 @@ async fn scoped_api_keys_cannot_manage_keys_or_access_another_domain() {
     let link = response_body(allowed).await;
     assert_eq!(link["host"], "s.example");
     let id = link["id"].as_i64().unwrap();
+    let own_policy = format!("/api/v1/links/{id}/policy");
+    let own_protection = format!("/api/v1/links/{id}/protection");
+    assert_eq!(
+        request(
+            &app.admin,
+            Method::PATCH,
+            &own_policy,
+            &headers,
+            Some(json!({"status": 308})),
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let conflict = request(
+        &app.admin,
+        Method::PATCH,
+        &own_protection,
+        &headers,
+        Some(json!({"one_time": true})),
+    )
+    .await;
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_body(conflict).await["code"],
+        "protection_requires_temporary_redirect"
+    );
+
+    let outside_scope = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links",
+        &session,
+        Some(json!({"host": "go.example", "target": "https://example.test/"})),
+    )
+    .await;
+    assert_eq!(outside_scope.status(), StatusCode::CREATED);
+    let another_id = response_body(outside_scope).await["id"].as_i64().unwrap();
+    let outside_protection = format!("/api/v1/links/{another_id}/protection");
+    assert_eq!(
+        request(&app.admin, Method::GET, &outside_protection, &headers, None)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request(
+            &app.admin,
+            Method::PATCH,
+            &outside_protection,
+            &headers,
+            Some(json!({"one_time": true})),
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
     assert_eq!(
         request(
             &app.admin,
@@ -383,6 +443,104 @@ async fn scoped_api_keys_cannot_manage_keys_or_access_another_domain() {
             .status(),
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn protected_link_creation_and_updates_keep_secrets_out_of_responses() {
+    let app = App::start().await;
+    let (cookie, csrf) = app.setup().await;
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    let invalid = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links",
+        &headers,
+        Some(json!({
+            "slug": "Claim",
+            "target": "https://example.test/",
+            "protection": {"password": "short", "one_time": true}
+        })),
+    )
+    .await;
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        response_body(invalid).await["code"],
+        "invalid_link_password"
+    );
+
+    let password = "synthetic-link-password";
+    let created = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links",
+        &headers,
+        Some(json!({
+            "slug": "Claim",
+            "target": "https://example.test/",
+            "protection": {"password": password, "one_time": true}
+        })),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = response_body(created).await;
+    let id = created["id"].as_i64().unwrap();
+    let path = format!("/api/v1/links/{id}/protection");
+    let stored: String =
+        sqlx::query_scalar("SELECT password_hash FROM link_protection WHERE link_id = ?")
+            .bind(id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(stored.starts_with("$argon2id$"));
+    assert!(!created.to_string().contains(password));
+    assert!(!created.to_string().contains(stored.as_str()));
+    let response = request(&app.admin, Method::GET, &path, &headers, None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_body(response).await,
+        json!({"password_required": true, "one_time": true, "consumed": false})
+    );
+
+    let response = request(
+        &app.admin,
+        Method::PATCH,
+        &path,
+        &headers,
+        Some(json!({"one_time": true, "remove_password": true})),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_body(response).await,
+        json!({"password_required": false, "one_time": true, "consumed": false})
+    );
+    let revision: i64 =
+        sqlx::query_scalar("SELECT revision FROM link_protection WHERE link_id = ?")
+            .bind(id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(revision, 2);
+
+    sqlx::query("UPDATE link_protection SET consumed = 1 WHERE link_id = ?")
+        .bind(id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let response = request(
+        &app.admin,
+        Method::PATCH,
+        &path,
+        &headers,
+        Some(json!({"one_time": false})),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response_body(response).await["code"], "one_time_consumed");
 }
 
 #[tokio::test]

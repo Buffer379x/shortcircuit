@@ -23,7 +23,8 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Tags | Current | P1 | View tag counts, rename or merge tags, and remove their assignments. Tag suggestions and colors are planned. |
 | Crawler controls | Planned | P1 | Configure crawler directives and per-link crawlability. Check reserved route collisions before serving `robots.txt`. |
 | Duplicate detection | Current | P2 | Lookup matches against the exact stored destination. The creation and edit forms offer copying an existing short URL. Approximate matches and merge are planned. |
-| Link history and protected links | Planned | P2 | Record destination changes with restore and retention controls. Support confirmed one-time access and atomic consumption. |
+| Protected links | Current | P2 | Optional password protection, explicit confirmation, and atomic consumption of one-time links. |
+| Link history | Planned | P2 | Record destination changes with restore and retention controls. |
 | Rule editor and simulator | Planned | P2 | Preview the selected destination for representative inputs. Preserve rule order during edits and support keyboard reordering. |
 | URL Cleaner | Current | P2 | Review known trackers and one-time exceptions locally. Use the proposed URL explicitly before saving. Leave recognized signed URLs unchanged. |
 | Favorites and archives | Planned | P2 | Pin frequently used links and archive links from the active list. |

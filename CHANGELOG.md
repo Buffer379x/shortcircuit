@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add password-protected links and confirmed, atomically consumed one-time links. Native link exports keep protected entries disabled when imported.
+
 ## 0.6.0-preview.1
 
 - Add an Unraid Docker Manager template that pulls the versioned preview image from GitHub Container Registry and initializes a persistent Docker volume.

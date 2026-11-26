@@ -11,8 +11,8 @@ use std::{
 
 use shortcircuit::{
     AdminConfig, Analytics, Auth, BackupSchedule, BootstrapKind, PublicHosts,
-    admin_router_with_analytics, create_snapshot, data_lock, open_database,
-    public_router_with_analytics, restore_snapshot,
+    admin_router_with_analytics, create_snapshot, data_lock, open_database, public_router_on_port,
+    restore_snapshot,
 };
 use tokio::{net::TcpListener, sync::watch, time};
 use tracing_subscriber::EnvFilter;
@@ -96,9 +96,11 @@ async fn serve() -> Result<(), AppError> {
     let admin_addr = bind_address("ADMIN_BIND", "127.0.0.1:8081")?;
     let hosts = PublicHosts::parse(&setting("PUBLIC_HOSTS", "localhost,127.0.0.1,[::1]")?)
         .map_err(io::Error::other)?;
+    let public_socket = TcpListener::bind(public_addr).await?;
+    let public_port = public_socket.local_addr()?.port();
     let config = AdminConfig::new(
         &setting("ADMIN_ORIGIN", "http://localhost:8081")?,
-        public_addr.port(),
+        public_port,
     )
     .map_err(io::Error::other)?;
     if env::var_os("ADMIN_TOKEN_FILE").is_some() {
@@ -111,7 +113,6 @@ async fn serve() -> Result<(), AppError> {
     let _lock = data_lock(&database, false)?;
     let pool = open_database(&database).await?;
 
-    let public_socket = TcpListener::bind(public_addr).await?;
     let admin_socket = TcpListener::bind(admin_addr).await?;
     tracing::info!(
         public = %public_socket.local_addr()?,
@@ -131,7 +132,13 @@ async fn serve() -> Result<(), AppError> {
     });
     let public = axum::serve(
         public_socket,
-        public_router_with_analytics(pool.clone(), hosts.clone(), analytics.clone()),
+        public_router_on_port(
+            pool.clone(),
+            hosts.clone(),
+            public_port,
+            Some(analytics.clone()),
+        )
+        .into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(wait_for_stop(receiver.clone()));
     let admin = axum::serve(

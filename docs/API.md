@@ -16,7 +16,7 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `GET /api/v1/domains` | Returns active `hosts`, an `origins` map for configured hosts visible to the caller, and the local public port. |
 | `POST /api/v1/links/duplicates` | Admin session lookup for an exact stored destination. Accepts `target` and an optional positive `exclude_id`. Returns up to ten items newest first and `has_more`. |
 | `GET /api/v1/links` | Accepts the optional `after_id` cursor. Returns `items` and `next_after_id` with up to 100 records per page. |
-| `POST /api/v1/links` | Accepts `target` and optional `host`, `slug`, `title`, and `tags`. Returns `201` with the created link. A duplicate slug on the same host returns `409`. |
+| `POST /api/v1/links` | Accepts `target` and optional `host`, `slug`, `title`, `tags`, and `protection`. The protection object takes `one_time` and optional `password`. Both the link and protection commit together. Returns `201`, or `409` for a duplicate slug on the same host. |
 | `PATCH /api/v1/links/{id}` | Accepts any of `target`, `title`, `enabled`, `tags`, and `analytics_enabled`. A supplied tag list replaces the previous list. The published host and slug remain fixed. |
 | `DELETE /api/v1/links/{id}` | Deletes a link and returns `204`. |
 | `GET` and `POST /api/v1/keys` | Require a browser session. Listing returns key metadata. Creation accepts `name`, `scopes`, optional `host`, and optional `expires_at` in Unix seconds. The response contains `key` and the one-time `token`. |
@@ -24,8 +24,10 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `GET` and `POST /api/v1/catalog/domains` | Browser-session catalog. GET returns `items`. POST sets `host`, `origin`, `enabled`, and optional `root_target` and `missing_target`. Domain origins contain the same host and an optional port. |
 | `GET`, `PATCH`, and `DELETE /api/v1/catalog/tags` | Browser-session catalog. GET returns tag names and link counts. PATCH renames or merges using `name` and `new_name`. DELETE uses `name` and removes the tag from its assigned links. Mutations return `204`. |
 | `GET` and `PATCH /api/v1/links/{id}/policy` | Reads or replaces the redirect settings. Writable keys are `status`, `starts_at`, `expires_at`, `max_visits`, `forward_query`, `forward_path`, and `rules`. Read responses include `visits_used`. Omitted PATCH fields take their defaults. |
+| `GET` and `PATCH /api/v1/links/{id}/protection` | Returns `password_required`, `one_time`, and `consumed`. PATCH takes `one_time` and optional `password` or `remove_password: true`. Omit both password fields to keep the current password. A permanent redirect or an attempt to remove a consumed one-time restriction returns `409`. |
 | `GET /api/v1/links/{id}/qr` | Returns an image containing the configured public short URL. Query options are `format=svg\|png` and `size=128..1024` (384 default). Requires a read scope or browser session. |
-| `GET` or `HEAD /{slug}` | Resolves the link's redirect policy. The default is `302` with the stored `Location` and `Cache-Control: no-store`. |
+| `GET` or `HEAD /{slug}` | Resolves the link's redirect policy. The default is `302` with the stored `Location` and `Cache-Control: no-store`. A protected link returns a confirmation page for GET or an empty response for HEAD. |
+| `POST /{slug}` | Accepts a protected-link confirmation from the exact public origin. A successful confirmation returns `303` to continue with GET. |
 
 Link objects contain `id`, `host`, `slug`, `target`, `created_at`, `title`, `enabled`, `analytics_enabled`, and `tags`. Slugs use case-sensitive ASCII letters, digits, hyphens, underscores, and segment separators. Their maximum is 200 bytes. Destinations are absolute HTTP or HTTPS URIs up to 4,096 bytes, with valid percent encoding and credentials excluded. A link can carry up to 20 tags. Titles and tags use limits of 160 and 40 Unicode characters respectively.
 
@@ -45,7 +47,7 @@ Analytics endpoints require a browser administrator session. Changes require the
 
 ### Native link exchange
 
-`GET /api/v1/exchange/links` returns version 1, a bounded page of items, and `next_after_id`. Use that value as `after_id` to continue. The exported link fields are `host`, `slug`, `target`, `title`, `tags`, `enabled`, and `analytics_enabled`.
+`GET /api/v1/exchange/links` returns version 1, a bounded page of items, and `next_after_id`. Use that value as `after_id` to continue. The exported link fields are `host`, `slug`, `target`, `title`, `tags`, `enabled`, and `analytics_enabled`. Native JSON and CSV exports mark protected links as disabled. Restore their protection settings from a database backup or configure protection on the imported copy before enabling it.
 
 `POST /api/v1/exchange/links` accepts `version: 1`, a Boolean `preview`, and up to 100 `items` within the request size limit. Existing domains must be active. The server returns per-link `create`, `unchanged`, or `conflict` results. An apply rechecks conflicts in the same transaction as the insert. If any item conflicts, the response is `409` and all existing links remain intact. This format transfers basic link data. A full snapshot includes settings, policies, and visit history.
 
@@ -62,6 +64,8 @@ A policy supports `301`, `302`, `307`, or `308`. Start and expiration are inclus
 A rule contains a stored `target` and 1 to 8 `conditions`. The first of up to 16 rules whose conditions all match supplies the destination. Without a match, the link uses its stored target. Condition types are `language`, `device`, `os`, `browser`, and `query`. All have a `value`. Query conditions also have a `key`. Client characteristics are estimates from request headers. Language uses the preferred valid language from `Accept-Language`.
 
 Query and extra path forwarding are both off by default. Query forwarding appends the incoming raw query before the stored fragment. Extra path forwarding appends validated path segments before the stored query and fragment. Leave forwarding off for destinations whose parameters or path are signed.
+
+Protected links require a temporary redirect policy and an HTTPS public origin, with an HTTP loopback exception for development. Passwords require 12 or more characters and at most 1,024 UTF-8 bytes. The confirmation is valid for five minutes and bound to the public origin, path, query, and protection revision. Password checks are rate-limited. After one confirmed access, a one-time link returns `404`; create a new link to issue another one-time access. A protected short link controls access through ShortCircuit. The destination is responsible for its own access control.
 
 ## Planned API
 

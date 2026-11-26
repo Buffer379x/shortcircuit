@@ -144,7 +144,9 @@ fn default_domain(host: &str, local_port: u16) -> Domain {
             .trim_matches(['[', ']'])
             .parse::<IpAddr>()
             .is_ok_and(|address| address.is_loopback());
-    let origin = if loopback {
+    let origin = if loopback && local_port == 80 {
+        format!("http://{host}")
+    } else if loopback {
         format!("http://{host}:{local_port}")
     } else {
         format!("https://{host}")

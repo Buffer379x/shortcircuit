@@ -63,6 +63,18 @@ export interface Link {
   created_at: string;
 }
 
+export interface LinkProtection {
+  password_required: boolean;
+  one_time: boolean;
+  consumed: boolean;
+}
+
+export interface LinkProtectionChange {
+  one_time: boolean;
+  password?: string;
+  remove_password?: boolean;
+}
+
 export interface LinkPage {
   items: Link[];
   next_after_id: number | null;

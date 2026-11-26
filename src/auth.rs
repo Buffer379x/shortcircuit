@@ -443,7 +443,7 @@ impl Auth {
         Ok(digest)
     }
 
-    async fn hash_password(&self, password: &str) -> Result<String, AuthError> {
+    pub(crate) async fn hash_password(&self, password: &str) -> Result<String, AuthError> {
         if password.len() > MAX_PASSWORD_BYTES || password.chars().count() < 12 {
             return Err(AuthError::Invalid);
         }
@@ -452,7 +452,7 @@ impl Auth {
             .await
     }
 
-    async fn verify_password(
+    pub(crate) async fn verify_password(
         &self,
         password: &str,
         stored: &str,
@@ -612,7 +612,7 @@ fn token_hash(domain: &[u8], token: &str) -> [u8; TOKEN_BYTES] {
     digest.finalize().into()
 }
 
-fn lowercase_hex(bytes: &[u8]) -> String {
+pub(crate) fn lowercase_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut token = String::with_capacity(2 * bytes.len());
     for &byte in bytes {

@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { linkName, shortUrl } from './api';
-  import type { Api, Domains, Link, LinkPage } from './api';
+  import type { Api, Domains, Link, LinkPage, LinkProtectionChange } from './api';
   import Dialog from './Dialog.svelte';
-  import { formatDate, problemMessage } from './format';
+  import { formatDate, passwordAllowed, problemMessage } from './format';
   import DuplicateLookup from './DuplicateLookup.svelte';
   import UrlCleaner from './UrlCleaner.svelte';
   import LinkQr from './LinkQr.svelte';
+  import LinkProtectionEditor from './LinkProtectionEditor.svelte';
   import PolicyEditor from './PolicyEditor.svelte';
+  import ProtectionFields from './ProtectionFields.svelte';
   import Icon from './Icon.svelte';
   import type { Language, Messages } from './i18n';
 
@@ -29,6 +31,7 @@
   let editing = $state<Link | null>(null);
   let qrLink = $state<Link | null>(null);
   let policyLink = $state<Link | null>(null);
+  let protectionLink = $state<Link | null>(null);
   let removing = $state<Link | null>(null);
   let formError = $state<keyof Messages | null>(null);
   let saving = $state(false);
@@ -38,6 +41,8 @@
   let host = $state('');
   let tags = $state('');
   let analyticsEnabled = $state(true);
+  let oneTime = $state(false);
+  let linkPassword = $state('');
 
   const availableTags = $derived([...new Set(items.flatMap((link) => link.tags))].sort((a, b) => a.localeCompare(b, language)));
   const query = $derived(search.trim().toLocaleLowerCase(language));
@@ -83,8 +88,15 @@
     host = link?.host ?? domains.hosts[0] ?? '';
     tags = link?.tags.join(', ') ?? '';
     analyticsEnabled = link?.analytics_enabled ?? true;
+    oneTime = false;
+    linkPassword = '';
     formError = null;
     formOpen = true;
+  }
+
+  function closeForm() {
+    linkPassword = '';
+    formOpen = false;
   }
 
   async function save(event: SubmitEvent) {
@@ -97,6 +109,10 @@
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error();
     } catch {
       formError = 'invalidTarget';
+      return;
+    }
+    if (!editing && linkPassword && !passwordAllowed(linkPassword)) {
+      formError = 'invalidPassword';
       return;
     }
 
@@ -117,24 +133,29 @@
           ...(fields.tags.join(', ') !== editing.tags.join(', ') ? { tags: fields.tags } : {}),
         };
         if (!Object.keys(changes).length) {
-          formOpen = false;
+          closeForm();
           return;
         }
         const updated = await api<Link>(`/links/${editing.id}`, 'PATCH', changes);
         items = items.map((link) => link.id === updated.id ? updated : link);
         notice = 'linkUpdated';
       } else {
+        const protection: Omit<LinkProtectionChange, 'remove_password'> | undefined = oneTime || linkPassword ? {
+          one_time: oneTime,
+          ...(linkPassword ? { password: linkPassword } : {}),
+        } : undefined;
         const created = await api<Link>('/links', 'POST', {
           ...fields,
           ...(host ? { host } : {}),
           ...(slug.trim() ? { slug: slug.trim() } : {}),
+          ...(protection ? { protection } : {}),
         });
         items = [created, ...items.filter((link) => link.id !== created.id)];
         clearFilters();
         notice = 'linkCreated';
       }
       if (!availableTags.includes(tag)) tag = '';
-      formOpen = false;
+      closeForm();
     } catch (error) {
       formError = problemMessage(error);
     } finally {
@@ -269,6 +290,7 @@
                   <button class="icon-button ghost" type="button" aria-label={t.copyUrl} title={t.copyUrl} onclick={() => copy(link)}><Icon name="copy" /></button>
                   <button class="icon-button ghost" type="button" aria-label={t.editLink} title={t.editLink} onclick={() => openForm(link)}><Icon name="edit" /></button>
                   <button class="icon-button ghost" type="button" aria-label={t.redirectPolicy} title={t.redirectPolicy} onclick={() => policyLink = link}><Icon name="rule" /></button>
+                  <button class="icon-button ghost" type="button" aria-label={t.linkProtection} title={t.linkProtection} onclick={() => protectionLink = link}><Icon name="lock" /></button>
                   <button class="icon-button ghost" type="button" aria-label={t.qrCode} title={t.qrCode} onclick={() => qrLink = link}><Icon name="qr" /></button>
                   <button class="button toggle-button" type="button" disabled={updating !== null} onclick={() => toggle(link)}>{link.enabled ? t.disable : t.enable}</button>
                   <button class="icon-button ghost delete-button" type="button" aria-label={t.deleteLink} title={t.deleteLink} onclick={() => { formError = null; removing = link; }}><Icon name="trash" /></button>
@@ -301,8 +323,12 @@
 {#if policyLink}
   <PolicyEditor link={policyLink} {api} {t} onclose={() => policyLink = null} onsaved={() => { policyLink = null; notice = 'linkUpdated'; }} />
 {/if}
+{#if protectionLink}
+  <LinkProtectionEditor link={protectionLink} {api} {t} onclose={() => protectionLink = null}
+    onsaved={() => { protectionLink = null; notice = 'linkProtectionSaved'; }} />
+{/if}
 
-<Dialog {t} title={editing ? t.editLink : t.addLink} open={formOpen} busy={saving} onclose={() => formOpen = false}>
+<Dialog {t} title={editing ? t.editLink : t.addLink} open={formOpen} busy={saving} onclose={closeForm}>
   <form onsubmit={save} aria-busy={saving}>
     <div class="dialog-body stack">
       {#if editing}<a class="mono link-short" href={shortUrl(editing, domains)} target="_blank" rel="noreferrer">{shortUrl(editing, domains)}</a>{/if}
@@ -337,10 +363,17 @@
         <small id="tags-hint">{t.tagsHint}</small>
       </label>
       {#if editing}<label class="row"><input type="checkbox" bind:checked={analyticsEnabled} disabled={saving} />{t.countLinkVisits}</label>{/if}
+      {#if formOpen && !editing}
+        <details class="protection-options">
+          <summary>{t.linkProtection}</summary>
+          <ProtectionFields {t} bind:oneTime bind:password={linkPassword} busy={saving}
+            invalidPassword={formError === 'invalidPassword'} />
+        </details>
+      {/if}
       {#if formError}<p class="notice error" role="alert">{t[formError]}</p>{/if}
     </div>
     <footer class="dialog-foot row">
-      <button class="button" type="button" disabled={saving} onclick={() => formOpen = false}>{t.cancel}</button>
+      <button class="button" type="button" disabled={saving} onclick={closeForm}>{t.cancel}</button>
       <button class="button primary" type="submit" disabled={saving}>{saving ? t.saving : editing ? t.save : t.addLink}</button>
     </footer>
   </form>
@@ -361,3 +394,9 @@
     </form>
   {/if}
 </Dialog>
+
+<style>
+  .protection-options { border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; }
+  .protection-options[open] { padding-bottom: 12px; }
+  .protection-options summary { padding-block: 11px; cursor: pointer; font-weight: 650; }
+</style>

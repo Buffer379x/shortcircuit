@@ -14,8 +14,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::{
+    auth::{Auth, AuthError},
     domains,
     input::{normalize_host, valid_slug, valid_target},
+    protection::{self, PasswordChange, ProtectionDetails, ProtectionDraft, ProtectionError},
     qr::{self, Format, QrError},
     redirect::{self, Policy, PolicyDetails, PolicyError},
     store::{self, Link, LinkDraft, LinkUpdate, PAGE_SIZE},
@@ -42,6 +44,10 @@ pub(super) fn routes(pool: SqlitePool, app: AppState) -> Router {
         .route(
             "/api/v1/links/{id}/policy",
             get(read_policy).patch(replace_policy),
+        )
+        .route(
+            "/api/v1/links/{id}/protection",
+            get(read_protection).patch(replace_protection),
         )
         .route("/api/v1/links/{id}/qr", get(link_qr))
         .with_state(LinkState { pool, app })
@@ -104,6 +110,14 @@ struct NewLink {
     target: String,
     title: Option<String>,
     tags: Option<Vec<String>>,
+    protection: Option<NewProtection>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewProtection {
+    one_time: bool,
+    password: Option<String>,
 }
 
 async fn create_link(
@@ -126,6 +140,9 @@ async fn create_link(
     if !valid_target(&input.target) {
         return Err(Problem::invalid("invalid_target"));
     }
+    if input.slug.as_deref().is_some_and(|slug| !valid_slug(slug)) {
+        return Err(Problem::invalid("invalid_slug"));
+    }
     let mut draft = LinkDraft {
         host,
         slug: String::new(),
@@ -133,12 +150,19 @@ async fn create_link(
         tags: tags(input.tags.unwrap_or_default())?,
         target: input.target,
     };
+    let protection = match input.protection {
+        Some(options) => Some(ProtectionDraft {
+            one_time: options.one_time,
+            password_hash: match options.password {
+                Some(password) => Some(link_password_hash(&state.app.auth, &password).await?),
+                None => None,
+            },
+        }),
+        None => None,
+    };
     if let Some(slug) = input.slug {
-        if !valid_slug(&slug) {
-            return Err(Problem::invalid("invalid_slug"));
-        }
         draft.slug = slug;
-        let link = store::insert_link(&state.pool, &draft)
+        let link = store::insert_link(&state.pool, &draft, protection.as_ref())
             .await
             .map_err(|_| Problem::unavailable())?
             .ok_or(Problem(StatusCode::CONFLICT, "slug_in_use"))?;
@@ -146,7 +170,7 @@ async fn create_link(
     }
     for _ in 0..MAX_CODE_ATTEMPTS {
         draft.slug = random_slug()?;
-        if let Some(link) = store::insert_link(&state.pool, &draft)
+        if let Some(link) = store::insert_link(&state.pool, &draft, protection.as_ref())
             .await
             .map_err(|_| Problem::unavailable())?
         {
@@ -154,6 +178,15 @@ async fn create_link(
         }
     }
     Err(Problem::unavailable())
+}
+
+async fn link_password_hash(auth: &Auth, password: &str) -> Result<String, Problem> {
+    auth.hash_password(password)
+        .await
+        .map_err(|error| match error {
+            AuthError::Invalid => Problem::invalid("invalid_link_password"),
+            other => other.into(),
+        })
 }
 
 fn forbidden() -> Problem {
@@ -335,6 +368,67 @@ async fn replace_policy(
                 );
                 Problem::unavailable()
             }
+        })?
+        .map(Json)
+        .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
+}
+
+async fn read_protection(
+    State(state): State<LinkState>,
+    Extension(access): Extension<LinkAccess>,
+    id: Result<Path<i64>, PathRejection>,
+) -> Result<Json<ProtectionDetails>, Problem> {
+    let id = resource_id(id)?;
+    let hosts = access.allowed_hosts(&state, false).await?;
+    protection::read(&state.pool, &hosts, id)
+        .await
+        .map_err(|_| Problem::unavailable())?
+        .map(Json)
+        .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PatchProtection {
+    one_time: bool,
+    password: Option<String>,
+    #[serde(default)]
+    remove_password: bool,
+}
+
+async fn replace_protection(
+    State(state): State<LinkState>,
+    Extension(access): Extension<LinkAccess>,
+    id: Result<Path<i64>, PathRejection>,
+    body: Result<Json<PatchProtection>, JsonRejection>,
+) -> Result<Json<ProtectionDetails>, Problem> {
+    let id = resource_id(id)?;
+    let input = json_payload(body)?;
+    let hosts = access.allowed_hosts(&state, false).await?;
+    let password = match (input.password, input.remove_password) {
+        (Some(_), true) => return Err(Problem::invalid("invalid_link_protection")),
+        (Some(password), false) => {
+            if protection::read(&state.pool, &hosts, id)
+                .await
+                .map_err(|_| Problem::unavailable())?
+                .is_none()
+            {
+                return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
+            }
+            PasswordChange::Set(link_password_hash(&state.app.auth, &password).await?)
+        }
+        (None, true) => PasswordChange::Remove,
+        (None, false) => PasswordChange::Unchanged,
+    };
+    protection::replace(&state.pool, &hosts, id, input.one_time, password)
+        .await
+        .map_err(|error| match error {
+            ProtectionError::Database => Problem::unavailable(),
+            ProtectionError::RequiresTemporaryRedirect => Problem(
+                StatusCode::CONFLICT,
+                "protection_requires_temporary_redirect",
+            ),
+            ProtectionError::Consumed => Problem(StatusCode::CONFLICT, "one_time_consumed"),
         })?
         .map(Json)
         .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
