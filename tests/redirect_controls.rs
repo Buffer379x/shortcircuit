@@ -112,6 +112,90 @@ async fn read_json(resp: Response) -> Value {
     serde_json::from_slice(&data).unwrap()
 }
 
+async fn confirmation(app: &Fixture, path: &str) -> String {
+    let page = app.visit("go.example", Method::GET, path).await;
+    assert_eq!(page.status(), StatusCode::OK);
+    assert!(!page.headers().contains_key(header::LOCATION));
+    assert_eq!(page.headers()[header::CACHE_CONTROL], "no-store");
+    let body = to_bytes(page.into_body(), 10_000).await.unwrap();
+    let body = std::str::from_utf8(&body).unwrap();
+    assert!(!body.contains("https://example.test"));
+    body.split_once("name=\"challenge\" value=\"")
+        .unwrap()
+        .1
+        .split_once('"')
+        .unwrap()
+        .0
+        .to_owned()
+}
+
+async fn confirm(app: &Fixture, path: &str, origin: &str, challenge: &str, password: &str) -> Response {
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("challenge", challenge)
+        .append_pair("password", password)
+        .finish();
+    app.public
+        .clone()
+        .oneshot(
+            Request::post(path)
+                .header(header::HOST, "go.example")
+                .header(header::ORIGIN, origin)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn one_time_link_requires_a_same_origin_confirmation_and_only_one_request_can_consume_it() {
+    let app = Fixture::start().await;
+    let create = app
+        .admin_request(
+            Method::POST,
+            "/api/v1/links",
+            Some(json!({"slug":"once","target":"https://example.test/once","protection":{"one_time":true}})),
+        )
+        .await;
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let head = app.visit("go.example", Method::HEAD, "/once").await;
+    assert_eq!(head.status(), StatusCode::OK);
+    assert!(!head.headers().contains_key(header::LOCATION));
+    let proof = confirmation(&app, "/once?exact=1").await;
+    assert_eq!(confirm(&app, "/once?exact=1", "https://foreign.example", &proof, "").await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(confirm(&app, "/once?exact=2", "https://go.example", &proof, "").await.status(), StatusCode::FORBIDDEN);
+    let (first, second) = tokio::join!(
+        confirm(&app, "/once?exact=1", "https://go.example", &proof, ""),
+        confirm(&app, "/once?exact=1", "https://go.example", &proof, ""),
+    );
+    let statuses = [first.status(), second.status()];
+    assert!(statuses.contains(&StatusCode::SEE_OTHER));
+    assert!(statuses.contains(&StatusCode::NOT_FOUND));
+    assert_eq!(app.visit("go.example", Method::GET, "/once").await.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn password_confirmation_is_revision_bound_and_always_redirects_with_get() {
+    let app = Fixture::start().await;
+    let id = app.create("go.example", "password", "https://example.test/secret", &[]).await;
+    let policy = format!("/api/v1/links/{id}/policy");
+    assert_eq!(app.admin_request(Method::PATCH, &policy, Some(json!({"status":307}))).await.status(), StatusCode::OK);
+    let path = format!("/api/v1/links/{id}/protection");
+    let update = app.admin_request(Method::PATCH, &path, Some(json!({"one_time":false,"password":"first-test-password"}))).await;
+    assert_eq!(update.status(), StatusCode::OK);
+    assert_eq!(read_json(update).await, json!({"password_required":true,"one_time":false,"consumed":false}));
+    assert_eq!(app.admin_request(Method::PATCH, &policy, Some(json!({"status":301}))).await.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let old = confirmation(&app, "/password").await;
+    assert_eq!(confirm(&app, "/password", "https://go.example", &old, "invalid").await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(app.admin_request(Method::PATCH, &path, Some(json!({"one_time":false,"password":"second-test-password"}))).await.status(), StatusCode::OK);
+    assert_eq!(confirm(&app, "/password", "https://go.example", &old, "second-test-password").await.status(), StatusCode::FORBIDDEN);
+    let updated = confirmation(&app, "/password").await;
+    let result = confirm(&app, "/password", "https://go.example", &updated, "second-test-password").await;
+    assert_eq!(result.status(), StatusCode::SEE_OTHER);
+    assert_eq!(result.headers()[header::LOCATION], "https://example.test/secret");
+}
+
 #[tokio::test]
 async fn managed_domains_preserve_links_and_use_explicit_fallbacks() {
     let app = Fixture::start().await;
