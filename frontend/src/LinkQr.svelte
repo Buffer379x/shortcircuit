@@ -37,6 +37,7 @@
   const requests = new AbortController();
   let settings = $state.raw<Settings>(defaults);
   let preview = $state<'loading' | 'ready' | 'error'>('loading');
+  let previewSource = $state<string | null>(null);
   let exporting = $state(false);
   let exportError = $state<keyof Messages | null>(null);
   let copied = $state(false);
@@ -45,6 +46,13 @@
   const canExport = $derived(validContrast && preview === 'ready' && !exporting);
 
   onDestroy(() => requests.abort());
+
+  $effect(() => {
+    const url = qrUrl('svg', settings);
+    if (!validContrast) return;
+    const timer = setTimeout(() => { previewSource = url; }, 120);
+    return () => clearTimeout(timer);
+  });
 
   function luminance(color: string): number {
     const [red, green, blue] = [1, 3, 5].map((start) => {
@@ -69,12 +77,13 @@
     if (qrUrl('svg', next) === previewUrl) return;
     settings = next;
     preview = 'loading';
+    previewSource = null;
     exportError = null;
     copied = false;
   }
 
   function settlePreview(image: Element, state: 'ready' | 'error') {
-    if (image.getAttribute('src') === previewUrl) preview = state;
+    if (previewSource === previewUrl && image.getAttribute('src') === previewSource) preview = state;
   }
 
   async function fetchQr(format: Format, current: Settings): Promise<Blob> {
@@ -170,10 +179,12 @@
             {#if settings.transparent && preview === 'ready'}
               <svg viewBox="0 0 1 1" aria-hidden="true"><rect width="1" height="1" fill={settings.background} /></svg>
             {/if}
-            {#key previewUrl}
-              <img src={previewUrl} alt={t.qrCode} hidden={preview === 'loading'}
-                onload={(event) => settlePreview(event.currentTarget, 'ready')} onerror={(event) => settlePreview(event.currentTarget, 'error')} />
-            {/key}
+            {#if previewSource === previewUrl}
+              {#key previewUrl}
+                <img src={previewUrl} alt={t.qrCode} hidden={preview === 'loading'}
+                  onload={(event) => settlePreview(event.currentTarget, 'ready')} onerror={(event) => settlePreview(event.currentTarget, 'error')} />
+              {/key}
+            {/if}
             {#if preview === 'loading'}<p role="status">{t.loading}</p>{/if}
           {/if}
         </div>

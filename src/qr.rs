@@ -293,10 +293,7 @@ mod tests {
             String::from_utf8(generate(VALUE, Format::Svg, &options).unwrap()).unwrap();
         assert!(!transparent.contains("<rect"));
         assert!(transparent.contains(r##"<path fill="#10203a""##));
-        assert_eq!(
-            decode(350, &svg_pixels(&transparent, 350, 10, 70)).1,
-            VALUE
-        );
+        assert_eq!(decode(350, &svg_pixels(&transparent, 350, 10, 70)).1, VALUE);
     }
 
     #[test]
