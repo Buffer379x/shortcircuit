@@ -25,6 +25,14 @@
     next_after_id: number | null;
   }
 
+  type FileFormat = 'json' | 'csv';
+
+  interface DownloadPage {
+    file: Blob;
+    count: number | null;
+    next_after_id: number | null;
+  }
+
   interface ImportReport {
     version: 1;
     preview: boolean;
@@ -39,14 +47,15 @@
   const maxLinks = 100;
   const panelId = $props.id();
 
-  let page = $state.raw<ExportPage | null>(null);
+  let exportFormat = $state<FileFormat>('json');
+  let page = $state.raw<DownloadPage | null>(null);
   let pageNumber = $state(1);
   let exportLoading = $state(false);
   let exportError = $state<keyof Messages | null>(null);
   let failedPage: { cursor: number | null; index: number } | null = null;
 
   let fileInput: HTMLInputElement;
-  let importFile = $state.raw<ExchangeFile | null>(null);
+  let importFile = $state.raw<ExchangeFile | Blob | null>(null);
   let report = $state.raw<ImportReport | null>(null);
   let reading = $state(false);
   let submitting = $state<'preview' | 'apply' | null>(null);
@@ -55,7 +64,7 @@
   const busy = $derived(reading || submitting !== null);
   const canApply = $derived(
     importFile !== null && report?.preview === true && !report.applied
-      && report.items.length === importFile.items.length
+      && (importFile instanceof Blob || report.items.length === importFile.items.length)
       && report.items.every(({ status }) => status === 'create' || status === 'unchanged'),
   );
   const number = $derived(new Intl.NumberFormat(language));
@@ -69,7 +78,21 @@
     failedPage = null;
     try {
       const query = cursor === null ? '' : `?after_id=${cursor}`;
-      page = await api<ExportPage>(path + query);
+      if (exportFormat === 'csv') {
+        const response = await api<Response>(path + '.csv' + query, 'GET', undefined, 'csv');
+        const rawCursor = response.headers.get('x-next-after-id');
+        const cursor = rawCursor === null ? null : Number(rawCursor);
+        if (cursor !== null && (!Number.isSafeInteger(cursor) || cursor < 1)) throw new Error();
+        page = { file: await response.blob(), count: null, next_after_id: cursor };
+      } else {
+        const result = await api<ExportPage>(path + query);
+        const file: ExchangeFile = { version: result.version, items: result.items };
+        page = {
+          file: new Blob([JSON.stringify(file) + '\n'], { type: 'application/json' }),
+          count: result.items.length,
+          next_after_id: result.next_after_id,
+        };
+      }
       pageNumber = index;
     } catch (error) {
       exportError = problemMessage(error);
@@ -77,6 +100,12 @@
     } finally {
       exportLoading = false;
     }
+  }
+
+  function changeExportFormat(event: Event & { currentTarget: HTMLSelectElement }) {
+    exportFormat = event.currentTarget.value === 'csv' ? 'csv' : 'json';
+    page = null;
+    void loadExport(null, 1);
   }
 
   function retryExport() {
@@ -88,13 +117,11 @@
   }
 
   function downloadPage() {
-    if (!page?.items.length) return;
-    const file: ExchangeFile = { version: page.version, items: page.items };
-    const blob = new Blob([JSON.stringify(file) + '\n'], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
+    if (!page || page.count === 0) return;
+    const url = URL.createObjectURL(page.file);
     const download = document.createElement('a');
     download.href = url;
-    download.download = `shortcircuit-links-v${file.version}-page-${pageNumber}.json`;
+    download.download = `shortcircuit-links-v1-page-${pageNumber}.${exportFormat}`;
     download.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -119,6 +146,10 @@
       return;
     }
 
+    if (file.name.toLowerCase().endsWith('.csv')) {
+      importFile = new Blob([file], { type: 'text/csv' });
+      return;
+    }
     reading = true;
     try {
       const data: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer()));
@@ -162,11 +193,11 @@
     importError = null;
     report = null;
     try {
-      report = await api<ImportReport>(path, 'POST', {
-        version: importFile.version,
-        preview,
-        items: importFile.items,
-      });
+      report = importFile instanceof Blob
+        ? await api<ImportReport>(path + '.csv?preview=' + preview, 'POST', importFile)
+        : await api<ImportReport>(path, 'POST', {
+          version: importFile.version, preview, items: importFile.items,
+        });
     } catch (error) {
       importError = !preview && error instanceof ApiError && error.status === 409
         ? 'exchangeApplyConflict'
@@ -189,6 +220,12 @@
   <section class="panel panel-pad stack" aria-labelledby={panelId + '-export'} aria-busy={exportLoading}>
     <h2 id={panelId + '-export'}>{t.exchangeExport}</h2>
     <p class="muted">{t.exchangeExportScope}</p>
+    <label class="field">
+      <span id={panelId + '-export-format'}>{t.exchangeFormat}</span>
+      <select value={exportFormat} onchange={changeExportFormat} disabled={exportLoading} aria-labelledby={panelId + '-export-format'}>
+        <option value="json">JSON</option><option value="csv">CSV</option>
+      </select>
+    </label>
     {#if exportLoading}<p role="status">{t.loading}</p>{/if}
     {#if exportError}
       <div class="exchange-actions between">
@@ -199,12 +236,12 @@
     {#if page}
       <dl class="page-details">
         <div><dt>{t.exchangePage}</dt><dd>{number.format(pageNumber)}</dd></div>
-        <div><dt>{t.exchangePageLinks}</dt><dd>{number.format(page.items.length)}</dd></div>
+        {#if page.count !== null}<div><dt>{t.exchangePageLinks}</dt><dd>{number.format(page.count)}</dd></div>{/if}
       </dl>
-      {#if page.items.length === 0}<p>{t.exchangeNoLinks}</p>{/if}
+      {#if page.count === 0}<p>{t.exchangeNoLinks}</p>{/if}
       <div class="exchange-actions row">
-        <button class="button primary" type="button" disabled={exportLoading || !page.items.length} onclick={downloadPage}>
-          <Icon name="download" />{t.exchangeDownloadPage}
+        <button class="button primary" type="button" disabled={exportLoading || page.count === 0} onclick={downloadPage}>
+          <Icon name="download" />{exportFormat === 'csv' ? t.exchangeDownloadCsv : t.exchangeDownloadPage}
         </button>
         {#if pageNumber > 1}
           <button class="button" type="button" disabled={exportLoading} onclick={() => loadExport(null, 1)}>{t.exchangeFirstPage}</button>
@@ -218,7 +255,7 @@
     <h2 id={panelId + '-import'}>{t.exchangeImport}</h2>
     <label class="field">
       <span id={panelId + '-file-label'}>{t.exchangeChooseFile}</span>
-      <input type="file" accept=".json,application/json" bind:this={fileInput} onchange={chooseFile} disabled={busy} aria-labelledby={panelId + '-file-label'} aria-describedby={panelId + '-file-hint'} />
+      <input type="file" accept=".json,.csv,application/json,text/csv" bind:this={fileInput} onchange={chooseFile} disabled={busy} aria-labelledby={panelId + '-file-label'} aria-describedby={panelId + '-file-hint'} />
       <small id={panelId + '-file-hint'}>{t.exchangeFileHint}</small>
     </label>
     <div class="exchange-actions row">

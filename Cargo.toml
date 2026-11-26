@@ -9,6 +9,7 @@ license = "MIT"
 [dependencies]
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "password-hash", "zeroize"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+csv = "1.4.0"
 getrandom = "0.4.3"
 png = "0.18.1"
 qrcode = { version = "0.14.1", default-features = false }

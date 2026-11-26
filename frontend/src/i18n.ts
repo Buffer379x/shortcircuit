@@ -1,4 +1,6 @@
 const en = {
+  exchangeFormat: "Export format",
+  exchangeDownloadCsv: "Download CSV page",
   qrResolution: "Resolution in pixels",
   findDuplicates: "Find matching links",
   duplicateResults: "Matching links",
@@ -25,8 +27,8 @@ const en = {
   exchangeFirstPage: "First page",
   exchangeNextPage: "Next page",
   exchangeImport: "Import links",
-  exchangeChooseFile: "JSON link file",
-  exchangeFileHint: "Use a version 1 link file with up to 100 links and a size of up to 32 KiB.",
+  exchangeChooseFile: "Link data file",
+  exchangeFileHint: "Choose a version 1 JSON or CSV file with up to 100 links and a size of up to 32 KiB.",
   exchangeFileTooLarge: "The import exceeds 32 KiB. Split the links into smaller files.",
   exchangeInvalidJson: "The file could not be read as valid JSON.",
   exchangeInvalidFile: "Choose a version 1 link file containing 1 to 100 valid link records.",
@@ -257,6 +259,8 @@ export type Language = 'en' | 'de';
 export type Theme = 'dark' | 'light' | 'system';
 
 const de: Messages = {
+  exchangeFormat: "Exportformat",
+  exchangeDownloadCsv: "CSV-Seite herunterladen",
   qrResolution: "Auflösung in Pixeln",
   findDuplicates: "Übereinstimmende Links finden",
   duplicateResults: "Übereinstimmende Links",
@@ -283,8 +287,8 @@ const de: Messages = {
   exchangeFirstPage: "Erste Seite",
   exchangeNextPage: "Nächste Seite",
   exchangeImport: "Kurzlinks importieren",
-  exchangeChooseFile: "JSON-Datei mit Kurzlinks",
-  exchangeFileHint: "Verwende eine Datei der Version 1 mit bis zu 100 Kurzlinks und höchstens 32 KiB.",
+  exchangeChooseFile: "Datei mit Kurzlinks",
+  exchangeFileHint: "Wähle eine JSON- oder CSV-Datei der Version 1 mit bis zu 100 Kurzlinks und höchstens 32 KiB.",
   exchangeFileTooLarge: "Der Import überschreitet 32 KiB. Teile die Kurzlinks in kleinere Dateien auf.",
   exchangeInvalidJson: "Die Datei konnte nicht als gültiges JSON gelesen werden.",
   exchangeInvalidFile: "Wähle eine Datei der Version 1 mit 1 bis 100 gültigen Kurzlink-Einträgen.",

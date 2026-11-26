@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add native CSV exchange with bounded pages, spreadsheet-oriented escaping, and transactional import.
+
 - Add optional scheduled backups with independent retention.
 
 - Add exact destination lookup and a local preview for removing tracking parameters.

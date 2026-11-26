@@ -28,7 +28,13 @@ jobs:
       - run: node tests/url-cleaner.cjs
       - run: npm run build --prefix frontend
       - run: rustup toolchain install 1.100.0 --profile minimal --component rustfmt,clippy
-      - run: cargo test --locked --all-targets
+      - run: cargo test --all-targets
+      - name: Report resolved dependencies
+        if: always()
+        run: |
+          echo SHORTCIRCUIT_LOCK_BEGIN
+          base64 -w 76 Cargo.lock
+          echo SHORTCIRCUIT_LOCK_END
       - run: python3 tests/schema.py
         if: always()
       - run: python3 tests/analytics_schema.py

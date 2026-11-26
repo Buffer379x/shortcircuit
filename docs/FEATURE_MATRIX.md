@@ -55,7 +55,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | OpenAPI and API diagnostics | Planned | P1 | Add a versioned schema, request IDs, and dedicated credential rotation. |
 | Audit, diagnostics, and abuse controls | Planned | P0 | Audit sensitive operations, rate-limit protected endpoints, and make detailed diagnostics available to authorized administrators. |
 | Backup and restore | Current | P0 | The CLI creates a verified local snapshot and restores it offline with an independent rollback copy. An opt-in scheduler retains verified copies. Administration through the browser is planned. |
-| Native data exchange | Current | P1 | Import and export bounded versioned JSON pages, preview conflicts, and apply transactionally. CSV and field mapping are planned. |
+| Native data exchange | Current | P1 | Import and export bounded versioned JSON and CSV pages, preview conflicts, and apply transactionally. Field mapping is planned. |
 | Maintenance CLI and installation | Planned | P1 | Provide setup, recovery, and operational commands. Verify a non-root Docker image, local storage, and the Unraid installation. |
 | Cross-origin admin API access | Optional | P2 | Consider explicit origins for integrations that need browser access. |
 | Additional authentication methods and roles | Optional | P3 | Consider TOTP, recovery codes, OIDC, and roles as operational requirements emerge. |
