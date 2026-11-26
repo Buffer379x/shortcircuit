@@ -108,7 +108,9 @@ async fn serve() -> Result<(), AppError> {
             let length = value.parse().map_err(|_| {
                 io::Error::other("SHORTCODE_LENGTH must be an integer from 8 to 32")
             })?;
-            config.with_shortcode_length(length).map_err(io::Error::other)?
+            config
+                .with_shortcode_length(length)
+                .map_err(io::Error::other)?
         }
         Err(env::VarError::NotPresent) => config,
         Err(error) => return Err(error.into()),
