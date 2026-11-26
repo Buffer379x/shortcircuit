@@ -25,10 +25,13 @@ struct App {
 
 impl App {
     async fn start() -> Self {
+        Self::start_configured(AdminConfig::new(ORIGIN, 8080).unwrap()).await
+    }
+
+    async fn start_configured(config: AdminConfig) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let pool = open_database(&temp.path().join("admin.db")).await.unwrap();
         let hosts = PublicHosts::parse("go.example,s.example").unwrap();
-        let config = AdminConfig::new(ORIGIN, 8080).unwrap();
         Self {
             _temp: temp,
             auth: Auth::new(pool.clone()),
@@ -95,6 +98,60 @@ async fn request(
 
 async fn response_body(response: Response) -> Value {
     serde_json::from_slice(&to_bytes(response.into_body(), 64_000).await.unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn configured_shortcode_length_applies_only_to_generated_slugs() {
+    let config = AdminConfig::new(ORIGIN, 8080)
+        .unwrap()
+        .with_shortcode_length(16)
+        .unwrap();
+    let app = App::start_configured(config).await;
+    let (cookie, csrf) = app.setup().await;
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    let generated = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links",
+        &headers,
+        Some(json!({"target":"https://example.test/generated"})),
+    )
+    .await;
+    assert_eq!(generated.status(), StatusCode::CREATED);
+    let generated = response_body(generated).await;
+    let slug = generated["slug"].as_str().unwrap();
+    assert_eq!(slug.len(), 16);
+    assert!(
+        slug.bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    );
+
+    let custom = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links",
+        &headers,
+        Some(json!({"target":"https://example.test/custom", "slug":"Docs/ABC"})),
+    )
+    .await;
+    assert_eq!(custom.status(), StatusCode::CREATED);
+    assert_eq!(response_body(custom).await["slug"], "Docs/ABC");
+}
+
+#[test]
+fn shortcode_length_rejects_values_outside_its_bounds() {
+    for length in [0, 7, 33, usize::MAX] {
+        assert!(
+            AdminConfig::new(ORIGIN, 8080)
+                .unwrap()
+                .with_shortcode_length(length)
+                .is_err()
+        );
+    }
 }
 
 #[tokio::test]

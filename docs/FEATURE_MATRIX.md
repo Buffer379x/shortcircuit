@@ -9,7 +9,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Capability | Status | Priority | Scope |
 |---|---|---|---|
 | Create and list links | Current | P0 | The authenticated admin API accepts absolute HTTP or HTTPS destinations, preserves their stored URI spelling, and lists links with a cursor. |
-| Custom and generated slugs | Current | P0 | Slugs are case-sensitive and can contain multiple segments. Custom segments use ASCII letters, digits, hyphens, and underscores. Generated slugs use 10 random characters. The database enforces uniqueness per host. |
+| Custom and generated slugs | Current | P0 | Slugs are case-sensitive and can contain multiple segments. Custom segments use ASCII letters, digits, hyphens, and underscores. Generated slugs use 10 random characters by default. The database enforces uniqueness per host. |
 | Host-bound redirects | Current | P0 | Configured hosts can reuse the same slug independently. Public GET and HEAD use `302` by default and include `Cache-Control: no-store`. Matching uses the normalized host and exact path with optional extra path forwarding. |
 | Verify published addresses | Planned | P0 | Recreate required short URLs and check the configured host, exact slug, status, and destination through the intended proxy. Scan printed QR codes or compare their decoded URLs when applicable. |
 | Edit links and destinations | Current | P0 | Update destinations, titles, tags, and enabled status. Published hosts and slugs stay fixed. |
@@ -20,7 +20,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Path matching extensions and aliases | Optional | P2 | Evaluate Unicode slugs, case-insensitive or trailing-slash matching, and explicit aliases against collision, encoding, and proxy requirements. |
 | Search, filters, and sorting | Current | P1 | Search the full catalog by title, slug, domain, destination, or tag. Combine domain and status filters with all-tag or any-tag matching and sort paginated results. |
 | Bulk actions | Current | P1 | Select up to 50 links, change their status or tags atomically, export native JSON or CSV, and confirm permanent deletion. |
-| Slug generation settings | Planned | P1 | Allow a configurable generated length while preserving database uniqueness and bounded retries. |
+| Slug generation settings | Current | P1 | Set the generated length to 8 through 32 with `SHORTCODE_LENGTH`. Existing and custom slugs preserve their spelling. |
 | Tags | Current | P1 | View tag counts, rename or merge tags, and remove their assignments. Tag suggestions and colors are planned. |
 | Crawler controls | Planned | P1 | Configure crawler directives and per-link crawlability. Check reserved route collisions before serving `robots.txt`. |
 | Duplicate detection | Current | P2 | Lookup matches against the exact stored destination. The creation and edit forms offer copying an existing short URL. Approximate matches and merge are planned. |

@@ -103,6 +103,18 @@ async fn serve() -> Result<(), AppError> {
         public_port,
     )
     .map_err(io::Error::other)?;
+    let config = match env::var("SHORTCODE_LENGTH") {
+        Ok(value) => {
+            let length = value.parse().map_err(|_| {
+                io::Error::other("SHORTCODE_LENGTH must be an integer from 8 to 32")
+            })?;
+            config
+                .with_shortcode_length(length)
+                .map_err(io::Error::other)?
+        }
+        Err(env::VarError::NotPresent) => config,
+        Err(error) => return Err(error.into()),
+    };
     if env::var_os("ADMIN_TOKEN_FILE").is_some() {
         return Err(io::Error::other(
             "Remove ADMIN_TOKEN_FILE. Use setup-token and create scoped API keys.",
