@@ -10,7 +10,19 @@ Connect ShortCircuit and Nginx Proxy Manager to a shared user-defined Docker bri
 
 ## Install with Docker Manager
 
-1. Build the image on Unraid from the repository root with `docker build --tag shortcircuit:0.6.0 .`. Prepare the local appdata directory as shown below.
+Build the image on the same Docker host that will run ShortCircuit. With a local source checkout, run either `docker build --tag shortcircuit:0.6.0 .` or `docker compose build shortcircuit` from the repository root.
+
+If you started with the XML download, run these commands in the Unraid terminal to fetch the source used for the template and build its image.
+
+~~~sh
+shortcircuit_source=$(mktemp -d) &&
+curl -fsSL https://codeload.github.com/Buffer379x/shortcircuit/tar.gz/c2f6ca1ba72f0aa5cad9bd8c74416bdbdd1b3782 \
+  -o "$shortcircuit_source/source.tar.gz" &&
+tar -xzf "$shortcircuit_source/source.tar.gz" --strip-components=1 -C "$shortcircuit_source" &&
+docker build --tag shortcircuit:0.6.0 "$shortcircuit_source"
+~~~
+
+1. Run `docker image inspect shortcircuit:0.6.0 --format '{{.Id}}'` on Unraid. A printed image ID confirms that Docker Manager can use the local tag. When Docker reports `pull access denied` for this tag, build the image on Unraid and apply the template again. Prepare the local appdata directory as shown below.
 2. For a new installation, save the XML as `my-shortcircuit.xml` in `/boot/config/plugins/dockerMan/templates-user/`. In **Docker → Add Container**, select the ShortCircuit user template and set **Appdata** to your local pool path.
 3. For tunnel access, keep the default bridge and admin origin. The two `--publish` options in **Extra Parameters** bind to IPv4 loopback. Use Docker Engine 28.0.0 or newer for this setup. Forward the ports from your client, then use `http://localhost:8081` for administration. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
 

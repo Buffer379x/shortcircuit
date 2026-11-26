@@ -52,6 +52,9 @@ jobs:
       - run: docker compose up --build --detach --wait --wait-timeout 90
       - name: Check listener separation and non-root execution
         run: |
+          template_image=$(python3 -c 'from xml.etree import ElementTree; print(ElementTree.parse("unraid/shortcircuit.xml").findtext("Repository"))')
+          test "$(docker compose config --images)" = "$template_image"
+          docker image inspect "$template_image" --format '{{.Id}}'
           curl --fail --silent http://127.0.0.1:8081/readyz
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/readyz)" = "404"
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Host: localhost:8081' http://127.0.0.1:8081/api/v1/links)" = "401"
