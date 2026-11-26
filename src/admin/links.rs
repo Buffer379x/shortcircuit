@@ -19,7 +19,7 @@ use crate::{
     history::{self, LinkHistory, RestoreError},
     input::{link_tags, link_title, normalize_host, valid_slug, valid_target},
     protection::{self, PasswordChange, ProtectionDetails, ProtectionDraft, ProtectionError},
-    qr::{self, Format, QrError},
+    qr::{self, Format},
     redirect::{self, Policy, PolicyDetails, PolicyError},
     store::{self, Link, LinkDraft, LinkUpdate, PAGE_SIZE},
 };
@@ -559,15 +559,6 @@ async fn link_qr(
         qr::generate(&value, format, &render_options)
     })
     .await
-    .map_err(|_| Problem::unavailable())?
-    .map_err(|error| match error {
-        QrError::InvalidSize => Problem::invalid("invalid_qr_size"),
-        QrError::InvalidColor => Problem::invalid("invalid_qr_color"),
-        QrError::InvalidContrast => Problem::invalid("invalid_qr_contrast"),
-        QrError::InvalidCorrection => Problem::invalid("invalid_qr_correction"),
-        QrError::InvalidQuietZone => Problem::invalid("invalid_qr_quiet_zone"),
-        QrError::DataTooLong => Problem::invalid("qr_data_too_long"),
-        QrError::EncodingFailed => Problem::unavailable(),
-    })?;
+    .map_err(|_| Problem::unavailable())??;
     Ok(([(header::CONTENT_TYPE, content_type)], Bytes::from(bytes)))
 }

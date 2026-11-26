@@ -8,7 +8,7 @@ Create a backup while the container is running.
 docker compose exec -T shortcircuit shortcircuit backup
 ```
 
-The command prints the backup path under `/data/backups`. The database-only format includes local settings, links, link history, redirect rules, tags, analytics, the administrator account, and API credentials. The copied browser sessions and setup or recovery claims are removed. Keep external environment settings and proxy configuration with your operational backup. Store the snapshot securely because it includes confidential destinations and authentication material.
+The command prints the backup path under `/data/backups`. The database-only format includes local settings, links, link history, redirect rules, tags, QR templates, analytics, the administrator account, and API credentials. The copied browser sessions and setup or recovery claims are removed. Keep external environment settings and proxy configuration with your operational backup. Store the snapshot securely because it includes confidential destinations and authentication material.
 
 To restore a snapshot from the same schema version during scheduled downtime, stop the service and use a one-off container with the same app-data volume. Use the path printed by the backup command.
 

@@ -116,19 +116,33 @@ async fn qr_templates_are_private_and_validate_styles_before_storing_them() {
         ("x-csrf-token", csrf.as_str()),
     ];
     assert_eq!(
-        request(&app.public, Method::GET, QR_TEMPLATES, &[("host", "go.example")], None)
-            .await
-            .status(),
+        request(
+            &app.public,
+            Method::GET,
+            QR_TEMPLATES,
+            &[("host", "go.example")],
+            None
+        )
+        .await
+        .status(),
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        request(&app.admin, Method::GET, QR_TEMPLATES, &[], None).await.status(),
+        request(&app.admin, Method::GET, QR_TEMPLATES, &[], None)
+            .await
+            .status(),
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        request(&app.admin, Method::POST, QR_TEMPLATES, &headers[..2], Some(qr_template("Print")))
-            .await
-            .status(),
+        request(
+            &app.admin,
+            Method::POST,
+            QR_TEMPLATES,
+            &headers[..2],
+            Some(qr_template("Print"))
+        )
+        .await
+        .status(),
         StatusCode::FORBIDDEN
     );
 
@@ -142,13 +156,24 @@ async fn qr_templates_are_private_and_validate_styles_before_storing_them() {
     ] {
         let mut input = qr_template("Print");
         input[field] = value;
-        let response = request(&app.admin, Method::POST, QR_TEMPLATES, &headers, Some(input)).await;
+        let response = request(
+            &app.admin,
+            Method::POST,
+            QR_TEMPLATES,
+            &headers,
+            Some(input),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(response_body(response).await["code"], code);
     }
 
     let created = request(
-        &app.admin, Method::POST, QR_TEMPLATES, &headers, Some(qr_template("  Druckvorlage Ä  ")),
+        &app.admin,
+        Method::POST,
+        QR_TEMPLATES,
+        &headers,
+        Some(qr_template("  Druckvorlage Ä  ")),
     )
     .await;
     assert_eq!(created.status(), StatusCode::CREATED);
@@ -158,7 +183,11 @@ async fn qr_templates_are_private_and_validate_styles_before_storing_them() {
     expected["background"] = json!("fff4e0");
     assert_eq!(created, expected);
     let duplicate = request(
-        &app.admin, Method::POST, QR_TEMPLATES, &headers, Some(qr_template("Druckvorlage Ä")),
+        &app.admin,
+        Method::POST,
+        QR_TEMPLATES,
+        &headers,
+        Some(qr_template("Druckvorlage Ä")),
     )
     .await;
     assert_eq!(duplicate.status(), StatusCode::CONFLICT);
@@ -170,7 +199,12 @@ async fn qr_templates_are_private_and_validate_styles_before_storing_them() {
     let id = created["id"].as_i64().unwrap();
     let resource = format!("{QR_TEMPLATES}/{id}");
     for status in [StatusCode::NO_CONTENT, StatusCode::NOT_FOUND] {
-        assert_eq!(request(&app.admin, Method::DELETE, &resource, &headers, None).await.status(), status);
+        assert_eq!(
+            request(&app.admin, Method::DELETE, &resource, &headers, None)
+                .await
+                .status(),
+            status
+        );
     }
 }
 
@@ -192,8 +226,20 @@ async fn simultaneous_qr_template_writes_respect_the_installation_limit() {
     .await
     .unwrap();
     let (first, second) = tokio::join!(
-        request(&app.admin, Method::POST, QR_TEMPLATES, &headers, Some(qr_template("Print"))),
-        request(&app.admin, Method::POST, QR_TEMPLATES, &headers, Some(qr_template("Screen"))),
+        request(
+            &app.admin,
+            Method::POST,
+            QR_TEMPLATES,
+            &headers,
+            Some(qr_template("Print"))
+        ),
+        request(
+            &app.admin,
+            Method::POST,
+            QR_TEMPLATES,
+            &headers,
+            Some(qr_template("Screen"))
+        ),
     );
     let (created, limited) = if first.status() == StatusCode::CREATED {
         (first, second)

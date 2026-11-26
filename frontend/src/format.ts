@@ -32,6 +32,9 @@ const problemMessages = new Map<string, Message>([
   ['invalid_qr_correction', 'invalidQrCorrection'],
   ['invalid_qr_quiet_zone', 'invalidQrQuietZone'],
   ['invalid_qr_size', 'invalidQrSize'],
+  ['invalid_qr_template_name', 'invalidQrTemplateName'],
+  ['qr_template_exists', 'qrTemplateExists'],
+  ['qr_template_limit', 'qrTemplateLimit'],
   ['not_found', 'resourceMissing'],
 ]);
 

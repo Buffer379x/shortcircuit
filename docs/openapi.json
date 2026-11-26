@@ -3594,6 +3594,224 @@
         }
       }
     },
+    "/api/v1/qr/templates": {
+      "get": {
+        "tags": [
+          "QR"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "operationId": "listQrTemplates",
+        "summary": "List saved QR templates",
+        "responses": {
+          "200": {
+            "description": "Saved QR designs, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QrTemplateList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "QR"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Exact configured admin origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "operationId": "createQrTemplate",
+        "summary": "Save a QR template",
+        "description": "Templates store only render settings and a name. Colors must meet the QR renderer's contrast requirements.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QrTemplateCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The saved design with its ID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QrTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A template already uses the name or the installation has 32 templates.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A template name or render setting is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/qr/templates/{id}": {
+      "delete": {
+        "tags": [
+          "QR"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Numeric template ID.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Exact configured admin origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "operationId": "deleteQrTemplate",
+        "summary": "Delete a saved QR template",
+        "responses": {
+          "204": {
+            "description": "The template was removed."
+          },
+          "404": {
+            "description": "The template ID is unknown or invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "summary": "Check process liveness",
@@ -5464,6 +5682,144 @@
           "code"
         ],
         "additionalProperties": false
+      },
+      "QrTemplate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "size",
+          "foreground",
+          "background",
+          "transparent",
+          "correction",
+          "quiet_zone"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Unique case-sensitive name. The server trims outer whitespace and rejects control characters."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 128,
+            "maximum": 1024,
+            "description": "Image width and height in pixels."
+          },
+          "foreground": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{6}$",
+            "description": "Dark module color as six hexadecimal sRGB digits without a leading hash."
+          },
+          "background": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{6}$",
+            "description": "Light color or reference backdrop for a transparent export, as six hexadecimal sRGB digits."
+          },
+          "transparent": {
+            "type": "boolean",
+            "description": "Leave the light cells and quiet zone transparent in the image."
+          },
+          "correction": {
+            "type": "string",
+            "enum": [
+              "L",
+              "M",
+              "Q",
+              "H"
+            ],
+            "description": "QR error correction level."
+          },
+          "quiet_zone": {
+            "type": "integer",
+            "minimum": 4,
+            "maximum": 12,
+            "description": "Clear margin on each side, in QR modules."
+          }
+        }
+      },
+      "QrTemplateCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "size",
+          "foreground",
+          "background",
+          "transparent",
+          "correction",
+          "quiet_zone"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Unique case-sensitive name. The server trims outer whitespace and rejects control characters."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 128,
+            "maximum": 1024,
+            "description": "Image width and height in pixels."
+          },
+          "foreground": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f]{6}$",
+            "description": "Dark module color as six hexadecimal sRGB digits without a leading hash."
+          },
+          "background": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f]{6}$",
+            "description": "Light color or reference backdrop for a transparent export, as six hexadecimal sRGB digits."
+          },
+          "transparent": {
+            "type": "boolean",
+            "description": "Leave the light cells and quiet zone transparent in the image."
+          },
+          "correction": {
+            "type": "string",
+            "enum": [
+              "L",
+              "M",
+              "Q",
+              "H"
+            ],
+            "description": "QR error correction level."
+          },
+          "quiet_zone": {
+            "type": "integer",
+            "minimum": 4,
+            "maximum": 12,
+            "description": "Clear margin on each side, in QR modules."
+          }
+        }
+      },
+      "QrTemplateList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "$ref": "#/components/schemas/QrTemplate"
+            }
+          }
+        }
       }
     }
   }

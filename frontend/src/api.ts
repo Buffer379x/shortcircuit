@@ -96,6 +96,20 @@ export interface LinkPage {
   next_after_id: number | null;
 }
 
+export interface QrStyle {
+  size: number;
+  foreground: string;
+  background: string;
+  transparent: boolean;
+  correction: 'L' | 'M' | 'Q' | 'H';
+  quiet_zone: number;
+}
+
+export interface QrTemplate extends QrStyle {
+  id: number;
+  name: string;
+}
+
 export const scopes = ['read', 'write', 'delete'] as const;
 export type Scope = typeof scopes[number];
 

@@ -327,7 +327,7 @@
   </div>
 </section>
 
-{#if qrLink}<LinkQr link={qrLink} {t} onclose={() => qrLink = null} />{/if}
+{#if qrLink}<LinkQr {api} link={qrLink} {t} onclose={() => qrLink = null} />{/if}
 {#if historyLink}
   <LinkHistory link={historyLink} {api} {t} {language} onclose={() => historyLink = null} onrestore={restoreMetadata} />
 {/if}
