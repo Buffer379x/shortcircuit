@@ -138,6 +138,10 @@ impl From<QrError> for Problem {
             QrError::InvalidCorrection => Self::invalid("invalid_qr_correction"),
             QrError::InvalidQuietZone => Self::invalid("invalid_qr_quiet_zone"),
             QrError::InvalidFrame => Self::invalid("invalid_qr_frame"),
+            QrError::InvalidLogo => Self::invalid("invalid_qr_logo"),
+            QrError::InvalidLogoDimensions => Self::invalid("invalid_qr_logo_dimensions"),
+            QrError::InvalidLogoCorrection => Self::invalid("invalid_qr_logo_correction"),
+            QrError::LogoUnreadable => Self::invalid("qr_logo_unreadable"),
             QrError::DataTooLong => Self::invalid("qr_data_too_long"),
             QrError::EncodingFailed => Self::unavailable(),
         }

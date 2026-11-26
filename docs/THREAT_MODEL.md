@@ -10,6 +10,7 @@ This draft covers one Unraid instance with a public short-link domain, a private
 | Browser or API client → admin listener | Clients may be authenticated, compromised, or underprivileged. Check permission for the requested action and object. Network restrictions reduce reachability. The application also authenticates requests. |
 | Processes → data volume | The volume contains destination URLs, history, configuration, password and token digests, analytics, and integration credentials. Docker and host administrators and privileged backup operators have broad access. File and backup permissions are part of the operating model. |
 | Import file or restore archive → parser → staging → live data | Treat files, data, and schema metadata as untrusted even when an administrator selects them. Read import inputs without modifying them. Change live state only after validation and approval. |
+| QR logo PNG → authenticated upload → QR renderer | Treat logo bytes as untrusted. Limit the body, dimensions, concurrent reads, decode allocations and work. Generate SVG from sampled pixels. Discard the input after rendering. |
 | Scheduler and fetcher → network | Title retrieval, monitoring, webhooks, and connectors can reach sensitive internal systems if their policies are wrong. Treat DNS as input and bind credentials to a single approved connector. |
 | Build and release → operator | Git, CI runners, artifacts, the registry, base images, and dependencies can affect the binary and all data it can access. Keep image provenance and build versions traceable. |
 

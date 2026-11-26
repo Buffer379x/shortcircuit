@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use axum::{
     Extension, Json, Router,
     body::Bytes,
     extract::{
-        Path, Query, State,
+        DefaultBodyLimit, FromRequest, Path, Query, Request, State,
         rejection::{JsonRejection, PathRejection, QueryRejection},
     },
     http::{StatusCode, header},
@@ -500,6 +500,16 @@ async fn restore_history(
 }
 
 static QR_WORK: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+static QR_LOGO_UPLOADS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+const QR_LOGO_TIMEOUT: Duration = Duration::from_secs(8);
+type QrResponse = ([(header::HeaderName, &'static str); 1], Bytes);
+
+pub(super) fn qr_logo_routes() -> Router<AppState> {
+    Router::new().route(
+        "/api/v1/links/{id}/qr/logo",
+        post(link_qr_logo).layer(DefaultBodyLimit::max(qr::MAX_LOGO_BYTES)),
+    )
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -519,7 +529,47 @@ async fn link_qr(
     Extension(access): Extension<LinkAccess>,
     id: Result<Path<i64>, PathRejection>,
     query: Result<Query<QrQuery>, QueryRejection>,
-) -> Result<([(header::HeaderName, &'static str); 1], Bytes), Problem> {
+) -> Result<QrResponse, Problem> {
+    render_qr(&state.app, Some(&access), id, query, None).await
+}
+
+async fn link_qr_logo(
+    State(state): State<AppState>,
+    id: Result<Path<i64>, PathRejection>,
+    query: Result<Query<QrQuery>, QueryRejection>,
+    request: Request,
+) -> Result<QrResponse, Problem> {
+    let content_types = request.headers().get_all(header::CONTENT_TYPE);
+    let mut content_types = content_types.iter();
+    if content_types
+        .next()
+        .is_none_or(|value| value != "image/png")
+        || content_types.next().is_some()
+    {
+        return Err(Problem(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid_qr_logo_type",
+        ));
+    }
+    let _slot = QR_LOGO_UPLOADS.try_acquire().map_err(|_| qr_busy())?;
+    let image = tokio::time::timeout(QR_LOGO_TIMEOUT, Bytes::from_request(request, &state))
+        .await
+        .map_err(|_| Problem(StatusCode::REQUEST_TIMEOUT, "qr_logo_timeout"))?
+        .map_err(|error| Problem(error.status(), "invalid_qr_logo_body"))?;
+    render_qr(&state, None, id, query, Some(image)).await
+}
+
+fn qr_busy() -> Problem {
+    Problem(StatusCode::TOO_MANY_REQUESTS, "try_again_later")
+}
+
+async fn render_qr(
+    state: &AppState,
+    access: Option<&LinkAccess>,
+    id: Result<Path<i64>, PathRejection>,
+    query: Result<Query<QrQuery>, QueryRejection>,
+    logo: Option<Bytes>,
+) -> Result<QrResponse, Problem> {
     let Query(options) = query.map_err(|error| Problem(error.status(), "invalid_query"))?;
     let (format, content_type) = match options.format.as_deref().unwrap_or("svg") {
         "svg" => (Format::Svg, "image/svg+xml"),
@@ -532,17 +582,12 @@ async fn link_qr(
             .fetch_optional(&state.pool)
             .await
             .map_err(|_| Problem::unavailable())?
-            .filter(|(host, _)| access.permits(host))
+            .filter(|(host, _)| access.is_none_or(|access| access.permits(host)))
             .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
-    let domain = domains::lookup(
-        &state.pool,
-        &state.app.hosts,
-        &host,
-        state.app.config.local_port,
-    )
-    .await
-    .map_err(|_| Problem::unavailable())?
-    .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
+    let domain = domains::lookup(&state.pool, &state.hosts, &host, state.config.local_port)
+        .await
+        .map_err(|_| Problem::unavailable())?
+        .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
     let value = format!("{}/{}", domain.origin, slug);
     let render_options = qr::Options {
         size: options.size,
@@ -553,12 +598,13 @@ async fn link_qr(
         quiet_zone: options.quiet_zone,
         frame: options.frame,
     };
-    let permit = QR_WORK
-        .try_acquire()
-        .map_err(|_| Problem(StatusCode::TOO_MANY_REQUESTS, "try_again_later"))?;
+    let permit = QR_WORK.try_acquire().map_err(|_| qr_busy())?;
     let bytes = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        qr::generate(&value, format, &render_options)
+        match logo {
+            Some(image) => qr::generate_with_logo(&value, format, &render_options, &image),
+            None => qr::generate(&value, format, &render_options),
+        }
     })
     .await
     .map_err(|_| Problem::unavailable())??;

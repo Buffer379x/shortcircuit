@@ -70,7 +70,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Localization and themes | Current | P1 | Support English and German interface text, dark, light, and system themes, and locale-aware date and number display. |
 | QR Studio | Current | P1 | Preview and export local SVG and PNG with colors, transparency, error correction, resolution, quiet zone, and an optional outline. Verify output with an independent decoder. |
 | QR design templates | Current | P1 | Save, apply, and delete reusable render settings in the QR dialog. Templates are included in SQLite backups. |
-| QR logo overlay | Planned | P1 | Evaluate bounded image handling and scanner readability before adding a logo to the QR symbol. |
+| QR logo overlay | Current | P1 | Select a static PNG for the current dialog. The renderer checks the exact encoded URL before returning either format. |
 | Destination title lookup | Optional | P1 | Enable title fetching explicitly through the shared outbound HTTP client, with validated targets and response limits. |
 | Health Monitor | Planned | P2 | After explicit activation, run bounded, scheduled probes under the shared outbound request policy. Report status without deactivating links. |
 | Webhooks | Planned | P2 | Provide a generic webhook using safe outbound policies. Enable destinations explicitly. |

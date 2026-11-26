@@ -87,6 +87,7 @@ fn build_admin_router(
         .route("/api/v1/keys", get(list_keys).post(create_key))
         .route("/api/v1/keys/{id}", delete(revoke_key))
         .merge(qr_templates::routes())
+        .merge(links::qr_logo_routes())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             access::browser_access,

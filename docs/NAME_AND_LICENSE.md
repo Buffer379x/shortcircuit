@@ -47,6 +47,8 @@ Before public distribution, review similar marks and commercial uses in the inte
 
 Verify license compatibility for runtime dependencies and assets. Review the exact Rust and frontend dependency versions, statically linked libraries, embedded assets, and base image before the first approved release. Record the results in CI alongside a software bill of materials and the applicable third-party notices. The licenses of bundled components and their transitive dependencies govern use and distribution of those components.
 
+QR logo verification uses the existing `rqrr` 0.11.0 dependency at runtime with default features disabled. Its license expression is `(MIT OR Apache-2.0) AND ISC`. The container build includes its license files from the Cargo source distribution. [Upstream manifest](https://github.com/WanzenBug/rqrr/blob/master/Cargo.toml)
+
 Document the source path, version or commit, license, copyright, modifications, and distribution of any material the project incorporates. The ShortCircuit interface, product copy, and branding have their own design and asset inventory. [Design system](DESIGN_SYSTEM.md)
 
 ## Optional GeoIP data
