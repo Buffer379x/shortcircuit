@@ -54,3 +54,12 @@ The preview follows the written design brief. Review against the graphics in the
 | Mobile, dark, 390 × 844 | [Dashboard](../assets/design-renders/mobile-overview.png) · [Create Link](../assets/design-renders/mobile-create-link.png) |
 
 The PNG renders use the preview's design tokens and sample data. Browser verification is pending. Chromium failed to start in the development sandbox, and the available WebKit build lacked system libraries. The capture script records 13 Chromium screenshots and checks seven viewport sizes for horizontal page overflow. Final design approval is pending. [Capture script](../prototype/capture.cjs) · [Capture instructions](../README.md)
+
+## Admin interface conventions after preview.2
+
+- Every page has a hash route: `#overview`, `#links`, `#analytics`, `#monitoring`, `#domains`, `#tags`, `#exchange`, `#apiKeys`, `#account`, `#operations`, and `#auditLog`. Reload, Back, and bookmarks keep the page.
+- Below 760 px, navigation collapses behind a **Menu** button that reports its state with `aria-expanded` and closes on navigation or Escape.
+- Field borders (`--control`) measure at least 3:1 against `--bg`, `--surface`, and `--raised`: dark `#6b7d80` at 4.27, 3.79, and 3.36, light `#76857a` at 3.53, 3.84, and 3.40.
+- `h3` labels a group inside a panel: 14 px, weight 650, `--sub`, no margin.
+- Dialog bodies scroll while the header and footer stay visible. A dialog opens with focus on its first field, or on its first footer action. Errors that belong to a field appear below it, are referenced by `aria-describedby`, and receive focus.
+- Only wide tables with per-cell labels (links and API keys) turn into cards in narrow containers. Ranking and report tables stay tables.
