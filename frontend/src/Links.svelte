@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { linkName, linkSorts, shortUrl } from './api';
-  import type { Api, BulkLinkResult, CatalogLink, Domains, Link, LinkCursor, LinkMetadata, LinkProtectionChange, LinkSearch, LinkSearchPage, LinkSort, Tag } from './api';
+  import type { Api, BulkLinkResult, CatalogLink, Domains, Link, LinkCursor, LinkMetadata, LinkOrganization, LinkProtectionChange, LinkSearch, LinkSearchPage, LinkSort, LinkView, Tag, TagMatch } from './api';
   import BulkLinks from './BulkLinks.svelte';
   import Dialog from './Dialog.svelte';
   import { downloadFile, formatDate, passwordAllowed, problemMessage } from './format';
@@ -27,7 +27,10 @@
   let initialized = $state(false);
   let loadError = $state<keyof Messages | null>(null);
   let search = $state('');
-  let tag = $state('');
+  let tagsFilter = $state.raw<string[]>([]);
+  let tagMatch = $state<TagMatch>('all');
+  let view = $state<LinkView>('unarchived');
+  let viewControl = $state<HTMLSelectElement>();
   let domain = $state('');
   let status = $state('');
   let sort = $state<LinkSort>('newest');
@@ -56,8 +59,8 @@
   let linkPassword = $state('');
 
   const availableTags = $derived([...new Set([
-    ...catalogTags, ...items.flatMap((link) => link.tags), ...(tag ? [tag] : []),
-  ])].sort((a, b) => a.localeCompare(b, language)));
+    ...catalogTags, ...items.flatMap((link) => link.tags),
+  ])].filter((tag) => !tagsFilter.includes(tag)).sort((a, b) => a.localeCompare(b, language)));
   const availableDomains = $derived(Object.keys(domains.origins).sort());
   const selectedLinks = $derived(items.filter((item) => selected.has(item.selection_key)));
   const selectable = $derived(items.slice(0, maxSelection));
@@ -65,7 +68,7 @@
   const limit = $derived(new Intl.NumberFormat(language));
   const tagRequests = new AbortController();
   let tagGeneration = 0;
-  let currentQuery: LinkSearch = { sort: 'newest' };
+  let currentQuery: LinkSearch = { sort: 'newest', view: 'unarchived' };
   let queryKey = '';
   let loadedPages = 0;
   let pageRequest: AbortController | null = null;
@@ -93,8 +96,10 @@
     const criteria: LinkSearch = {
       query: search.trim() || undefined,
       host: domain || undefined,
-      tag: tag || undefined,
+      tags: tagsFilter.length ? tagsFilter : undefined,
+      tag_match: tagsFilter.length > 1 ? tagMatch : undefined,
       enabled: status ? status === 'enabled' : undefined,
+      view,
       sort,
     };
     const key = JSON.stringify(criteria);
@@ -128,7 +133,9 @@
       const page = await api<{ items: Tag[] }>('/catalog/tags', 'GET', undefined, 'json', tagRequests.signal);
       if (!tagRequests.signal.aborted && generation === tagGeneration) {
         catalogTags = page.items.map(({ name }) => name);
-        if (tag && !catalogTags.includes(tag)) tag = '';
+        if (tagsFilter.some((tag) => !catalogTags.includes(tag))) {
+          tagsFilter = tagsFilter.filter((tag) => catalogTags.includes(tag));
+        }
       }
     } catch {
       // Tags from the fetched links remain usable when the catalog is unavailable.
@@ -201,13 +208,21 @@
     refreshCatalog();
   }
 
-  function patchListedLink(id: number, changes: LinkMetadata) {
+  function inCurrentView(link: LinkOrganization) {
+    if (view === 'archived') return link.archived;
+    return !link.archived && (view === 'unarchived' || link.favorite);
+  }
+
+  function patchListedLink(id: number, changes: Partial<LinkMetadata & LinkOrganization>, key?: string) {
     items = items.flatMap((link) => {
-      if (link.id !== id) return [link];
+      if (link.id !== id || (key !== undefined && link.selection_key !== key)) return [link];
       const updated = { ...link, ...changes };
       const text = search.trim().toLowerCase();
-      const matching = (!domain || domain === updated.host)
-        && (!tag || updated.tags.includes(tag))
+      const matchesTags = tagsFilter.length === 0 || (tagMatch === 'all'
+        ? tagsFilter.every((tag) => updated.tags.includes(tag))
+        : tagsFilter.some((tag) => updated.tags.includes(tag)));
+      const matching = inCurrentView(updated) && matchesTags
+        && (!domain || domain === updated.host)
         && (!status || updated.enabled === (status === 'enabled'))
         && (!text || [updated.title, updated.slug, updated.host, updated.target,
           `${updated.host}/${updated.slug}`, shortUrl(updated, domains), ...updated.tags]
@@ -223,9 +238,15 @@
 
   function clearFilters() {
     search = '';
-    tag = '';
+    tagsFilter = [];
+    tagMatch = 'all';
     domain = '';
     status = '';
+  }
+
+  function toggleTag(tag: string) {
+    if (tagsFilter.includes(tag)) tagsFilter = tagsFilter.filter((value) => value !== tag);
+    else if (tagsFilter.length < 20) tagsFilter = [...tagsFilter, tag];
   }
 
   function openForm(link: Link | null = null) {
@@ -299,6 +320,7 @@
           ...(protection ? { protection } : {}),
         });
         clearFilters();
+        view = 'unarchived';
         notice = 'linkCreated';
       }
       refreshCatalog();
@@ -322,6 +344,31 @@
       notice = 'linkUpdated';
     } catch (error) {
       actionError = problemMessage(error);
+    } finally {
+      updating = null;
+    }
+  }
+
+  async function organize(link: CatalogLink, change: Partial<LinkOrganization>, message: keyof Messages) {
+    if (updating !== null) return;
+    updating = link.id;
+    actionError = null;
+    notice = null;
+    try {
+      const updated = await api<LinkOrganization>(`/links/${link.id}/organization`, 'PATCH', {
+        key: link.selection_key,
+        ...change,
+      });
+      patchListedLink(link.id, updated, link.selection_key);
+      if (!inCurrentView(updated)) {
+        updateSelection(link.selection_key, false);
+        viewControl?.focus();
+      }
+      refreshCatalog(false);
+      notice = message;
+    } catch (error) {
+      actionError = problemMessage(error);
+      if (actionError === 'linkOrganizationChanged') refreshCatalog(false);
     } finally {
       updating = null;
     }
@@ -360,7 +407,7 @@
   }
 
   function exportVisible() {
-    const listed = items.map(({ selection_key: _key, ...link }) => link);
+    const listed = items.map(({ selection_key: _key, favorite: _favorite, archived: _archived, ...link }) => link);
     const data = new Blob([JSON.stringify(listed, null, 2) + '\n'], { type: 'application/json' });
     downloadFile(data, 'shortcircuit-links.json');
   }
@@ -382,6 +429,14 @@
       <input type="search" placeholder={t.search} maxlength="4096" bind:value={search} />
     </label>
     <label>
+      <span class="visually-hidden">{t.linkView}</span>
+      <select bind:value={view} bind:this={viewControl}>
+        <option value="unarchived">{t.unarchivedLinks}</option>
+        <option value="favorites">{t.favoriteLinks}</option>
+        <option value="archived">{t.archivedLinks}</option>
+      </select>
+    </label>
+    <label>
       <span class="visually-hidden">{t.domainFilter}</span>
       <select bind:value={domain}>
         <option value="">{t.allDomains}</option>
@@ -390,8 +445,11 @@
     </label>
     <label>
       <span class="visually-hidden">{t.tagFilter}</span>
-      <select bind:value={tag}>
-        <option value="">{t.allTags}</option>
+      <select disabled={!availableTags.length || tagsFilter.length >= 20} onchange={(event) => {
+        if (event.currentTarget.value) toggleTag(event.currentTarget.value);
+        event.currentTarget.value = '';
+      }}>
+        <option value="">{t.addTagFilter}</option>
         {#each availableTags as option (option)}<option value={option}>{option}</option>{/each}
       </select>
     </label>
@@ -411,6 +469,27 @@
     </label>
     <button class="button" type="button" disabled={!items.length} onclick={exportVisible}><Icon name="download" />{t.exportShown}</button>
   </div>
+
+  {#if tagsFilter.length}
+    <div class="toolbar tag-filters" role="group" aria-label={t.tagFilter}>
+      {#if tagsFilter.length > 1}
+        <label>
+          <span class="visually-hidden">{t.tagMatch}</span>
+          <select bind:value={tagMatch}>
+            <option value="all">{t.matchAllTags}</option>
+            <option value="any">{t.matchAnyTag}</option>
+          </select>
+        </label>
+      {/if}
+      <div class="tags">
+        {#each tagsFilter as value (value)}
+          <button class="tag filter-tag" type="button" aria-label={`${t.removeTagFilter} ${value}`} onclick={() => toggleTag(value)}>
+            {value}<Icon name="close" />
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
 
   {#if items.length}
     <div class="toolbar selection-toolbar">
@@ -445,6 +524,9 @@
                       disabled={bulkBusy || (!selected.has(link.selection_key) && selectedLinks.length >= maxSelection)}
                       onchange={(event) => updateSelection(link.selection_key, event.currentTarget.checked)} />
                   </label>
+                  <button class="icon-button ghost favorite-button" type="button" aria-label={t.favoriteLink} title={t.favoriteLink}
+                    aria-pressed={link.favorite} disabled={bulkBusy || updating !== null}
+                    onclick={() => organize(link, { favorite: !link.favorite }, link.favorite ? 'favoriteRemoved' : 'favoriteAdded')}><Icon name="star" /></button>
                   <div class="link-text">
                     {#if link.title}<strong>{link.title}</strong>{/if}
                     <a class="mono link-short" href={shortUrl(link, domains)} target="_blank" rel="noreferrer">{link.host}/{link.slug}</a>
@@ -455,7 +537,10 @@
               <td role="cell">
                 <span class="cell-label" aria-hidden="true">{t.tags}</span>
                 <div class="tags">
-                  {#each link.tags as value (value)}<button class="tag" type="button" aria-pressed={tag === value} onclick={() => tag = tag === value ? '' : value}>{value}</button>{/each}
+                  {#each link.tags as value (value)}
+                    <button class="tag" type="button" aria-pressed={tagsFilter.includes(value)}
+                      disabled={tagsFilter.length >= 20 && !tagsFilter.includes(value)} onclick={() => toggleTag(value)}>{value}</button>
+                  {/each}
                   {#if !link.tags.length}<span class="muted" aria-hidden="true">—</span>{/if}
                 </div>
               </td>
@@ -470,6 +555,9 @@
                   <button class="icon-button ghost" type="button" disabled={bulkBusy} aria-label={t.linkHistory} title={t.linkHistory} onclick={() => historyLink = link}><Icon name="history" /></button>
                   <button class="icon-button ghost" type="button" aria-label={t.qrCode} title={t.qrCode} onclick={() => qrLink = link}><Icon name="qr" /></button>
                   <button class="button toggle-button" type="button" disabled={bulkBusy || updating !== null} onclick={() => toggle(link)}>{link.enabled ? t.disable : t.enable}</button>
+                  <button class="icon-button ghost" type="button" disabled={bulkBusy || updating !== null}
+                    aria-label={link.archived ? t.unarchiveLink : t.archiveLink} title={link.archived ? t.unarchiveLink : t.archiveLink}
+                    onclick={() => organize(link, { archived: !link.archived }, link.archived ? 'linkUnarchived' : 'linkArchived')}><Icon name={link.archived ? 'unarchive' : 'archive'} /></button>
                   <button class="icon-button ghost delete-button" type="button" disabled={bulkBusy} aria-label={t.deleteLink} title={t.deleteLink} onclick={() => { formError = null; removing = link; }}><Icon name="trash" /></button>
                 </div>
               </td>
@@ -481,8 +569,8 @@
   {:else if !loading && initialized}
     <div class="empty">
       <span class="link-symbol"><Icon name="link" /></span>
-      <p>{search || tag || status || domain ? t.noMatches : t.noLinks}</p>
-      {#if search || tag || status || domain}<button class="text-button" type="button" onclick={clearFilters}>{t.resetFilters}</button>{/if}
+      <p>{search || tagsFilter.length || status || domain ? t.noMatches : view === 'archived' ? t.noArchivedLinks : view === 'favorites' ? t.noFavoriteLinks : t.noLinks}</p>
+      {#if search || tagsFilter.length || status || domain}<button class="text-button" type="button" onclick={clearFilters}>{t.resetFilters}</button>{/if}
     </div>
   {/if}
   {#if loadError}

@@ -8,6 +8,56 @@ use crate::domains::Domain;
 
 use super::{Link, PAGE_SIZE, push_host_scope};
 
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum View {
+    #[default]
+    All,
+    Unarchived,
+    Favorites,
+    Archived,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TagMatch {
+    #[default]
+    All,
+    Any,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub(crate) struct Organization {
+    favorite: bool,
+    archived: bool,
+}
+
+pub(crate) async fn organize(
+    pool: &SqlitePool,
+    hosts: &[String],
+    id: i64,
+    key: &str,
+    favorite: Option<bool>,
+    archived: Option<bool>,
+) -> Result<Option<Organization>, sqlx::Error> {
+    let mut query = QueryBuilder::<Sqlite>::new("UPDATE links SET favorite = COALESCE(");
+    query
+        .push_bind(favorite)
+        .push(", favorite), archived = COALESCE(")
+        .push_bind(archived)
+        .push(", archived) WHERE id = ")
+        .push_bind(id)
+        .push(" AND selection_key = ")
+        .push_bind(key);
+    push_host_scope(&mut query, hosts);
+    let rows = query
+        .push(" RETURNING favorite, archived")
+        .build_query_as::<Organization>()
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().next())
+}
+
 #[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Sort {
@@ -76,6 +126,12 @@ pub(crate) struct Search {
     pub(crate) query: Option<String>,
     pub(crate) host: Option<String>,
     pub(crate) tag: Option<String>,
+    #[serde(default)]
+    pub(crate) tags: Vec<String>,
+    #[serde(default)]
+    tag_match: TagMatch,
+    #[serde(default)]
+    view: View,
     pub(crate) enabled: Option<bool>,
     #[serde(default)]
     pub(crate) sort: Sort,
@@ -92,6 +148,8 @@ pub(crate) struct SearchPage {
 struct SearchItem {
     #[serde(flatten)]
     link: Link,
+    #[serde(flatten)]
+    organization: Organization,
     selection_key: String,
 }
 
@@ -99,6 +157,8 @@ struct SearchItem {
 struct SearchRow {
     #[sqlx(flatten)]
     link: Link,
+    #[sqlx(flatten)]
+    organization: Organization,
     selection_key: String,
     tags_json: String,
 }
@@ -115,6 +175,7 @@ pub(crate) async fn search(
         .collect();
     let mut query = QueryBuilder::<Sqlite>::new(
         "SELECT id, host, slug, target, created_at, title, enabled, analytics_enabled, selection_key,
+                favorite, archived,
                 (SELECT json_group_array(tag ORDER BY tag) FROM link_tags WHERE link_id = links.id) AS tags_json
          FROM links WHERE 1",
     );
@@ -125,11 +186,23 @@ pub(crate) async fn search(
     if let Some(enabled) = filter.enabled {
         query.push(" AND enabled = ").push_bind(enabled);
     }
-    if let Some(tag) = &filter.tag {
-        query
-            .push(" AND EXISTS (SELECT 1 FROM link_tags WHERE link_id = links.id AND tag = ")
-            .push_bind(tag)
-            .push(")");
+    query.push(match filter.view {
+        View::All => "",
+        View::Unarchived => " AND archived = 0",
+        View::Favorites => " AND archived = 0 AND favorite = 1",
+        View::Archived => " AND archived = 1",
+    });
+    if !filter.tags.is_empty() {
+        query.push(" AND (SELECT count(*) FROM link_tags WHERE link_id = links.id AND tag IN (");
+        let mut tags = query.separated(", ");
+        for tag in &filter.tags {
+            tags.push_bind(tag);
+        }
+        tags.push_unseparated("))");
+        match filter.tag_match {
+            TagMatch::All => query.push(" = ").push_bind(filter.tags.len() as i64),
+            TagMatch::Any => query.push(" > 0"),
+        };
     }
     let sort = filter.sort;
     let comparison = if sort.descending() { " < " } else { " > " };
@@ -169,6 +242,7 @@ pub(crate) async fn search(
         {
             items.push(SearchItem {
                 link: row.link,
+                organization: row.organization,
                 selection_key: row.selection_key,
             });
             if items.len() > PAGE_SIZE {

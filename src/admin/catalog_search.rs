@@ -1,19 +1,55 @@
 use axum::{
     Json, Router,
-    extract::{State, rejection::JsonRejection},
-    routing::post,
+    extract::{Path, State, rejection::{JsonRejection, PathRejection}},
+    http::StatusCode,
+    routing::{patch, post},
 };
+use serde::Deserialize;
 
 use crate::{
     domains,
-    input::{normalize_host, tag_name},
-    store::catalog::{self, Search, SearchPage},
+    input::{link_tags, normalize_host},
+    store::catalog::{self, Organization, Search, SearchPage},
 };
 
-use super::{AppState, Problem, json_payload};
+use super::{AppState, Problem, json_payload, resource_id};
 
 pub(super) fn routes() -> Router<AppState> {
-    Router::new().route("/api/v1/links/search", post(search_links))
+    Router::new()
+        .route("/api/v1/links/search", post(search_links))
+        .route("/api/v1/links/{id}/organization", patch(organize_link))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrganizationPatch {
+    key: String,
+    favorite: Option<bool>,
+    archived: Option<bool>,
+}
+
+async fn organize_link(
+    State(state): State<AppState>,
+    id: Result<Path<i64>, PathRejection>,
+    body: Result<Json<OrganizationPatch>, JsonRejection>,
+) -> Result<Json<Organization>, Problem> {
+    let id = resource_id(id)?;
+    let input = json_payload(body)?;
+    if (input.favorite.is_none() && input.archived.is_none())
+        || input.key.len() != 32
+        || !input.key.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(Problem::invalid("invalid_link_organization"));
+    }
+    let domains = domains::list(&state.pool, &state.hosts, state.config.local_port)
+        .await
+        .map_err(|_| Problem::unavailable())?;
+    let hosts = domains.into_iter().map(|domain| domain.host).collect::<Vec<_>>();
+    catalog::organize(&state.pool, &hosts, id, &input.key, input.favorite, input.archived)
+        .await
+        .map_err(|_| Problem::unavailable())?
+        .map(Json)
+        .ok_or(Problem(StatusCode::CONFLICT, "link_organization_changed"))
 }
 
 async fn search_links(
@@ -31,13 +67,13 @@ async fn search_links(
     if let Some(host) = &filter.host {
         filter.host = Some(normalize_host(host).ok_or_else(|| Problem::invalid("invalid_host"))?);
     }
-    if let Some(tag) = &filter.tag {
-        filter.tag = Some(
-            tag_name(tag)
-                .ok_or_else(|| Problem::invalid("invalid_tags"))?
-                .to_owned(),
-        );
+    if let Some(tag) = filter.tag.take() {
+        if !filter.tags.is_empty() {
+            return Err(Problem::invalid("invalid_tags"));
+        }
+        filter.tags.push(tag);
     }
+    filter.tags = link_tags(filter.tags).ok_or_else(|| Problem::invalid("invalid_tags"))?;
     if filter
         .after
         .as_ref()

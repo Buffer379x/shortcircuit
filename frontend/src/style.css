@@ -238,6 +238,11 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 16px; }
 .toolbar select { max-width: 100%; font-size: 13px; }
 .toolbar > label { min-width: 0; }
+.tag-filters { padding-top: 0; }
+.filter-tag { display: inline-flex; align-items: center; gap: 4px; }
+.filter-tag .icon { width: 13px; height: 13px; }
+.favorite-button[aria-pressed='true'] { color: var(--accent-text); }
+.favorite-button[aria-pressed='true'] .icon { fill: currentColor; }
 .search {
   display: flex;
   flex: 1 1 190px;

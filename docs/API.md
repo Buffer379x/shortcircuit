@@ -43,7 +43,13 @@ An API key uses `Authorization: Bearer <token>`. A key can hold `read` for list 
 
 ### Catalog search
 
-The search body accepts optional `query`, `host`, `tag`, `enabled`, `sort`, and `after` fields. The query is a case-insensitive Unicode substring up to 4,096 bytes and matches titles, slugs, domains, short URLs, destinations, and tag names. Optional domain, tag, and enabled filters combine with AND.
+The search body accepts optional `query`, `host`, `enabled`, `view`, `tags`, `tag_match`, `sort`, and `after` fields. The query is a case-insensitive Unicode substring up to 4,096 bytes and matches titles, slugs, domains, short URLs, destinations, and tag names. The domain, enabled, view, and tag conditions all apply together.
+
+Use `tags` for up to 20 exact tag names. The `tag_match` value is `all` by default. Use `any` to require at least one of the selected tags. The legacy `tag` field still accepts one tag. Supply either `tag` or a nonempty `tags` array.
+
+The `view` value is `all` by default. The browser uses `unarchived` for its main list. Use `archived` for the archive or `favorites` for unarchived favorites. Search items include the `favorite` and `archived` flags and a `selection_key`.
+
+`PATCH /api/v1/links/{id}/organization` accepts a browser administrator session, the `key` from the search item's `selection_key`, and one or both Boolean flags. The response returns both flags. A missing or replaced row returns `409`. Archived links continue to resolve according to their current redirect policy. A full SQLite backup preserves the organization flags.
 
 Supported sort values are `newest` (default), `oldest`, `title_asc`, `title_desc`, `slug_asc`, `slug_desc`, `host_asc`, `host_desc`, `target_asc`, `target_desc`, `enabled_first`, and `disabled_first`. Each response includes up to 100 `items` and `next_cursor`. Send the returned cursor as `after` with the same filters and sort to continue. A null cursor means the search is complete. The cursor carries its sort key and the link ID, so deleting the anchor link does not prevent paging. Changing filters or sort starts a new search.
 

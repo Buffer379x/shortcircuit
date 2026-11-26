@@ -27,6 +27,7 @@ const problemMessages = new Map<string, Message>([
   ['invalid_tags', 'invalidTags'],
   ['invalid_link_search', 'invalidLinkSearch'],
   ['invalid_link_cursor', 'invalidLinkCursor'],
+  ['link_organization_changed', 'linkOrganizationChanged'],
   ['invalid_bulk_selection', 'invalidBulkSelection'],
   ['bulk_selection_changed', 'bulkSelectionChanged'],
   ['bulk_delete_confirmation', 'bulkDeleteConfirmation'],

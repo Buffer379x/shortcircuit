@@ -9,6 +9,7 @@ HISTORY = MIGRATION.with_name("0008_link_history.sql")
 QR_TEMPLATES = MIGRATION.with_name("0009_qr_templates.sql")
 QR_FRAMES = MIGRATION.with_name("0010_qr_frames.sql")
 LINK_SELECTION = MIGRATION.with_name("0011_link_selection.sql")
+LINK_ORGANIZATION = MIGRATION.with_name("0012_link_organization.sql")
 
 
 class LinkSchemaTests(unittest.TestCase):
@@ -162,6 +163,26 @@ class LinkSchemaTests(unittest.TestCase):
         self.assertEqual(recreated_id, link_id)
         self.assertRegex(recreated_key, r"^[0-9a-f]{32}$")
         self.assertNotEqual(recreated_key, key)
+
+    def test_organization_upgrade_preserves_published_links(self):
+        db = self.database()
+        for migration in sorted(MIGRATION.parent.glob("*.sql")):
+            if MIGRATION < migration < LINK_ORGANIZATION:
+                db.executescript(migration.read_text())
+        target = "https://example.test/file?Signature=A%2f#original"
+        self.insert(db, "go.example", "Team/Docs", target)
+        original_key = db.execute("SELECT selection_key FROM links").fetchone()[0]
+        self.assertTrue(LINK_ORGANIZATION.is_file(), "expected a versioned organization migration")
+        db.executescript(LINK_ORGANIZATION.read_text())
+        self.assertEqual(db.execute("SELECT favorite, archived FROM links").fetchone(), (0, 0))
+        db.execute("UPDATE links SET favorite = 1, archived = 1")
+        self.assertEqual(
+            db.execute("SELECT slug, target, enabled, selection_key FROM links").fetchone(),
+            ("Team/Docs", target, 1, original_key),
+        )
+        for field in ("favorite", "archived"):
+            with self.subTest(field=field), self.assertRaises(sqlite3.IntegrityError):
+                db.execute(f"UPDATE links SET {field} = 2")
 
 
 if __name__ == "__main__":

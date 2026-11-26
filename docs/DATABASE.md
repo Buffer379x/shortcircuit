@@ -6,6 +6,8 @@ The versioned SQL migration creates a strict `links` table with an integer `id`,
 
 Schema version 11 assigns a unique 128-bit selection key to each existing link and to rows on insert. Bulk requests verify both the numeric ID and the key inside the write transaction. A reused SQLite row ID represents a new selection.
 
+Schema version 12 adds `favorite` and `archived` flags to `links`, both defaulting to false. A catalog organization write matches the link ID, selection key, and configured host in one statement. Redirect lookup ignores both flags. SQLite backups include them.
+
 ## Protected links
 
 Migration `0007` adds `link_protection` with the link ID, optional Argon2id password hash, one-time and consumed flags, and a protection revision. A deleted link cascades to its protection record. An existing link has no protection by default. Changes to protection increment its revision. Confirmation checks that revision before consuming the one-time flag and any existing visit limit in the same write transaction. Signed confirmation tokens expire in memory and require no challenge rows.
