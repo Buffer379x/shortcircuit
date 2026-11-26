@@ -8,6 +8,7 @@ use subtle::ConstantTimeEq;
 use url::{Host, Url};
 
 use crate::{
+    history::Actor,
     input::{normalize_host, request_host_port},
     rate_limit::peer,
 };
@@ -91,6 +92,7 @@ pub(super) struct BrowserToken(pub(super) String);
 #[derive(Clone)]
 pub(super) struct LinkAccess {
     pub(super) host: Option<String>,
+    pub(super) actor: Actor,
 }
 
 pub(super) async fn admin_host(
@@ -146,11 +148,11 @@ pub(super) async fn link_access(
     let cookie = session_token(request.headers(), &state.config)?;
     let bearer =
         single_header(request.headers(), header::AUTHORIZATION.as_str())?.map(str::to_owned);
-    let host = match (cookie, bearer) {
+    let (host, actor) = match (cookie, bearer) {
         (Some(token), None) => {
             let session = state.auth.session(&token).await?;
             require_csrf(&request, &state.config, &session.csrf)?;
-            None
+            (None, Actor::Admin(session.username))
         }
         (None, Some(value)) => {
             let Some((scheme, token)) = value.split_once(' ') else {
@@ -174,11 +176,11 @@ pub(super) async fn link_access(
             if !key.allows(scope) {
                 return Err(Problem(StatusCode::FORBIDDEN, "insufficient_scope"));
             }
-            key.host
+            (key.host, Actor::ApiKey(key.id))
         }
         _ => return Err(Problem::unauthorized()),
     };
-    request.extensions_mut().insert(LinkAccess { host });
+    request.extensions_mut().insert(LinkAccess { host, actor });
     Ok(next.run(request).await)
 }
 

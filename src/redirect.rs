@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{QueryBuilder, Sqlite, SqlitePool};
+use sqlx::{Executor, QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
 use url::form_urlencoded;
 
-use crate::{input::valid_target, store::push_host_scope};
+use crate::{
+    history::{self, Action, Actor, Snapshot},
+    input::valid_target,
+    store::push_host_scope,
+};
 
 const DEFAULT_STATUS: u16 = 302;
 const MAX_RULES: usize = 16;
@@ -259,8 +263,8 @@ const POLICY_COLUMNS: &str = "policy.status, policy.starts_at, policy.expires_at
 const POLICY_JOIN: &str = " FROM links
     LEFT JOIN link_redirect_policies AS policy ON policy.link_id = links.id";
 
-pub(crate) async fn read_policy(
-    pool: &SqlitePool,
+pub(crate) async fn read_policy<'e>(
+    executor: impl Executor<'e, Database = Sqlite>,
     hosts: &[String],
     id: i64,
 ) -> Result<Option<PolicyDetails>, sqlx::Error> {
@@ -273,7 +277,7 @@ pub(crate) async fn read_policy(
     push_host_scope(&mut query, hosts);
     query
         .build_query_as::<StoredPolicy>()
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?
         .map(StoredPolicy::into_details)
         .transpose()
@@ -284,64 +288,76 @@ pub(crate) async fn replace_policy(
     hosts: &[String],
     id: i64,
     policy: Policy,
+    actor: &Actor,
+) -> Result<Option<PolicyDetails>, PolicyError> {
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let result =
+        replace_policy_in(&mut transaction, hosts, id, policy, actor, Action::Policy).await?;
+    transaction.commit().await?;
+    Ok(result)
+}
+
+pub(crate) async fn replace_policy_in(
+    connection: &mut SqliteConnection,
+    hosts: &[String],
+    id: i64,
+    policy: Policy,
+    actor: &Actor,
+    action: Action,
 ) -> Result<Option<PolicyDetails>, PolicyError> {
     validate_policy(&policy)?;
-    let rules = serde_json::to_string(&policy.rules)
-        .map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
-    let mut query = QueryBuilder::new(
-        "INSERT INTO link_redirect_policies
-         (link_id, status, starts_at, expires_at, max_visits, forward_query, forward_path, rules)
-         SELECT id, ",
-    );
-    query
-        .separated(", ")
-        .push_bind(i64::from(policy.status))
-        .push_bind(policy.starts_at)
-        .push_bind(policy.expires_at)
-        .push_bind(policy.max_visits)
-        .push_bind(policy.forward_query)
-        .push_bind(policy.forward_path)
-        .push_bind(rules);
-    query.push(" FROM links WHERE id = ").push_bind(id);
-    push_host_scope(&mut query, hosts);
-    query.push(
-        " ON CONFLICT(link_id) DO UPDATE SET
-            status = excluded.status, starts_at = excluded.starts_at,
-            expires_at = excluded.expires_at, max_visits = excluded.max_visits,
-            forward_query = excluded.forward_query, forward_path = excluded.forward_path,
-            rules = excluded.rules
-          RETURNING visits_used",
-    );
-
-    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let Some(previous) = read_policy(&mut *connection, hosts, id).await? else {
+        return Ok(None);
+    };
     if matches!(policy.status, 301 | 308) {
-        let mut protected = QueryBuilder::new(
-            "SELECT EXISTS(SELECT 1 FROM links
-             JOIN link_protection AS protection ON protection.link_id = links.id
-             WHERE (protection.one_time = 1 OR protection.password_hash IS NOT NULL)
-             AND links.id = ",
-        );
-        protected.push_bind(id);
-        push_host_scope(&mut protected, hosts);
-        protected.push(")");
-        if protected
-            .build_query_scalar::<bool>()
-            .fetch_one(&mut *transaction)
-            .await?
-        {
+        let protected = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM link_protection WHERE link_id = ?
+             AND (one_time = 1 OR password_hash IS NOT NULL))",
+        )
+        .bind(id)
+        .fetch_one(&mut *connection)
+        .await?;
+        if protected {
             return Err(PolicyError::Invalid(
                 "protection_requires_temporary_redirect",
             ));
         }
     }
-    let visits = query
-        .build_query_scalar::<i64>()
-        .fetch_all(&mut *transaction)
-        .await?;
-    transaction.commit().await?;
-    Ok(visits.into_iter().next().map(|visits_used| PolicyDetails {
+    if previous.policy == policy {
+        return Ok(Some(previous));
+    }
+    let rules = serde_json::to_string(&policy.rules)
+        .map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
+    sqlx::query(
+        "INSERT INTO link_redirect_policies
+         (link_id, status, starts_at, expires_at, max_visits, forward_query, forward_path, rules)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(link_id) DO UPDATE SET
+            status = excluded.status, starts_at = excluded.starts_at,
+            expires_at = excluded.expires_at, max_visits = excluded.max_visits,
+            forward_query = excluded.forward_query, forward_path = excluded.forward_path,
+            rules = excluded.rules",
+    )
+    .bind(id)
+    .bind(i64::from(policy.status))
+    .bind(policy.starts_at)
+    .bind(policy.expires_at)
+    .bind(policy.max_visits)
+    .bind(policy.forward_query)
+    .bind(policy.forward_path)
+    .bind(rules)
+    .execute(&mut *connection)
+    .await?;
+    history::record(
+        connection,
+        id,
+        actor,
+        action,
+        Some(Snapshot::Policy(previous.policy)),
+    )
+    .await?;
+    Ok(Some(PolicyDetails {
         policy,
-        visits_used,
+        visits_used: previous.visits_used,
     }))
 }
 
@@ -759,10 +775,16 @@ mod tests {
     }
 
     async fn configure(pool: &SqlitePool, id: i64, policy: Policy) {
-        replace_policy(pool, &[HOST.to_owned()], id, policy)
-            .await
-            .unwrap()
-            .unwrap();
+        replace_policy(
+            pool,
+            &[HOST.to_owned()],
+            id,
+            policy,
+            &Actor::Admin("test".to_owned()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
     }
 
     fn request(slug: &str) -> RedirectRequest<'_> {
@@ -1026,10 +1048,16 @@ mod tests {
         let link = insert(&pool, "scoped", true).await;
         let unauthorized = ["other.example".to_owned()];
         assert!(
-            replace_policy(&pool, &unauthorized, link, Policy::default())
-                .await
-                .unwrap()
-                .is_none()
+            replace_policy(
+                &pool,
+                &unauthorized,
+                link,
+                Policy::default(),
+                &Actor::Admin("test".to_owned())
+            )
+            .await
+            .unwrap()
+            .is_none()
         );
         assert!(
             read_policy(&pool, &unauthorized, link)
@@ -1064,7 +1092,14 @@ mod tests {
             },
         ] {
             assert!(matches!(
-                replace_policy(&pool, &hosts, link, policy).await,
+                replace_policy(
+                    &pool,
+                    &hosts,
+                    link,
+                    policy,
+                    &Actor::Admin("test".to_owned())
+                )
+                .await,
                 Err(PolicyError::Invalid(_))
             ));
         }

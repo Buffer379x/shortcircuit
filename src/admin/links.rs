@@ -8,7 +8,7 @@ use axum::{
         rejection::{JsonRejection, PathRejection, QueryRejection},
     },
     http::{StatusCode, header},
-    routing::{get, patch},
+    routing::{get, patch, post},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -16,14 +16,15 @@ use sqlx::SqlitePool;
 use crate::{
     auth::{Auth, AuthError},
     domains,
-    input::{normalize_host, valid_slug, valid_target},
+    history::{self, LinkHistory, RestoreError},
+    input::{link_tags, link_title, normalize_host, valid_slug, valid_target},
     protection::{self, PasswordChange, ProtectionDetails, ProtectionDraft, ProtectionError},
     qr::{self, Format, QrError},
     redirect::{self, Policy, PolicyDetails, PolicyError},
     store::{self, Link, LinkDraft, LinkUpdate, PAGE_SIZE},
 };
 
-use super::{AppState, Problem, access::LinkAccess, catalog::tag_name, json_payload, resource_id};
+use super::{AppState, Problem, access::LinkAccess, json_payload, resource_id};
 
 const SHORTCODE_ALPHABET: &[u8; 64] =
     b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
@@ -48,6 +49,14 @@ pub(super) fn routes(pool: SqlitePool, app: AppState) -> Router {
         .route(
             "/api/v1/links/{id}/protection",
             get(read_protection).patch(replace_protection),
+        )
+        .route(
+            "/api/v1/links/{id}/history",
+            get(read_history).delete(purge_history),
+        )
+        .route(
+            "/api/v1/links/{id}/history/{revision}/restore",
+            post(restore_history),
         )
         .route("/api/v1/links/{id}/qr", get(link_qr))
         .with_state(LinkState { pool, app })
@@ -194,25 +203,13 @@ fn forbidden() -> Problem {
 }
 
 fn title(value: String) -> Result<String, Problem> {
-    let value = value.trim();
-    if value.chars().count() > 160 || value.chars().any(char::is_control) {
-        return Err(Problem::invalid("invalid_title"));
-    }
-    Ok(value.to_owned())
+    link_title(&value)
+        .map(str::to_owned)
+        .ok_or_else(|| Problem::invalid("invalid_title"))
 }
 
 fn tags(values: Vec<String>) -> Result<Vec<String>, Problem> {
-    if values.len() > 20 {
-        return Err(Problem::invalid("invalid_tags"));
-    }
-    let mut checked = Vec::with_capacity(values.len());
-    for tag in values {
-        let tag = tag_name(&tag).ok_or_else(|| Problem::invalid("invalid_tags"))?;
-        checked.push(tag.to_owned());
-    }
-    checked.sort_unstable();
-    checked.dedup();
-    Ok(checked)
+    link_tags(values).ok_or_else(|| Problem::invalid("invalid_tags"))
 }
 
 fn random_slug() -> Result<String, Problem> {
@@ -311,6 +308,7 @@ async fn update_link(
         &access.allowed_hosts(&state, false).await?,
         id,
         update,
+        &access.actor,
     )
     .await
     .map_err(|_| Problem::unavailable())?
@@ -357,7 +355,7 @@ async fn replace_policy(
 ) -> Result<Json<PolicyDetails>, Problem> {
     let policy = json_payload(body)?;
     let hosts = access.allowed_hosts(&state, false).await?;
-    redirect::replace_policy(&state.pool, &hosts, resource_id(id)?, policy)
+    redirect::replace_policy(&state.pool, &hosts, resource_id(id)?, policy, &access.actor)
         .await
         .map_err(|error| match error {
             PolicyError::Invalid(code) => Problem::invalid(code),
@@ -420,18 +418,85 @@ async fn replace_protection(
         (None, true) => PasswordChange::Remove,
         (None, false) => PasswordChange::Unchanged,
     };
-    protection::replace(&state.pool, &hosts, id, input.one_time, password)
+    protection::replace(
+        &state.pool,
+        &hosts,
+        id,
+        input.one_time,
+        password,
+        &access.actor,
+    )
+    .await
+    .map_err(|error| match error {
+        ProtectionError::Database => Problem::unavailable(),
+        ProtectionError::RequiresTemporaryRedirect => Problem(
+            StatusCode::CONFLICT,
+            "protection_requires_temporary_redirect",
+        ),
+        ProtectionError::Consumed => Problem(StatusCode::CONFLICT, "one_time_consumed"),
+    })?
+    .map(Json)
+    .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
+}
+
+async fn read_history(
+    State(state): State<LinkState>,
+    Extension(access): Extension<LinkAccess>,
+    id: Result<Path<i64>, PathRejection>,
+) -> Result<Json<LinkHistory>, Problem> {
+    if !access.actor.is_admin() {
+        return Err(forbidden());
+    }
+    let id = resource_id(id)?;
+    let hosts = access.allowed_hosts(&state, false).await?;
+    history::read(&state.pool, &hosts, id)
         .await
-        .map_err(|error| match error {
-            ProtectionError::Database => Problem::unavailable(),
-            ProtectionError::RequiresTemporaryRedirect => Problem(
-                StatusCode::CONFLICT,
-                "protection_requires_temporary_redirect",
-            ),
-            ProtectionError::Consumed => Problem(StatusCode::CONFLICT, "one_time_consumed"),
-        })?
+        .map_err(|_| Problem::unavailable())?
         .map(Json)
         .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
+}
+
+async fn purge_history(
+    State(state): State<LinkState>,
+    Extension(access): Extension<LinkAccess>,
+    id: Result<Path<i64>, PathRejection>,
+) -> Result<StatusCode, Problem> {
+    if !access.actor.is_admin() {
+        return Err(forbidden());
+    }
+    let id = resource_id(id)?;
+    let hosts = access.allowed_hosts(&state, false).await?;
+    if !history::purge(&state.pool, &hosts, id)
+        .await
+        .map_err(|_| Problem::unavailable())?
+    {
+        return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn restore_history(
+    State(state): State<LinkState>,
+    Extension(access): Extension<LinkAccess>,
+    path: Result<Path<(i64, i64)>, PathRejection>,
+) -> Result<StatusCode, Problem> {
+    if !access.actor.is_admin() {
+        return Err(forbidden());
+    }
+    let Path((id, revision)) = path.map_err(|_| Problem(StatusCode::NOT_FOUND, "not_found"))?;
+    if id <= 0 || revision <= 0 {
+        return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
+    }
+    let hosts = access.allowed_hosts(&state, false).await?;
+    history::restore(&state.pool, &hosts, id, revision, &access.actor)
+        .await
+        .map_err(|error| match error {
+            RestoreError::NotFound => Problem(StatusCode::NOT_FOUND, "not_found"),
+            RestoreError::NotRestorable => Problem(StatusCode::CONFLICT, "history_not_restorable"),
+            RestoreError::Invalid(code) => Problem::invalid(code),
+            RestoreError::Database => Problem::unavailable(),
+        })?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 static QR_WORK: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);

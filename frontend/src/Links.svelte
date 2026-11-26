@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { linkName, shortUrl } from './api';
-  import type { Api, Domains, Link, LinkPage, LinkProtectionChange } from './api';
+  import type { Api, Domains, Link, LinkMetadata, LinkPage, LinkProtectionChange } from './api';
   import Dialog from './Dialog.svelte';
   import { formatDate, passwordAllowed, problemMessage } from './format';
   import DuplicateLookup from './DuplicateLookup.svelte';
   import UrlCleaner from './UrlCleaner.svelte';
   import LinkQr from './LinkQr.svelte';
+  import LinkHistory from './LinkHistory.svelte';
   import LinkProtectionEditor from './LinkProtectionEditor.svelte';
   import PolicyEditor from './PolicyEditor.svelte';
   import ProtectionFields from './ProtectionFields.svelte';
@@ -30,6 +31,7 @@
   let formOpen = $state(false);
   let editing = $state<Link | null>(null);
   let qrLink = $state<Link | null>(null);
+  let historyLink = $state<Link | null>(null);
   let policyLink = $state<Link | null>(null);
   let protectionLink = $state<Link | null>(null);
   let removing = $state<Link | null>(null);
@@ -97,6 +99,11 @@
   function closeForm() {
     linkPassword = '';
     formOpen = false;
+  }
+
+  function restoreMetadata(id: number, metadata: LinkMetadata) {
+    items = items.map((link) => link.id === id ? { ...link, ...metadata } : link);
+    if (!availableTags.includes(tag)) tag = '';
   }
 
   async function save(event: SubmitEvent) {
@@ -291,6 +298,7 @@
                   <button class="icon-button ghost" type="button" aria-label={t.editLink} title={t.editLink} onclick={() => openForm(link)}><Icon name="edit" /></button>
                   <button class="icon-button ghost" type="button" aria-label={t.redirectPolicy} title={t.redirectPolicy} onclick={() => policyLink = link}><Icon name="rule" /></button>
                   <button class="icon-button ghost" type="button" aria-label={t.linkProtection} title={t.linkProtection} onclick={() => protectionLink = link}><Icon name="lock" /></button>
+                  <button class="icon-button ghost" type="button" aria-label={t.linkHistory} title={t.linkHistory} onclick={() => historyLink = link}><Icon name="history" /></button>
                   <button class="icon-button ghost" type="button" aria-label={t.qrCode} title={t.qrCode} onclick={() => qrLink = link}><Icon name="qr" /></button>
                   <button class="button toggle-button" type="button" disabled={updating !== null} onclick={() => toggle(link)}>{link.enabled ? t.disable : t.enable}</button>
                   <button class="icon-button ghost delete-button" type="button" aria-label={t.deleteLink} title={t.deleteLink} onclick={() => { formError = null; removing = link; }}><Icon name="trash" /></button>
@@ -320,6 +328,9 @@
 </section>
 
 {#if qrLink}<LinkQr link={qrLink} {t} onclose={() => qrLink = null} />{/if}
+{#if historyLink}
+  <LinkHistory link={historyLink} {api} {t} {language} onclose={() => historyLink = null} onrestore={restoreMetadata} />
+{/if}
 {#if policyLink}
   <PolicyEditor link={policyLink} {api} {t} onclose={() => policyLink = null} onsaved={() => { policyLink = null; notice = 'linkUpdated'; }} />
 {/if}

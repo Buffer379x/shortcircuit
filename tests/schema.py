@@ -5,6 +5,7 @@ import unittest
 
 MIGRATION = pathlib.Path(__file__).resolve().parents[1] / "migrations" / "0001_links.sql"
 PROTECTION = MIGRATION.with_name("0007_link_protection.sql")
+HISTORY = MIGRATION.with_name("0008_link_history.sql")
 
 
 class LinkSchemaTests(unittest.TestCase):
@@ -93,6 +94,25 @@ class LinkSchemaTests(unittest.TestCase):
         db.execute("UPDATE link_protection SET consumed = 1")
         db.execute("DELETE FROM links WHERE id = ?", (link_id,))
         self.assertIsNone(db.execute("SELECT link_id FROM link_protection").fetchone())
+
+    def test_link_history_schema_preserves_identity_and_checks_snapshot_kind(self):
+        db = self.database()
+        db.execute("PRAGMA foreign_keys = ON")
+        self.insert(db, "go.example", "existing")
+        db.executescript(HISTORY.read_text())
+        link_id = db.execute("SELECT id FROM links").fetchone()[0]
+        sql = """INSERT INTO link_history (link_id, actor_kind, actor_label, action, previous)
+                 VALUES (?, 'admin', 'owner', ?, ?) RETURNING id"""
+        first = db.execute(sql, (link_id, "protection", None)).fetchone()[0]
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute(sql, (link_id, "metadata", None))
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute(sql, (link_id, "protection", '{"kind":"metadata","value":{}}'))
+        db.execute("DELETE FROM link_history")
+        next_id = db.execute(sql, (link_id, "protection", None)).fetchone()[0]
+        self.assertGreater(next_id, first)
+        db.execute("DELETE FROM links WHERE id = ?", (link_id,))
+        self.assertIsNone(db.execute("SELECT id FROM link_history").fetchone())
 
 
 if __name__ == "__main__":

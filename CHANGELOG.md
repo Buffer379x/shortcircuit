@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add link history with comparison, category-specific restoration, JSON export, and per-link deletion.
 - Add password-protected links and confirmed, atomically consumed one-time links. Native link exports keep protected entries disabled when imported.
 
 ## 0.6.0-preview.1

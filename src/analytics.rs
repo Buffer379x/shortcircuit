@@ -17,7 +17,7 @@ use tokio::{
 };
 use url::{Host, Url};
 
-use crate::input::normalize_host;
+use crate::{history, input::normalize_host};
 
 const QUEUE_CAPACITY: usize = 1024;
 const BATCH_SIZE: usize = 64;
@@ -325,6 +325,9 @@ async fn run_writer(pool: SqlitePool, shared: Arc<Shared>, mut receiver: mpsc::R
             _ = retention.tick() => {
                 if prune(&pool).await.is_err() {
                     tracing::warn!("analytics retention failed");
+                }
+                if history::prune(&pool).await.is_err() {
+                    tracing::warn!("link history retention failed");
                 }
                 continue;
             }

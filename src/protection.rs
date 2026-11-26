@@ -1,7 +1,10 @@
 use serde::Serialize;
 use sqlx::{QueryBuilder, SqliteConnection, SqlitePool};
 
-use crate::store::push_host_scope;
+use crate::{
+    history::{self, Action, Actor},
+    store::push_host_scope,
+};
 
 pub(crate) struct ProtectionDraft {
     pub(crate) one_time: bool,
@@ -74,6 +77,7 @@ pub(crate) async fn replace(
     id: i64,
     one_time: bool,
     password: PasswordChange,
+    actor: &Actor,
 ) -> Result<Option<ProtectionDetails>, ProtectionError> {
     let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
     let mut query = QueryBuilder::new(
@@ -118,6 +122,7 @@ pub(crate) async fn replace(
         .bind(one_time)
         .execute(&mut *transaction)
         .await?;
+        history::record(&mut transaction, id, actor, Action::Protection, None).await?;
     }
     transaction.commit().await?;
     Ok(Some(ProtectionDetails {

@@ -8,7 +8,7 @@ Create a backup while the container is running.
 docker compose exec -T shortcircuit shortcircuit backup
 ```
 
-The command prints the backup path under `/data/backups`. The database-only format includes local settings, links, redirect rules, tags, analytics, the administrator account, and API credentials. The copied browser sessions and setup or recovery claims are removed. Keep external environment settings and proxy configuration with your operational backup. Store the snapshot securely because it includes confidential destinations and authentication material.
+The command prints the backup path under `/data/backups`. The database-only format includes local settings, links, link history, redirect rules, tags, analytics, the administrator account, and API credentials. The copied browser sessions and setup or recovery claims are removed. Keep external environment settings and proxy configuration with your operational backup. Store the snapshot securely because it includes confidential destinations and authentication material.
 
 To restore a snapshot from the same schema version during scheduled downtime, stop the service and use a one-off container with the same app-data volume. Use the path printed by the backup command.
 
@@ -21,6 +21,8 @@ docker compose up --detach --wait
 The restore refuses a busy data directory, accepts standalone snapshots up to 8 GiB, and validates a private staging copy. It prints a restorable rollback snapshot when the previous database can be verified. If the previous database cannot be snapshotted, it preserves a private database file for manual recovery. Sign in again after restart. The snapshot restores API credential state at the time of capture. Revoke any previously revoked credentials that were active when the snapshot was created. Record an independent backup and exercise recovery in a disposable target before production use.
 
 Take a verified snapshot with the current image before applying an upgrade. To roll back a schema upgrade, use the previous image to restore its pre-upgrade snapshot into a separate data volume. Verify the restored instance before routing traffic to it. Restoring a snapshot returns one-time links to their state at capture time. Disable any one-time links that were consumed after the snapshot before reopening public traffic.
+
+History entries present when a snapshot was created can return after restore. Reapply any required history purges before opening access to the restored administration interface.
 
 ## Automatic backups
 

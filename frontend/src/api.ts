@@ -75,6 +75,22 @@ export interface LinkProtectionChange {
   remove_password?: boolean;
 }
 
+export type LinkMetadata = Pick<Link, 'target' | 'title' | 'tags' | 'enabled' | 'analytics_enabled'>;
+export type LinkPolicy = Omit<Policy, 'visits_used'>;
+
+export interface LinkRevision {
+  id: number;
+  created_at: number;
+  actor: { kind: 'admin' | 'api_key'; label: string };
+  action: 'metadata' | 'policy' | 'protection' | 'restore';
+  previous: { kind: 'metadata'; value: LinkMetadata } | { kind: 'policy'; value: LinkPolicy } | null;
+}
+
+export interface LinkHistory {
+  current: { metadata: LinkMetadata; policy: LinkPolicy };
+  items: LinkRevision[];
+}
+
 export interface LinkPage {
   items: Link[];
   next_after_id: number | null;

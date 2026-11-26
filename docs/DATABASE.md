@@ -8,6 +8,10 @@ The versioned SQL migration creates a strict `links` table with an integer `id`,
 
 Migration `0007` adds `link_protection` with the link ID, optional Argon2id password hash, one-time and consumed flags, and a protection revision. A deleted link cascades to its protection record. An existing link has no protection by default. Changes to protection increment its revision. Confirmation checks that revision before consuming the one-time flag and any existing visit limit in the same write transaction. Signed confirmation tokens expire in memory and require no challenge rows.
 
+## Link history
+
+Migration `0008` adds `link_history`. Direct link edits write a typed previous configuration and the verified actor in the same transaction as the mutation. Protection events store only actor, time, and action. History retains up to 25 entries per link. Rows older than 30 days are excluded from the API immediately and cleaned up in bounded batches. Deleting the link cascades to its history. A browser administrator can purge its history separately.
+
 ## Planned Entities and Relationships
 
 The target storage is SQLite on a local persistent volume. Use named projections for list and dashboard queries. Consider an abstraction for multiple database engines when measured requirements justify it.
@@ -24,7 +28,7 @@ The target storage is SQLite on a local persistent volume. Use named projections
 | `api_keys`, `api_key_domains` | Public lookup ID, `token_hash`, name, permissions, expiry, revocation, and allowed domains | Check each permission against the domain and object. Issue keys through the application. |
 | `visits` | Monotonic event ID, UTC time, nullable link ID, domain ID, outcome, category, optional referrer domain, optional truncated IP prefix, optional geo and device fields, and optional rule ID | Orphan events have a null link ID. A deletion job may also clear the link ID. By default, exclude full IP addresses from storage. Index `(link_id, occurred_at, id)`, `(domain_id, occurred_at, id)`, and `(occurred_at, id)`. |
 | `visit_daily`, `visit_daily_breakdowns` | UTC day, typed grouping by link, domain, outcome, and class, plus an optional dimension and rollup code | Materialize only combinations used by queries. Cap high-cardinality referrers and report grouped values separately. Use a UTC projection for date ranges. Use raw or sufficiently granular data for local calendar days and daylight saving transitions, or show the precision limit. |
-| `audit_events`, `link_revisions` | Audit event type, actor ID, time, object ID, and optional previous configuration snapshot | Exclude destination URLs and secrets from audit events. Restrict history separately and define its retention and permanent removal of prior destinations. |
+| `audit_events` | Audit event type, actor ID, time, and object ID | Exclude destination URLs and secrets from audit events. Restrict access to the event log. |
 | `settings`, `setup_state` | Typed, versioned settings and active setup token digest with a time limit | Complete setup in a one-time transaction. Require recent authentication for protected settings. Limit deployment overrides to documented ports and paths. |
 | `import_runs`, `source_mappings` | Native format and version where applicable, file identifier, status, validation results, batch cursor, and mappings from record identifiers to link IDs | Allow one active run per source file identity. Keep artifacts in staging and credentials out of manifests. Use stable record IDs where present or a documented file identity and record position for retries. |
 | `job_runs`, `health_targets`, `health_results` | Last status and next due time, destination reference, probe profile, result, timestamp, and duration | Bound retention and the number of stored results. Claim jobs atomically and track restart state. Deduplicate health checks by destination and policy. |

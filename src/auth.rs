@@ -113,6 +113,7 @@ pub struct IssuedKey {
 }
 
 pub struct KeyAccess {
+    pub(crate) id: i64,
     pub host: Option<String>,
     scopes: i64,
 }
@@ -409,7 +410,7 @@ impl Auth {
         if !bool::from(stored.as_slice().ct_eq(digest.as_slice())) {
             return Err(AuthError::Unauthorized);
         }
-        Ok(KeyAccess { host, scopes })
+        Ok(KeyAccess { id, host, scopes })
     }
 
     pub async fn revoke_key(&self, id: i64) -> Result<(), AuthError> {
