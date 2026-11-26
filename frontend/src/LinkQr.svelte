@@ -9,7 +9,8 @@
 
   let { link, t, onclose }: { link: Link; t: Messages; onclose: () => void } = $props();
 
-  const resolutionLabel = $props.id() + '-resolution';
+  const qrId = $props.id();
+  const resolutionLabel = qrId + '-resolution';
   const contentTypes = { svg: 'image/svg+xml', png: 'image/png' } as const;
   type Format = keyof typeof contentTypes;
 
