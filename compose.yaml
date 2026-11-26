@@ -4,6 +4,9 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
       - "127.0.0.1:8081:8081"
+    environment:
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-0}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
     volumes:
       - shortcircuit-data:/data
     read_only: true
@@ -11,7 +14,7 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    stop_grace_period: 15s
+    stop_grace_period: 25s
     restart: unless-stopped
 
 volumes:

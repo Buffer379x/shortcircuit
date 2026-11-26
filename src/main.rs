@@ -10,7 +10,7 @@ use std::{
 };
 
 use shortcircuit::{
-    AdminConfig, Analytics, Auth, BootstrapKind, PublicHosts, admin_router_with_analytics,
+    AdminConfig, Analytics, Auth, BackupSchedule, BootstrapKind, PublicHosts, admin_router_with_analytics,
     create_snapshot, data_lock, open_database, public_router_with_analytics, restore_snapshot,
 };
 use tokio::{net::TcpListener, sync::watch, time};
@@ -76,7 +76,21 @@ async fn signal_to_stop() -> io::Result<()> {
     tokio::signal::ctrl_c().await
 }
 
+fn backup_schedule() -> Result<Option<BackupSchedule>, AppError> {
+    let hours = setting("BACKUP_INTERVAL_HOURS", "0")?
+        .parse()
+        .map_err(|_| io::Error::other("invalid BACKUP_INTERVAL_HOURS"))?;
+    if hours == 0 {
+        return Ok(None);
+    }
+    let keep = setting("BACKUP_KEEP", "7")?
+        .parse()
+        .map_err(|_| io::Error::other("invalid BACKUP_KEEP"))?;
+    BackupSchedule::new(hours, keep).map_err(|error| io::Error::other(error).into())
+}
+
 async fn serve() -> Result<(), AppError> {
+    let backup_schedule = backup_schedule()?;
     let public_addr = bind_address("PUBLIC_BIND", "127.0.0.1:8080")?;
     let admin_addr = bind_address("ADMIN_BIND", "127.0.0.1:8081")?;
     let hosts = PublicHosts::parse(&setting("PUBLIC_HOSTS", "localhost,127.0.0.1,[::1]")?)
@@ -107,6 +121,9 @@ async fn serve() -> Result<(), AppError> {
 
     let (analytics, mut writer) = Analytics::start(pool.clone()).await?;
     let (stop, receiver) = watch::channel(false);
+    let scheduled = backup_schedule.map(|schedule| {
+        tokio::spawn(schedule.run(pool.clone(), database.with_file_name("backups"), receiver.clone()))
+    });
     let public = axum::serve(
         public_socket,
         public_router_with_analytics(pool.clone(), hosts.clone(), analytics.clone()),
@@ -140,6 +157,16 @@ async fn serve() -> Result<(), AppError> {
             tracing::warn!("analytics flush deadline reached");
         }
     }
+    if let Some(mut task) = scheduled {
+        match time::timeout(Duration::from_secs(5), &mut task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => tracing::warn!("scheduled backup job stopped unexpectedly"),
+            Err(_) => {
+                task.abort();
+                tracing::warn!("scheduled backup shutdown deadline reached");
+            }
+        }
+    }
     if time::timeout(Duration::from_secs(2), pool.close())
         .await
         .is_err()
@@ -156,11 +183,8 @@ async fn backup() -> Result<(), AppError> {
     if !database.is_file() {
         return Err(io::Error::other("no ShortCircuit database exists").into());
     }
-    let directory = database
-        .parent()
-        .ok_or_else(|| io::Error::other("data path has no parent"))?;
     let pool = open_database(&database).await?;
-    let result = create_snapshot(&pool, &directory.join("backups")).await;
+    let result = create_snapshot(&pool, &database.with_file_name("backups")).await;
     pool.close().await;
     println!("{}", result?.display());
     Ok(())

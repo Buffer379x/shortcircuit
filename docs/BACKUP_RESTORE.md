@@ -20,7 +20,13 @@ docker compose up --detach --wait
 
 The restore refuses a busy data directory, accepts standalone snapshots up to 8 GiB, and validates a private staging copy. It prints a restorable rollback snapshot when the previous database can be verified. If the previous database cannot be snapshotted, it preserves a private database file for manual recovery. Sign in again after restart. The snapshot restores API credential state at the time of capture. Revoke any previously revoked credentials that were active when the snapshot was created. Record an independent backup and exercise recovery in a disposable target before production use.
 
-Scheduled backups, browser downloads, and browser restore are planned.
+## Automatic backups
+
+Set `BACKUP_INTERVAL_HOURS` to an interval from 1 to 720 hours and restart the container. The default `0` disables the scheduler. The first backup starts after one interval. The scheduler creates at most one backup at a time and skips missed intervals.
+
+Set `BACKUP_KEEP` to retain 1 to 365 scheduled backups. The default is 7. Verified copies are stored in `/data/backups/scheduled`, and a failed attempt leaves existing backups intact. Retention applies to the scheduled directory. On shutdown the process allows up to five seconds for an in-progress scheduled job to finish after HTTP and analytics wind down.
+
+Browser downloads and browser restore are planned.
 
 ## Consistent Snapshots
 
