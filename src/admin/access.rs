@@ -137,7 +137,9 @@ pub(super) async fn browser_access(
         state.attempts.allow(peer(&request)).map_err(rate_error)?;
     }
     request.extensions_mut().insert(BrowserToken(token));
-    request.extensions_mut().insert(Actor::Admin(session.username));
+    request
+        .extensions_mut()
+        .insert(Actor::Admin(session.username));
     Ok(next.run(request).await)
 }
 

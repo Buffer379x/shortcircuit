@@ -205,7 +205,9 @@ pub(crate) async fn update_link_in(
     let Some(link) = read_link(connection, hosts, id).await? else {
         return Ok(None);
     };
-    write_link_in(connection, link, update, actor, action).await.map(Some)
+    write_link_in(connection, link, update, actor, action)
+        .await
+        .map(Some)
 }
 
 pub(crate) async fn write_link_in(

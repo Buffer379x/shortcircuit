@@ -167,7 +167,10 @@ pub(crate) async fn search(
             .as_deref()
             .is_none_or(|text| matches_query(&row.link, origin, text))
         {
-            items.push(SearchItem { link: row.link, selection_key: row.selection_key });
+            items.push(SearchItem {
+                link: row.link,
+                selection_key: row.selection_key,
+            });
             if items.len() > PAGE_SIZE {
                 break;
             }

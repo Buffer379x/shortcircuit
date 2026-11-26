@@ -46,15 +46,18 @@ pub(super) fn export_selected(
     format: ExportFormat,
 ) -> Result<Response, Problem> {
     let rows = links.into_iter().map(|(link, protected)| {
-        (link.id, LinkMetadata {
-            host: link.host,
-            slug: link.slug,
-            target: link.target,
-            title: link.title,
-            tags: link.tags,
-            enabled: link.enabled && !protected,
-            analytics_enabled: link.analytics_enabled,
-        })
+        (
+            link.id,
+            LinkMetadata {
+                host: link.host,
+                slug: link.slug,
+                target: link.target,
+                title: link.title,
+                tags: link.tags,
+                enabled: link.enabled && !protected,
+                analytics_enabled: link.analytics_enabled,
+            },
+        )
     });
     let too_large = || Problem::invalid("bulk_export_too_large");
     let (bytes, media, disposition) = match format {
@@ -67,17 +70,33 @@ pub(super) fn export_selected(
             if data.len() > MAX_SERIALIZED_ITEMS {
                 return Err(too_large());
             }
-            (data, "application/json", "attachment; filename=shortcircuit-selected-links.json")
+            (
+                data,
+                "application/json",
+                "attachment; filename=shortcircuit-selected-links.json",
+            )
         }
         ExportFormat::Csv => {
-            let (data, next) = csv_format::page(rows.collect()).map_err(|_| Problem::unavailable())?;
+            let (data, next) =
+                csv_format::page(rows.collect()).map_err(|_| Problem::unavailable())?;
             if next.is_some() {
                 return Err(too_large());
             }
-            (data, "text/csv; charset=utf-8", "attachment; filename=shortcircuit-selected-links.csv")
+            (
+                data,
+                "text/csv; charset=utf-8",
+                "attachment; filename=shortcircuit-selected-links.csv",
+            )
         }
     };
-    Ok(([(header::CONTENT_TYPE, media), (header::CONTENT_DISPOSITION, disposition)], Bytes::from(bytes)).into_response())
+    Ok((
+        [
+            (header::CONTENT_TYPE, media),
+            (header::CONTENT_DISPOSITION, disposition),
+        ],
+        Bytes::from(bytes),
+    )
+        .into_response())
 }
 
 #[derive(Clone)]

@@ -14,7 +14,10 @@ use crate::{
     domains,
     history::{Action, Actor},
     input::link_tags,
-    store::{self, Link, LinkUpdate, bulk::{self, LinkSelection}},
+    store::{
+        self, Link, LinkUpdate,
+        bulk::{self, LinkSelection},
+    },
 };
 
 use super::{AppState, Problem, exchange, json_payload};
@@ -68,10 +71,17 @@ impl Change {
                 merged.extend_from_slice(tags);
                 merged.sort_unstable();
                 merged.dedup();
-                update.tags = Some(link_tags(merged).ok_or_else(|| Problem::invalid("bulk_tag_limit"))?);
+                update.tags =
+                    Some(link_tags(merged).ok_or_else(|| Problem::invalid("bulk_tag_limit"))?);
             }
             Self::RemoveTags { tags } => {
-                update.tags = Some(link.tags.iter().filter(|tag| !tags.contains(tag)).cloned().collect());
+                update.tags = Some(
+                    link.tags
+                        .iter()
+                        .filter(|tag| !tags.contains(tag))
+                        .cloned()
+                        .collect(),
+                );
             }
             Self::Delete { .. } => return Err(Problem::invalid("invalid_bulk_selection")),
         }
@@ -94,7 +104,11 @@ async fn change(
     check_selection(&input.links)?;
     input.change.validate()?;
     let hosts = hosts(&state).await?;
-    let mut transaction = state.pool.begin_with("BEGIN IMMEDIATE").await.map_err(|_| Problem::unavailable())?;
+    let mut transaction = state
+        .pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|_| Problem::unavailable())?;
     let links = selected(&mut transaction, &hosts, &input.links).await?;
     if matches!(input.change, Change::Delete { .. }) {
         let count = bulk::delete_selected(&mut transaction, &input.links)
@@ -103,10 +117,16 @@ async fn change(
         if count != input.links.len() as u64 {
             return Err(selection_changed());
         }
-        transaction.commit().await.map_err(|_| Problem::unavailable())?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| Problem::unavailable())?;
         tracing::info!(links_deleted = count, "bulk link deletion committed");
         let deleted_ids = links.into_iter().map(|(link, _)| link.id).collect();
-        return Ok(Json(UpdateResult { items: Vec::new(), deleted_ids }));
+        return Ok(Json(UpdateResult {
+            items: Vec::new(),
+            deleted_ids,
+        }));
     }
     let mut items = Vec::with_capacity(links.len());
     for (link, _) in links {
@@ -116,8 +136,14 @@ async fn change(
             .map_err(|_| Problem::unavailable())?;
         items.push(item);
     }
-    transaction.commit().await.map_err(|_| Problem::unavailable())?;
-    Ok(Json(UpdateResult { items, deleted_ids: Vec::new() }))
+    transaction
+        .commit()
+        .await
+        .map_err(|_| Problem::unavailable())?;
+    Ok(Json(UpdateResult {
+        items,
+        deleted_ids: Vec::new(),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -134,7 +160,11 @@ async fn export(
     let input = json_payload(body)?;
     check_selection(&input.links)?;
     let hosts = hosts(&state).await?;
-    let mut connection = state.pool.acquire().await.map_err(|_| Problem::unavailable())?;
+    let mut connection = state
+        .pool
+        .acquire()
+        .await
+        .map_err(|_| Problem::unavailable())?;
     let links = selected(&mut connection, &hosts, &input.links).await?;
     drop(connection);
     exchange::export_selected(links, input.format)
@@ -142,22 +172,31 @@ async fn export(
 
 fn check_selection(items: &[LinkSelection]) -> Result<(), Problem> {
     let mut seen = HashSet::with_capacity(items.len().min(MAX_SELECTION));
-    if !(1..=MAX_SELECTION).contains(&items.len()) || items.iter().any(|item| {
-        item.id <= 0 || !seen.insert(item.id) || item.key.len() != 32
-            || !item.key.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    }) {
+    if !(1..=MAX_SELECTION).contains(&items.len())
+        || items.iter().any(|item| {
+            item.id <= 0
+                || !seen.insert(item.id)
+                || item.key.len() != 32
+                || !item
+                    .key
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+    {
         return Err(Problem::invalid("invalid_bulk_selection"));
     }
     Ok(())
 }
 
 async fn hosts(state: &AppState) -> Result<Vec<String>, Problem> {
-    Ok(domains::list(&state.pool, &state.hosts, state.config.local_port)
-        .await
-        .map_err(|_| Problem::unavailable())?
-        .into_iter()
-        .map(|domain| domain.host)
-        .collect())
+    Ok(
+        domains::list(&state.pool, &state.hosts, state.config.local_port)
+            .await
+            .map_err(|_| Problem::unavailable())?
+            .into_iter()
+            .map(|domain| domain.host)
+            .collect(),
+    )
 }
 
 async fn selected(

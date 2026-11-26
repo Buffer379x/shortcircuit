@@ -396,6 +396,7 @@ async function verify() {
     const applyBulk = page.getByRole('button', { name: 'Apply to selection', exact: true });
     await bulk.selectOption('add_tags');
     await page.getByRole('textbox', { name: 'Tags, separated by commas', exact: true }).fill('batch-review');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await applyBulk.click();
     await page.getByText('Selected links updated.', { exact: true }).waitFor();
     await linkTable.getByRole('button', { name: 'batch-review', exact: true }).first().waitFor();
