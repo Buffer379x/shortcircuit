@@ -13,6 +13,8 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 
+use crate::protection::{self, ProtectionDraft};
+
 static MIGRATIONS: Migrator = sqlx::migrate!();
 const MIN_SQLITE: [u32; 3] = [3, 51, 3];
 const DATABASE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -118,6 +120,7 @@ fn prepare_file(path: &Path) -> io::Result<()> {
 pub(crate) async fn insert_link(
     pool: &SqlitePool,
     draft: &LinkDraft,
+    protection: Option<&ProtectionDraft>,
 ) -> Result<Option<Link>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
     let rows = sqlx::query_as::<_, Link>(
@@ -135,6 +138,9 @@ pub(crate) async fn insert_link(
     let link = rows.into_iter().next();
     let result = if let Some(mut link) = link {
         link.tags = insert_tags(&mut transaction, link.id, draft.tags.clone()).await?;
+        if let Some(settings) = protection {
+            protection::insert(&mut transaction, link.id, settings).await?;
+        }
         Some(link)
     } else {
         None
@@ -339,7 +345,7 @@ mod tests {
             .await
             .unwrap();
         let hosts = [HOST.to_owned()];
-        let link = insert_link(&pool, &draft()).await.unwrap().unwrap();
+        let link = insert_link(&pool, &draft(), None).await.unwrap().unwrap();
         assert_eq!(link.tags, ["docs", "work"]);
 
         update_link(
@@ -376,7 +382,7 @@ mod tests {
             .await
             .unwrap();
         let hosts = [HOST.to_owned()];
-        let link = insert_link(&pool, &draft()).await.unwrap().unwrap();
+        let link = insert_link(&pool, &draft(), None).await.unwrap().unwrap();
         sqlx::raw_sql(
             "CREATE TABLE deferred_tag_check (
                 link_id INTEGER REFERENCES links(id) DEFERRABLE INITIALLY DEFERRED
@@ -412,13 +418,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_protection_write_rolls_back_new_link_and_tags() {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = open_database(&directory.path().join("links.sqlite"))
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "CREATE TRIGGER reject_protection BEFORE INSERT ON link_protection
+             BEGIN SELECT RAISE(ABORT, 'synthetic protection failure'); END;",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let draft = draft();
+        let protection = ProtectionDraft {
+            one_time: true,
+            password_hash: None,
+        };
+        assert!(insert_link(&pool, &draft, Some(&protection)).await.is_err());
+        let links = list(&pool, &[HOST.to_owned()], 0).await.unwrap();
+        assert!(links.is_empty());
+        let tags: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM link_tags")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(tags, 0);
+    }
+
+    #[tokio::test]
     async fn only_matching_hosts_can_delete_and_deleted_ids_stay_behind_cursors() {
         let directory = tempfile::tempdir().unwrap();
         let pool = open_database(&directory.path().join("links.sqlite"))
             .await
             .unwrap();
         let hosts = [HOST.to_owned()];
-        let link = insert_link(&pool, &draft()).await.unwrap().unwrap();
+        let link = insert_link(&pool, &draft(), None).await.unwrap().unwrap();
 
         assert!(
             !remove_link(&pool, &["other.example".to_owned()], link.id)
@@ -426,7 +461,7 @@ mod tests {
                 .unwrap()
         );
         assert!(remove_link(&pool, &hosts, link.id).await.unwrap());
-        let new_link = insert_link(&pool, &draft()).await.unwrap().unwrap();
+        let new_link = insert_link(&pool, &draft(), None).await.unwrap().unwrap();
         let links = list(&pool, &hosts, link.id).await.unwrap();
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].id, new_link.id);

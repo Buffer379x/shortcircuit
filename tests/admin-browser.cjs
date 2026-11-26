@@ -98,6 +98,60 @@ async function verify() {
     assert.equal((await page.request.get(publicOrigin + '/test/guide', { maxRedirects: 0 })).status(), 302);
     assert.equal((await page.request.get(publicOrigin + '/test/guide', { maxRedirects: 0 })).status(), 404);
 
+    const protectedTarget = 'https://example.test/protected-destination';
+    const linkPassword = 'ci-browser-link-password';
+    await page.getByRole('button', { name: 'Create link', exact: true }).click();
+    await dialog.getByLabel('Destination URL', { exact: true }).fill(protectedTarget);
+    await dialog.getByLabel('Slug (optional)', { exact: true }).fill('protected-test');
+    await dialog.getByText('Link protection', { exact: true }).click();
+    await dialog.getByLabel('Link password (optional)', { exact: true }).fill(linkPassword);
+    const protectedCreated = page.waitForResponse(response =>
+      response.url().endsWith('/api/v1/links') && response.request().method() === 'POST');
+    await dialog.getByRole('button', { name: 'Create link', exact: true }).click();
+    const protectedResponse = await protectedCreated;
+    assert.equal(protectedResponse.status(), 201);
+    const protectedLink = await protectedResponse.json();
+    assert.ok(!JSON.stringify(protectedLink).includes(linkPassword));
+    await dialog.waitFor({ state: 'hidden' });
+
+    const protectedRow = page.getByRole('row').filter({ hasText: 'localhost/protected-test' });
+    await protectedRow.getByRole('button', { name: 'Link protection', exact: true }).click();
+    const protection = page.getByRole('dialog', { name: 'Link protection', exact: true });
+    await protection.getByText('Password protection is enabled.', { exact: true }).waitFor();
+    assert.equal(await protection.getByLabel('New password', { exact: true }).inputValue(), '');
+    await protection.getByRole('checkbox', { name: 'One-time link', exact: true }).check();
+    const protectionSaved = page.waitForResponse(response =>
+      response.url().endsWith(`/api/v1/links/${protectedLink.id}/protection`) && response.request().method() === 'PATCH');
+    await protection.getByRole('button', { name: 'Save changes', exact: true }).click();
+    const protectionResponse = await protectionSaved;
+    assert.equal(protectionResponse.status(), 200);
+    assert.deepEqual(protectionResponse.request().postDataJSON(), { one_time: true });
+    assert.deepEqual(await protectionResponse.json(), { password_required: true, one_time: true, consumed: false });
+    await protection.waitFor({ state: 'hidden' });
+
+    const visitor = await browser.newPage();
+    try {
+      await visitor.route(protectedTarget, route => route.fulfill({ status: 200, body: 'Protected destination' }));
+      const shortUrl = publicOrigin + '/protected-test';
+      assert.equal((await visitor.goto(shortUrl)).status(), 200);
+      await visitor.getByRole('heading', { name: 'Confirm link access', exact: true }).waitFor();
+      await visitor.getByLabel('Password', { exact: true }).fill(linkPassword);
+      const destination = visitor.waitForRequest(request => request.url() === protectedTarget);
+      await visitor.getByRole('button', { name: 'Continue', exact: true }).click();
+      assert.equal((await destination).method(), 'GET');
+      assert.equal((await visitor.goto(shortUrl)).status(), 404);
+    } finally {
+      await visitor.close();
+    }
+
+    await protectedRow.getByRole('button', { name: 'Link protection', exact: true }).click();
+    await protection.getByText('This one-time link has already been used.', { exact: true }).waitFor();
+    assert.equal(await protection.getByRole('button', { name: 'Save changes', exact: true }).count(), 0);
+    await protection.getByRole('button', { name: 'Close', exact: true }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.setViewportSize({ width: 1360, height: 900 });
+
     await page.getByRole('button', { name: 'Analytics', exact: true }).click();
     await page.getByRole('heading', { name: 'Traffic summary', exact: true }).waitFor();
     await page.getByRole('checkbox', { name: 'Honor Do Not Track', exact: true }).waitFor();
@@ -158,7 +212,7 @@ async function verify() {
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);
     assert.equal((await page.request.get(admin + '/api/v1/openapi.json')).status(), 401);
     assert.deepEqual(errors, []);
-    console.log('Browser smoke passed: setup, create link, QR, visit limits, analytics controls, JSON and CSV exchange, URL tools, mobile layout and sign-out.');
+    console.log('Browser smoke passed: setup, create link, QR, visit limits, protected links, analytics controls, JSON and CSV exchange, URL tools, mobile layout and sign-out.');
   } finally {
     await browser.close();
   }

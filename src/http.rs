@@ -1,7 +1,10 @@
+use std::{net::IpAddr, sync::Arc};
+
 use axum::{
+    body::Body,
     Router,
     extract::{Request, State},
-    http::{HeaderValue, Method, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
 };
@@ -9,9 +12,12 @@ use sqlx::SqlitePool;
 
 use crate::{
     analytics::{Analytics, Kind},
+    auth::{Auth, AuthError},
+    confirmation::Action,
     domains,
     input::{PublicHosts, request_host, valid_slug},
-    redirect::{self, Outcome, RedirectRequest},
+    rate_limit::{AttemptLimiter, peer},
+    redirect::{self, Outcome, RedirectRequest, Resolution},
 };
 
 const MAX_REQUEST_URI: usize = 8192;
@@ -21,6 +27,8 @@ struct AppState {
     pool: SqlitePool,
     hosts: PublicHosts,
     analytics: Option<Analytics>,
+    auth: Auth,
+    attempts: Arc<AttemptLimiter>,
 }
 
 pub fn public_router(pool: SqlitePool, hosts: PublicHosts) -> Router {
@@ -43,9 +51,11 @@ fn build_public_router(
     Router::new()
         .fallback(resolve)
         .with_state(AppState {
+            auth: Auth::new(pool.clone()),
             pool,
             hosts,
             analytics,
+            attempts: Arc::new(AttemptLimiter::new()),
         })
         .layer(middleware::from_fn(response_headers))
 }
@@ -54,10 +64,7 @@ pub(crate) async fn response_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(
-        header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
-    );
+    headers.entry(header::REFERRER_POLICY).or_insert(HeaderValue::from_static("no-referrer"));
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -66,14 +73,12 @@ pub(crate) async fn response_headers(request: Request, next: Next) -> Response {
 }
 
 async fn resolve(State(state): State<AppState>, request: Request) -> Response {
-    let (parts, _) = request.into_parts();
-    if !matches!(parts.method, Method::GET | Method::HEAD) {
-        return (
-            StatusCode::METHOD_NOT_ALLOWED,
-            [(header::ALLOW, "GET, HEAD")],
-        )
-            .into_response();
+    let post = request.method() == Method::POST;
+    if !matches!(*request.method(), Method::GET | Method::HEAD | Method::POST) {
+        return method_not_allowed();
     }
+    let peer = post.then(|| peer(&request));
+    let (parts, body) = request.into_parts();
     let uri = &parts.uri;
     if uri
         .path_and_query()
@@ -93,6 +98,9 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     };
     if slug.is_empty() {
+        if post {
+            return method_not_allowed();
+        }
         return fallback(&host, "/", domain.root_target.as_deref());
     }
     if !valid_slug(slug) {
@@ -115,11 +123,39 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         query: uri.query(),
         user_agent: value(header::USER_AGENT),
         language: value(header::ACCEPT_LANGUAGE),
-        head: parts.method == Method::HEAD,
+        // Inspect the link without reserving any visits before checking the submitted proof.
+        head: parts.method != Method::GET,
     };
-    let Ok(result) = redirect::resolve_with_subject(&state.pool, lookup).await else {
+    let Ok(mut result) = redirect::resolve_with_subject(&state.pool, lookup).await else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
+    if let Outcome::Challenge(link) = result.outcome {
+        let loopback = host == "localhost"
+            || host.trim_matches(['[', ']']).parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
+        if !domain.origin.starts_with("https://") && !loopback {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+        let action = Action {
+            link,
+            origin: &domain.origin,
+            path_and_query: uri.path_and_query().map_or(uri.path(), |path| path.as_str()),
+        };
+        if let Some(peer) = peer {
+            result = match confirm(&state, action, lookup, &parts.headers, body, peer).await {
+                Ok(confirmed) => confirmed,
+                Err(response) => return response,
+            };
+        } else if parts.method == Method::HEAD {
+            return StatusCode::OK.into_response();
+        } else {
+            return action.page(lookup.language, false);
+        }
+    } else if post {
+        return match result.outcome {
+            Outcome::Blocked => StatusCode::NOT_FOUND.into_response(),
+            _ => method_not_allowed(),
+        };
+    }
     let (kind, response) = match result.outcome {
         Outcome::Redirect { target, status } => (Kind::Redirect, respond(&target, status)),
         Outcome::Missing => (
@@ -127,8 +163,9 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
             fallback(&host, uri.path(), domain.missing_target.as_deref()),
         ),
         Outcome::Blocked => (Kind::Blocked, StatusCode::NOT_FOUND.into_response()),
+        Outcome::Challenge(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    if !lookup.head
+    if parts.method != Method::HEAD
         && !response.status().is_server_error()
         && result
             .subject
@@ -144,6 +181,43 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         );
     }
     response
+}
+
+async fn confirm(
+    state: &AppState,
+    action: Action<'_>,
+    lookup: RedirectRequest<'_>,
+    headers: &HeaderMap,
+    body: Body,
+    peer: IpAddr,
+) -> Result<Resolution, Response> {
+    let password = action.submit(headers, body).await.map_err(IntoResponse::into_response)?;
+    if action.link.password_required {
+        state.attempts.allow(peer).map_err(IntoResponse::into_response)?;
+        let hash = sqlx::query_scalar::<_, String>(
+            "SELECT password_hash FROM link_protection
+             WHERE link_id = ? AND revision = ? AND password_hash IS NOT NULL",
+        )
+        .bind(action.link.id)
+        .bind(action.link.revision)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())?
+        .ok_or_else(|| StatusCode::FORBIDDEN.into_response())?;
+        match state.auth.verify_password(&password, &hash, false).await {
+            Ok(_) => {}
+            Err(AuthError::Unauthorized) => return Err(action.page(lookup.language, true)),
+            Err(AuthError::Busy) => return Err(StatusCode::TOO_MANY_REQUESTS.into_response()),
+            Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE.into_response()),
+        }
+    }
+    redirect::confirm(&state.pool, lookup, action.link)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())
+}
+
+fn method_not_allowed() -> Response {
+    (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "GET, HEAD")]).into_response()
 }
 
 fn fallback(host: &str, path: &str, target: Option<&str>) -> Response {

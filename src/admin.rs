@@ -28,6 +28,7 @@ use crate::{
     domains,
     http::response_headers,
     input::{PublicHosts, normalize_host},
+    rate_limit::AttemptLimiter,
 };
 
 pub use access::AdminConfig;
@@ -40,7 +41,7 @@ struct AppState {
     auth: Auth,
     hosts: PublicHosts,
     config: Arc<AdminConfig>,
-    attempts: Arc<access::AttemptLimiter>,
+    attempts: Arc<AttemptLimiter>,
 }
 
 pub fn admin_router(pool: SqlitePool, hosts: PublicHosts, config: AdminConfig) -> Router {
@@ -67,7 +68,7 @@ fn build_admin_router(
         auth: Auth::new(pool.clone()),
         hosts,
         config: Arc::new(config),
-        attempts: Arc::new(access::AttemptLimiter::new()),
+        attempts: Arc::new(AttemptLimiter::new()),
     };
 
     let sign_in = Router::new()

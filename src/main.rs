@@ -131,7 +131,8 @@ async fn serve() -> Result<(), AppError> {
     });
     let public = axum::serve(
         public_socket,
-        public_router_with_analytics(pool.clone(), hosts.clone(), analytics.clone()),
+        public_router_with_analytics(pool.clone(), hosts.clone(), analytics.clone())
+            .into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(wait_for_stop(receiver.clone()));
     let admin = axum::serve(

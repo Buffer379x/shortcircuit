@@ -16,6 +16,8 @@ const problemMessages = new Map<string, Message>([
   ['invalid_redirect_window', 'invalidRedirectWindow'],
   ['invalid_visit_limit', 'invalidVisitLimit'],
   ['permanent_redirect_requires_unrestricted_link', 'permanentRestriction'],
+  ['protection_requires_temporary_redirect', 'protectionRequiresTemporary'],
+  ['one_time_consumed', 'oneTimeConsumed'],
   ['invalid_redirect_rule', 'invalidRedirectRule'],
   ['invalid_target', 'invalidTarget'],
   ['invalid_slug', 'invalidSlug'],

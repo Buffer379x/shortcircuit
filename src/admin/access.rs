@@ -1,12 +1,5 @@
-use std::{
-    collections::HashMap,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Mutex,
-    time::{Duration, Instant},
-};
-
 use axum::{
-    extract::{ConnectInfo, Request, State},
+    extract::{Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::Next,
     response::Response,
@@ -14,16 +7,16 @@ use axum::{
 use subtle::ConstantTimeEq;
 use url::{Host, Url};
 
-use crate::input::{normalize_host, request_host_port};
+use crate::{
+    input::{normalize_host, request_host_port},
+    rate_limit::peer,
+};
 
 use super::{AppState, Problem};
 
 const HTTPS_SESSION_COOKIE: &str = "__Host-shortcircuit_session";
 const HTTP_SESSION_COOKIE: &str = "shortcircuit_session";
 const CSRF_HEADER: &str = "x-csrf-token";
-const WINDOW: Duration = Duration::from_secs(60);
-const PEER_ATTEMPTS: u8 = 8;
-const GLOBAL_ATTEMPTS: u8 = 60;
 
 pub struct AdminConfig {
     origin: String,
@@ -122,7 +115,7 @@ pub(super) async fn entry_access(
     next: Next,
 ) -> Result<Response, Problem> {
     require_origin(request.headers(), &state.config)?;
-    state.attempts.allow(peer(&request))?;
+    state.attempts.allow(peer(&request)).map_err(rate_error)?;
     Ok(next.run(request).await)
 }
 
@@ -139,7 +132,7 @@ pub(super) async fn browser_access(
     let session = state.auth.session(&token).await?;
     require_csrf(&request, &state.config, &session.csrf)?;
     if request.uri().path() == "/api/v1/auth/password" {
-        state.attempts.allow(peer(&request))?;
+        state.attempts.allow(peer(&request)).map_err(rate_error)?;
     }
     request.extensions_mut().insert(BrowserToken(token));
     Ok(next.run(request).await)
@@ -253,47 +246,10 @@ pub(super) fn session_token(
     Ok(token)
 }
 
-fn peer(request: &Request) -> IpAddr {
-    request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map_or(IpAddr::V4(Ipv4Addr::LOCALHOST), |info| info.0.ip())
-}
-
-pub(super) struct AttemptLimiter(Mutex<Attempts>);
-
-struct Attempts {
-    since: Instant,
-    per_peer: HashMap<IpAddr, u8>,
-    total: u8,
-}
-
-impl AttemptLimiter {
-    pub(super) fn new() -> Self {
-        Self(Mutex::new(Attempts {
-            since: Instant::now(),
-            per_peer: HashMap::new(),
-            total: 0,
-        }))
-    }
-
-    fn allow(&self, peer: IpAddr) -> Result<(), Problem> {
-        let mut window = self.0.lock().map_err(|_| Problem::unavailable())?;
-        if window.since.elapsed() >= WINDOW {
-            window.since = Instant::now();
-            window.per_peer.clear();
-            window.total = 0;
-        }
-        let limited = Problem(StatusCode::TOO_MANY_REQUESTS, "try_again_later");
-        if window.total >= GLOBAL_ATTEMPTS {
-            return Err(limited);
-        }
-        let count = window.per_peer.entry(peer).or_default();
-        if *count >= PEER_ATTEMPTS {
-            return Err(limited);
-        }
-        *count += 1;
-        window.total += 1;
-        Ok(())
+fn rate_error(status: StatusCode) -> Problem {
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        Problem(status, "try_again_later")
+    } else {
+        Problem::unavailable()
     }
 }

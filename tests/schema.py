@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 MIGRATION = pathlib.Path(__file__).resolve().parents[1] / "migrations" / "0001_links.sql"
+PROTECTION = MIGRATION.with_name("0007_link_protection.sql")
 
 
 class LinkSchemaTests(unittest.TestCase):
@@ -71,6 +72,27 @@ class LinkSchemaTests(unittest.TestCase):
             db = sqlite3.connect(path)
             self.assertEqual(db.execute("SELECT target FROM links").fetchone(), (target,))
             db.close()
+
+    def test_link_protection_schema_preserves_old_links_and_cascades_on_delete(self):
+        self.assertTrue(PROTECTION.is_file(), "expected a versioned link protection migration")
+        db = self.database()
+        db.execute("PRAGMA foreign_keys = ON")
+        self.insert(db, "go.example", "existing")
+        db.executescript(PROTECTION.read_text())
+        link_id = db.execute("SELECT id FROM links WHERE slug = 'existing'").fetchone()[0]
+        self.assertIsNone(db.execute("SELECT link_id FROM link_protection").fetchone())
+        db.execute("INSERT INTO link_protection (link_id, one_time) VALUES (?, 1)", (link_id,))
+        self.assertEqual(
+            db.execute("SELECT password_hash, consumed, revision FROM link_protection").fetchone(),
+            (None, 0, 1),
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute("UPDATE link_protection SET consumed = 1, one_time = 0")
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute("UPDATE link_protection SET revision = 0")
+        db.execute("UPDATE link_protection SET consumed = 1")
+        db.execute("DELETE FROM links WHERE id = ?", (link_id,))
+        self.assertIsNone(db.execute("SELECT link_id FROM link_protection").fetchone())
 
 
 if __name__ == "__main__":

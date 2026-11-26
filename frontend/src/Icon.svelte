@@ -20,6 +20,7 @@
     exchange: 'M3 8h16 M15 4l4 4-4 4 M21 16H5 M9 12l-4 4 4 4',
     analytics: 'M4 19h16 M6 15V9 M12 15V4 M18 15v-4',
     rule: 'M4 6h16 M4 12h16 M4 18h16 M8 4v4 M15 10v4 M10 16v4',
+    lock: 'M6 11h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z M8 11V7a4 4 0 0 1 8 0v4 M12 15v2',
   } as const;
 
   let { name }: { name: keyof typeof paths } = $props();
