@@ -76,7 +76,11 @@ pub(super) fn page(rows: Vec<(i64, LinkMetadata)>) -> Result<(Vec<u8>, Option<i6
                 protect(&item.title).as_ref(),
                 protect(&tags).as_ref(),
                 if item.enabled { "true" } else { "false" },
-                if item.analytics_enabled { "true" } else { "false" },
+                if item.analytics_enabled {
+                    "true"
+                } else {
+                    "false"
+                },
             ])
             .map_err(|_| CsvError)?;
         writer.flush().map_err(|_| CsvError)?;
@@ -105,7 +109,9 @@ fn parse_bool(value: &str) -> Result<bool, CsvError> {
 fn needs_protection(value: &str) -> bool {
     let trimmed = value.trim_start();
     let leading = &value[..value.len() - trimmed.len()];
-    leading.bytes().any(|byte| matches!(byte, b'\t' | b'\r' | b'\n'))
+    leading
+        .bytes()
+        .any(|byte| matches!(byte, b'\t' | b'\r' | b'\n'))
         || trimmed.starts_with(['\'', '=', '+', '-', '@', '＝', '＋', '－', '＠'])
 }
 
@@ -145,9 +151,9 @@ mod tests {
         let (bytes, after) = page(vec![(11, link("Reports, \"May\""))]).unwrap();
         assert_eq!(after, None);
         let text = std::str::from_utf8(&bytes).unwrap();
-        assert!(text.starts_with(
-            "version,host,slug,target,title,tags,enabled,analytics_enabled\n"
-        ));
+        assert!(
+            text.starts_with("version,host,slug,target,title,tags,enabled,analytics_enabled\n")
+        );
         assert!(text.contains("\"'-Team/Docs\""));
         assert!(text.contains("\"Reports, \"\"May\"\"\""));
         assert!(text.contains("https://files.example/A%2fB?x=A+B&x=C#Keep"));
@@ -184,7 +190,11 @@ mod tests {
             assert_eq!(parse(&bytes).unwrap()[0].title, title);
         }
         let (bytes, _) = page(vec![(1, link("  ordinary title"))]).unwrap();
-        assert!(std::str::from_utf8(&bytes).unwrap().contains("\"  ordinary title\""));
+        assert!(
+            std::str::from_utf8(&bytes)
+                .unwrap()
+                .contains("\"  ordinary title\"")
+        );
         assert_eq!(parse(&bytes).unwrap()[0].title, "  ordinary title");
     }
 
@@ -206,7 +216,10 @@ mod tests {
             assert!(parse(invalid.as_bytes()).is_err(), "{invalid:?}");
         }
         let mut invalid_encoding = input.into_bytes();
-        let title = invalid_encoding.iter().position(|byte| *byte == b'T').unwrap();
+        let title = invalid_encoding
+            .iter()
+            .position(|byte| *byte == b'T')
+            .unwrap();
         invalid_encoding[title] = 0xff;
         assert!(parse(&invalid_encoding).is_err());
     }

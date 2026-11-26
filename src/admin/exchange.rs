@@ -39,7 +39,10 @@ pub(super) fn routes(pool: SqlitePool, hosts: PublicHosts) -> Router {
             "/api/v1/exchange/links",
             get(export_links).post(import_links),
         )
-        .route("/api/v1/exchange/links.csv", get(export_csv).post(import_csv))
+        .route(
+            "/api/v1/exchange/links.csv",
+            get(export_csv).post(import_csv),
+        )
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .with_state(ExchangeState { pool, hosts })
 }
@@ -146,13 +149,17 @@ async fn export_csv(
     let mut response = (
         [
             (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
-            (header::CONTENT_DISPOSITION, "attachment; filename=shortcircuit-links.csv"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=shortcircuit-links.csv",
+            ),
         ],
         Bytes::from(content),
-    ).into_response();
+    )
+        .into_response();
     if let Some(next) = next {
-        let cursor = HeaderValue::from_str(&next.to_string())
-            .map_err(|_| Problem::unavailable())?;
+        let cursor =
+            HeaderValue::from_str(&next.to_string()).map_err(|_| Problem::unavailable())?;
         response.headers_mut().insert("x-next-after-id", cursor);
     }
     Ok(response)
@@ -171,19 +178,28 @@ async fn import_csv(
     bytes: Result<Bytes, BytesRejection>,
 ) -> Result<(StatusCode, Json<ImportReport>), Problem> {
     let Query(query) = query.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
-    let csv_body = headers.get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok())
+    let csv_body = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split(';').next())
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/csv"));
     if !csv_body {
-        return Err(Problem(StatusCode::UNSUPPORTED_MEDIA_TYPE, "invalid_exchange"));
+        return Err(Problem(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid_exchange",
+        ));
     }
     let bytes = bytes.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
     let items = csv_format::parse(&bytes).map_err(|_| invalid())?;
-    apply_import(&state, ImportPage {
-        version: EXCHANGE_VERSION,
-        preview: query.preview.unwrap_or(true),
-        items,
-    }).await
+    apply_import(
+        &state,
+        ImportPage {
+            version: EXCHANGE_VERSION,
+            preview: query.preview.unwrap_or(true),
+            items,
+        },
+    )
+    .await
 }
 
 #[derive(Deserialize)]
