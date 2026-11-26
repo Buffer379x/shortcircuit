@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { readFile } = require('node:fs/promises');
 const { chromium } = require(process.env.SHORTCIRCUIT_PLAYWRIGHT);
 
 const admin = 'http://localhost:8081';
@@ -60,7 +61,7 @@ async function verify() {
     await page.getByRole('button', { name: 'QR code', exact: true }).click();
     const qr = page.getByRole('dialog', { name: 'QR code', exact: true });
     await qr.getByRole('img', { name: 'QR code' }).waitFor();
-    await qr.getByLabel('Resolution in pixels', { exact: true }).selectOption('512');
+    await qr.getByRole('combobox', { name: 'Resolution in pixels', exact: true }).selectOption('512');
     const downloaded = page.waitForEvent('download');
     await qr.getByRole('button', { name: 'Download PNG', exact: true }).click();
     const qrDownload = await downloaded;
@@ -68,7 +69,7 @@ async function verify() {
     assert.equal(qrDownload.suggestedFilename(), 'shortcircuit-link-' + link.id + '.png');
     assert.equal(png.status(), 200);
     assert.equal(png.headers()['content-type'], 'image/png');
-    const pngBytes = await png.body();
+    const pngBytes = await readFile(await qrDownload.path());
     assert.equal(pngBytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
     assert.equal(pngBytes.readUInt32BE(16), 512);
     await qr.getByRole('button', { name: 'Close', exact: true }).click();

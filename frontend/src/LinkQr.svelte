@@ -9,6 +9,7 @@
 
   let { link, t, onclose }: { link: Link; t: Messages; onclose: () => void } = $props();
 
+  const resolutionLabel = $props.id() + '-resolution';
   const contentTypes = { svg: 'image/svg+xml', png: 'image/png' } as const;
   type Format = keyof typeof contentTypes;
 
@@ -57,8 +58,8 @@
 <Dialog {t} title={t.qrCode} open={true} {onclose}>
   <div class="dialog-body stack">
     <label class="field">
-      <span>{t.qrResolution}</span>
-      <select value={size} disabled={downloading} onchange={(event) => {
+      <span id={resolutionLabel}>{t.qrResolution}</span>
+      <select value={size} aria-labelledby={resolutionLabel} disabled={downloading} onchange={(event) => {
         size = Number(event.currentTarget.value);
         preview = 'loading';
       }}>
