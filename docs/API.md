@@ -165,3 +165,12 @@ The JSON API under `/api/v1` runs on the admin listener. Same-origin browser cli
 - Rate-limit the admin API, with separate limits for sign-in and sensitive operations. Use an explicit CORS allowlist. Keep credentials out of query strings and browser local storage.
 - Expose feature routes when their contracts are implemented. The public listener serves redirects and explicitly public link features. Keep internal health endpoints and OpenAPI on the admin listener.
 - System diagnostics report the build, Git commit, start time, uptime, local database and visit data sizes, free capacity, and job and backup status. Where available, memory and CPU readings come from the process or cgroup. The admin UI labels the source and units. Metrics are optional and internal.
+
+
+## Reports and operations
+
+The authenticated analytics summary accepts `days` or a paired `start` and `end` using inclusive UTC dates. Add `host` to restrict the report to a configured public host. `GET /api/v1/analytics/export` downloads the matching versioned JSON report.
+
+Key rotation requires the administrator password and returns a replacement token once. A single SQLite transaction inserts the replacement, revokes the previous key, and records the operation in the audit log.
+
+System diagnostics, audit records, enrollment, domain probes, and backup actions require a browser session. Backup and restore each start with a password-confirmed, single-use grant. A restore upload is a raw SQLite snapshot. After validation the snapshot is staged and takes effect on a controlled restart. See the native [OpenAPI specification](openapi.json) for path, media type, and status details. [Backup and restore](BACKUP_RESTORE.md)

@@ -31,7 +31,8 @@ impl RestorePaths {
     }
 
     fn ensure_can_stage(&self) -> io::Result<()> {
-        if regular_metadata(&self.pending)?.is_some() || regular_metadata(&self.applying)?.is_some() {
+        if regular_metadata(&self.pending)?.is_some() || regular_metadata(&self.applying)?.is_some()
+        {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "a browser restore is already pending",
@@ -80,22 +81,37 @@ impl PendingUpload {
         &self.stage.incoming
     }
 
-    pub(crate) async fn validate(&self) -> Result<(i64, i64), RestoreError> {
+    pub(crate) async fn validate(self) -> Result<ValidatedUpload, RestoreError> {
         let mut incoming = open_regular(self.path())?;
         let metadata = incoming.metadata()?;
         check_snapshot_header(&mut incoming, &metadata)?;
         let (schema, migrations) =
             canonical_schema(&self.stage.directory.join("canonical.sqlite")).await?;
-        validate_snapshot(self.path(), &schema, &migrations).await
+        let (schema_version, created_at) =
+            validate_snapshot(self.path(), &schema, &migrations).await?;
+        Ok(ValidatedUpload {
+            pending: self,
+            schema_version,
+            created_at,
+        })
     }
+}
 
+pub(crate) struct ValidatedUpload {
+    pending: PendingUpload,
+    pub(crate) schema_version: i64,
+    pub(crate) created_at: i64,
+}
+
+impl ValidatedUpload {
     pub(crate) fn publish(self) -> io::Result<()> {
-        self.paths.ensure_can_stage()?;
-        let directory = File::open(parent(&self.paths.pending))?;
-        File::open(self.path())?.sync_all()?;
-        fs::hard_link(self.path(), &self.paths.pending)?;
+        let pending = &self.pending;
+        pending.paths.ensure_can_stage()?;
+        let directory = File::open(parent(&pending.paths.pending))?;
+        File::open(pending.path())?.sync_all()?;
+        fs::hard_link(pending.path(), &pending.paths.pending)?;
         if let Err(error) = directory.sync_all() {
-            let _ = fs::remove_file(&self.paths.pending);
+            let _ = fs::remove_file(&pending.paths.pending);
             let _ = directory.sync_all();
             return Err(error);
         }
@@ -137,7 +153,9 @@ fn read_status(database: &Path) -> io::Result<RestoreStatus> {
         return Ok(RestoreStatus::None);
     }
     let mut result = Vec::with_capacity(16);
-    open_regular(&paths.result)?.take(16).read_to_end(&mut result)?;
+    open_regular(&paths.result)?
+        .take(16)
+        .read_to_end(&mut result)?;
     Ok(match result.as_slice() {
         b"applied\n" => RestoreStatus::Applied,
         b"failed\n" => RestoreStatus::Failed,
@@ -187,16 +205,18 @@ async fn apply_offline(database: &Path, lock: Arc<File>) -> io::Result<Option<bo
     let directory = File::open(parent(&paths.pending))?;
     fs::rename(&paths.pending, &paths.applying)?;
     directory.sync_all()?;
-    let (applied, reporter): (bool, &[u8]) = match restore_snapshot_locked(database, &paths.applying, lock.clone()).await {
-        Ok(_) => {
-            tracing::info!("pending browser restore applied");
-            (true, b"applied\n")
-        }
-        Err(_) => {
-            tracing::warn!("pending browser restore failed");
-            (false, b"failed\n")
-        }
-    };
+    // Keep the exclusive lock through result publication as well as activation.
+    let (applied, reporter): (bool, &[u8]) =
+        match restore_snapshot_locked(database, &paths.applying, Arc::clone(&lock)).await {
+            Ok(_) => {
+                tracing::info!("pending browser restore applied");
+                (true, b"applied\n")
+            }
+            Err(_) => {
+                tracing::warn!("pending browser restore failed");
+                (false, b"failed\n")
+            }
+        };
     if paths.finish(reporter).is_err() {
         tracing::warn!("could not persist pending browser restore result");
     }
@@ -242,8 +262,12 @@ mod tests {
         source.close().await;
         let pending = PendingUpload::reserve(&live).unwrap();
         fs::copy(snapshot, pending.path()).unwrap();
-        pending.validate().await.unwrap();
-        pending.publish().unwrap();
+        pending.validate().await.unwrap().publish().unwrap();
+
+        assert_eq!(
+            PendingUpload::reserve(&live).err().unwrap().kind(),
+            io::ErrorKind::AlreadyExists
+        );
 
         assert_eq!(restore_status(&live), RestoreStatus::PendingRestart);
         let (shared, outcome) = apply_pending_restore(&live).await.unwrap();
@@ -262,9 +286,29 @@ mod tests {
         drop(shared);
         assert_eq!(restore_status(&live), RestoreStatus::Applied);
         let rollbacks = fs::read_dir(work.path()).unwrap().filter(|entry| {
-            entry.as_ref().unwrap().file_name().to_string_lossy().contains(".rollback-")
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".rollback-")
         });
         assert_eq!(rollbacks.count(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_upload_cannot_be_armed() {
+        let work = tempfile::tempdir().unwrap();
+        let live = work.path().join("live.sqlite");
+        database(&live, "original").await.close().await;
+        let pending = PendingUpload::reserve(&live).unwrap();
+        fs::write(pending.path(), b"invalid snapshot").unwrap();
+        let temporary = pending.path().to_owned();
+
+        assert!(pending.validate().await.is_err());
+        assert!(!temporary.exists());
+        assert_eq!(restore_status(&live), RestoreStatus::None);
+        assert_eq!(slug(&live).await, "original");
     }
 
     #[tokio::test]

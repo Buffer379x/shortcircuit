@@ -78,9 +78,15 @@ impl Operations {
         } else {
             AuditOutcome::Failed
         };
-        if audit_event(pool, AuditAction::RestoreApply, AuditActor::System, None, outcome)
-            .await
-            .is_err()
+        if audit_event(
+            pool,
+            AuditAction::RestoreApply,
+            AuditActor::System,
+            None,
+            outcome,
+        )
+        .await
+        .is_err()
         {
             tracing::warn!("could not record startup restore audit event");
         }
@@ -110,9 +116,11 @@ impl Operations {
     }
 
     fn start_transfer(&self) -> Result<OwnedSemaphorePermit, Problem> {
-        self.0.transfer.clone().try_acquire_owned().map_err(|_| {
-            Problem(StatusCode::CONFLICT, "system_operation_in_progress")
-        })
+        self.0
+            .transfer
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Problem(StatusCode::CONFLICT, "system_operation_in_progress"))
     }
 }
 
@@ -172,7 +180,14 @@ async fn authorize_backup(
     Extension(token): Extension<BrowserToken>,
     input: Result<Json<Reauthentication>, JsonRejection>,
 ) -> Result<StatusCode, Problem> {
-    authorize(state, operations, token, json_payload(input)?, Action::Backup).await
+    authorize(
+        state,
+        operations,
+        token,
+        json_payload(input)?,
+        Action::Backup,
+    )
+    .await
 }
 
 async fn authorize_restore(
@@ -181,7 +196,14 @@ async fn authorize_restore(
     Extension(token): Extension<BrowserToken>,
     input: Result<Json<Reauthentication>, JsonRejection>,
 ) -> Result<StatusCode, Problem> {
-    authorize(state, operations, token, json_payload(input)?, Action::Restore).await
+    authorize(
+        state,
+        operations,
+        token,
+        json_payload(input)?,
+        Action::Restore,
+    )
+    .await
 }
 
 async fn authorize(
@@ -197,9 +219,15 @@ async fn authorize(
     };
     match state.auth.reauthenticate(&token.0, &input.password).await {
         Ok(()) => {
-            audit_event(&state.pool, audit_action, AuditActor::Admin, None, AuditOutcome::Success)
-                .await
-                .map_err(|_| Problem::unavailable())?;
+            audit_event(
+                &state.pool,
+                audit_action,
+                AuditActor::Admin,
+                None,
+                AuditOutcome::Success,
+            )
+            .await
+            .map_err(|_| Problem::unavailable())?;
             operations.grant(action, &token.0)?;
             Ok(StatusCode::NO_CONTENT)
         }
@@ -219,10 +247,16 @@ async fn download(
     headers: HeaderMap,
 ) -> Result<Response, Problem> {
     if method != Method::GET {
-        return Err(Problem(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed"));
+        return Err(Problem(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+        ));
     }
     // Native same-origin downloads can stream without holding the full file in browser memory.
-    if headers.get("sec-fetch-site").is_some_and(|site| site != "same-origin") {
+    if headers
+        .get("sec-fetch-site")
+        .is_some_and(|site| site != "same-origin")
+    {
         return Err(Problem(StatusCode::FORBIDDEN, "invalid_origin"));
     }
     let permit = operations.start_transfer()?;
@@ -259,12 +293,17 @@ async fn download(
     let mut response = (
         [
             (header::CONTENT_TYPE, SNAPSHOT_MEDIA_TYPE),
-            (header::CONTENT_DISPOSITION, "attachment; filename=\"shortcircuit-backup.sqlite\""),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"shortcircuit-backup.sqlite\"",
+            ),
         ],
         body,
     )
         .into_response();
-    response.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(length));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_LENGTH, HeaderValue::from(length));
     Ok(response)
 }
 
@@ -311,19 +350,23 @@ async fn upload(
             return Err(error);
         }
     };
-    let (schema_version, created_at) = match pending.validate().await {
-        Ok(details) => details,
+    let validated = match pending.validate().await {
+        Ok(validated) => validated,
         Err(_) => {
             audit(&state, AuditAction::RestoreValidate, AuditOutcome::Rejected).await;
             return Err(Problem::invalid("invalid_snapshot"));
         }
+    };
+    let report = StagedRestore {
+        schema_version: validated.schema_version,
+        created_at: validated.created_at,
     };
     audit(&state, AuditAction::RestoreValidate, AuditOutcome::Success).await;
     // Revoking the session during a slow upload prevents publishing the pending restore.
     state.auth.session(&token.0).await?;
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        pending.publish()
+        validated.publish()
     })
     .await
     .map_err(|_| Problem::unavailable())?;
@@ -333,7 +376,7 @@ async fn upload(
         return Err(problem);
     }
     audit(&state, AuditAction::RestoreStage, AuditOutcome::Success).await;
-    Ok((StatusCode::CREATED, Json(StagedRestore { schema_version, created_at })))
+    Ok((StatusCode::CREATED, Json(report)))
 }
 
 async fn receive_snapshot(
@@ -341,12 +384,18 @@ async fn receive_snapshot(
     headers: &HeaderMap,
     body: Body,
 ) -> Result<PendingUpload, Problem> {
-    if headers.get(header::CONTENT_TYPE).is_none_or(|value| value != SNAPSHOT_MEDIA_TYPE)
+    if headers
+        .get(header::CONTENT_TYPE)
+        .is_none_or(|value| value != SNAPSHOT_MEDIA_TYPE)
         || headers.contains_key(header::CONTENT_ENCODING)
     {
-        return Err(Problem(StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported_snapshot_media_type"));
+        return Err(Problem(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_snapshot_media_type",
+        ));
     }
-    if headers.get(header::CONTENT_LENGTH)
+    if headers
+        .get(header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
         .is_some_and(|size| size > MAX_SNAPSHOT_BYTES)
@@ -358,7 +407,10 @@ async fn receive_snapshot(
         .await
         .map_err(|_| Problem::unavailable())?
         .map_err(stage_problem)?;
-    let mut file = File::options().write(true).open(pending.path()).await
+    let mut file = File::options()
+        .write(true)
+        .open(pending.path())
+        .await
         .map_err(|_| Problem::unavailable())?;
     timeout(TRANSFER_TIMEOUT, write_snapshot(&mut file, body))
         .await
@@ -375,7 +427,9 @@ async fn write_snapshot(file: &mut File, body: Body) -> Result<(), Problem> {
         if size > MAX_SNAPSHOT_BYTES {
             return Err(snapshot_too_large());
         }
-        file.write_all(&bytes).await.map_err(|_| Problem::unavailable())?;
+        file.write_all(&bytes)
+            .await
+            .map_err(|_| Problem::unavailable())?;
     }
     file.flush().await.map_err(|_| Problem::unavailable())
 }
@@ -428,17 +482,17 @@ fn error_outcome(error: &Problem) -> AuditOutcome {
 }
 
 async fn audit(state: &AppState, action: AuditAction, outcome: AuditOutcome) {
-    if audit_event(&state.pool, action, AuditActor::Admin, None, outcome).await.is_err() {
+    if audit_event(&state.pool, action, AuditActor::Admin, None, outcome)
+        .await
+        .is_err()
+    {
         tracing::warn!("could not record system operation audit event");
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use axum::{
-        body::to_bytes,
-        http::Request,
-    };
+    use axum::{body::to_bytes, http::Request};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
@@ -524,7 +578,12 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
-        assert!(response.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().contains("attachment"));
+        assert!(
+            response.headers()[header::CONTENT_DISPOSITION]
+                .to_str()
+                .unwrap()
+                .contains("attachment")
+        );
         let snapshot = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         assert!(snapshot.starts_with(b"SQLite format 3\0"));
         assert_eq!(fs_entries(&database.with_file_name("backups")), 0);
@@ -536,12 +595,14 @@ mod tests {
                 .status(),
             StatusCode::NO_CONTENT
         );
-        let uploaded = send(request(Method::POST, restore_path)
-            .header(header::CONTENT_TYPE, SNAPSHOT_MEDIA_TYPE)
-            .body(Body::from(snapshot))
-            .unwrap())
-            .await
-            .unwrap();
+        let uploaded = send(
+            request(Method::POST, restore_path)
+                .header(header::CONTENT_TYPE, SNAPSHOT_MEDIA_TYPE)
+                .body(Body::from(snapshot))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(uploaded.status(), StatusCode::CREATED);
         assert_eq!(restore_status(&database), RestoreStatus::PendingRestart);
         let diagnostics = send(request(Method::GET, "/api/v1/system").body(Body::empty()).unwrap())

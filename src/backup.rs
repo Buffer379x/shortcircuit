@@ -141,7 +141,9 @@ impl StagedSnapshot {
     fn checked_size(&self) -> io::Result<u64> {
         let bytes = fs::metadata(&self.database)?.len();
         if bytes > MAX_SNAPSHOT_BYTES {
-            return Err(io::Error::other("backup exceeds the supported snapshot size"));
+            return Err(io::Error::other(
+                "backup exceeds the supported snapshot size",
+            ));
         }
         Ok(bytes)
     }

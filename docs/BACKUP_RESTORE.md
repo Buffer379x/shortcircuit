@@ -30,7 +30,6 @@ Set `BACKUP_INTERVAL_HOURS` to an interval from 1 to 720 hours and restart the c
 
 Set `BACKUP_KEEP` to retain 1 to 365 scheduled backups. The default is 7. Verified copies are stored in `/data/backups/scheduled`, and a failed attempt leaves existing backups intact. Retention applies to the scheduled directory. On shutdown the process allows up to five seconds for an in-progress scheduled job to finish after HTTP and analytics wind down.
 
-Browser downloads and browser restore are planned.
 
 ## Consistent Snapshots
 
@@ -54,3 +53,13 @@ A versioned bundle contains a database snapshot, assets required by that snapsho
 5. Before release, simulate process termination at each switch boundary. Test temporary locks, low disk space, missing files, and interrupted uploads.
 
 Measure snapshot consistency, recovery point objective, and recovery time objective in the lab.
+
+## Browser administration
+
+Open **System and backups** and confirm the current administrator password for each download, upload, or discard action. A successful confirmation authorizes one action for that session. A browser download streams a newly verified snapshot. Store it alongside other confidential operational backups.
+
+The restore screen accepts the same standalone SQLite snapshot format as the CLI. The application limits the upload to 8 GiB and validates the snapshot before staging it privately in the app-data directory. Check reverse proxy limits for file size and read duration when using large databases.
+
+A staged restore appears as **Pending restart** while the current database continues serving requests. Discard it before the restart if you selected the wrong file. Restart ShortCircuit during the maintenance window to activate the staged restore. Startup acquires the data-directory lock before changing the active database and retains a rollback copy. Review the status and sign in again after activation. Follow the CLI recovery procedure above if startup or validation fails.
+
+A process interrupted after claiming a restore records **Interrupted** on startup and holds the previous state or the recovery copy for operator inspection. Treat the active generation as uncertain until you verify links and API credentials. Before reopening public traffic, review consumed one-time links, restored credentials, and enrolled link monitoring. Prevent outbound activity during a recovery exercise by starting the test installation with monitoring disabled.

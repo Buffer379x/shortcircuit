@@ -1,14 +1,26 @@
 use axum::{
     Extension, Json, Router,
-    extract::{Path, Query, State, rejection::{JsonRejection, PathRejection, QueryRejection}},
+    extract::{
+        Path, Query, State,
+        rejection::{JsonRejection, PathRejection, QueryRejection},
+    },
     http::StatusCode,
     routing::{get, patch, post},
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{domains, input::normalize_host, monitor::{CheckError, LinkCheck, Monitor}, outbound::{Failure, Probe}};
+use crate::{
+    domains,
+    input::normalize_host,
+    monitor::{CheckError, LinkCheck, Monitor},
+    outbound::{Failure, Probe},
+};
 
-use super::{AppState, Problem, admin_security::{self, AuditAction, AuditActor, AuditOutcome}, json_payload, resource_id};
+use super::{
+    AppState, Problem,
+    admin_security::{self, AuditAction, AuditActor, AuditOutcome},
+    json_payload, resource_id,
+};
 
 pub(super) fn routes(monitor: Monitor) -> Router<AppState> {
     Router::new()
@@ -42,14 +54,21 @@ async fn list(
     if after < 0 {
         return Err(Problem::invalid("invalid_query"));
     }
-    let mut items = monitor.list(&state.pool, after, 51).await.map_err(|_| Problem::unavailable())?;
+    let mut items = monitor
+        .list(&state.pool, after, 51)
+        .await
+        .map_err(|_| Problem::unavailable())?;
     let next_after = if items.len() > 50 {
         items.truncate(50);
         items.last().map(|item| item.id)
     } else {
         None
     };
-    Ok(Json(Report { enabled: monitor.enabled(), items, next_after }))
+    Ok(Json(Report {
+        enabled: monitor.enabled(),
+        items,
+        next_after,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -71,24 +90,49 @@ async fn enroll(
     if input.enabled && !monitor.enabled() {
         return Err(CheckError::Disabled.into());
     }
-    let mut transaction = state.pool.begin_with("BEGIN IMMEDIATE").await.map_err(|_| Problem::unavailable())?;
+    let mut transaction = state
+        .pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|_| Problem::unavailable())?;
     let exists: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM links WHERE id = ?)")
-        .bind(id).fetch_one(&mut *transaction).await.map_err(|_| Problem::unavailable())?;
+        .bind(id)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| Problem::unavailable())?;
     if exists == 0 {
         return Err(CheckError::Missing.into());
     }
     if input.enabled {
-        sqlx::query("INSERT INTO link_monitor(link_id, priority) VALUES (?, ?)
-                     ON CONFLICT(link_id) DO UPDATE SET priority = excluded.priority")
-            .bind(id).bind(input.priority).execute(&mut *transaction).await
-            .map_err(|_| Problem::unavailable())?;
+        sqlx::query(
+            "INSERT INTO link_monitor(link_id, priority) VALUES (?, ?)
+                     ON CONFLICT(link_id) DO UPDATE SET priority = excluded.priority",
+        )
+        .bind(id)
+        .bind(input.priority)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| Problem::unavailable())?;
     } else {
         sqlx::query("DELETE FROM link_monitor WHERE link_id = ?")
-            .bind(id).execute(&mut *transaction).await.map_err(|_| Problem::unavailable())?;
+            .bind(id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| Problem::unavailable())?;
     }
-    admin_security::record_audit(&mut transaction, AuditAction::MonitoringUpdate,
-        AuditActor::Admin, Some(id), AuditOutcome::Success).await.map_err(|_| Problem::unavailable())?;
-    transaction.commit().await.map_err(|_| Problem::unavailable())?;
+    admin_security::record_audit(
+        &mut transaction,
+        AuditAction::MonitoringUpdate,
+        AuditActor::Admin,
+        Some(id),
+        AuditOutcome::Success,
+    )
+    .await
+    .map_err(|_| Problem::unavailable())?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| Problem::unavailable())?;
     monitor.changed();
     Ok(StatusCode::NO_CONTENT)
 }
@@ -121,8 +165,10 @@ async fn domain(
     let input = json_payload(body)?;
     let host = normalize_host(&input.host).ok_or_else(|| Problem::invalid("invalid_host"))?;
     let domain = domains::lookup(&state.pool, &state.hosts, &host, state.config.local_port)
-        .await.map_err(|_| Problem::unavailable())?
-        .filter(|domain| domain.enabled).ok_or(CheckError::Missing)?;
+        .await
+        .map_err(|_| Problem::unavailable())?
+        .filter(|domain| domain.enabled)
+        .ok_or(CheckError::Missing)?;
     let result = monitor.check_domain(&domain.origin).await?;
     let (probe, failure) = match result {
         Ok(probe) => (Some(probe), None),

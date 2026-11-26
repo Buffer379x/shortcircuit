@@ -45,3 +45,9 @@ Link history can retain earlier destinations, including tokens in URL parameters
 ## Local Geo-IP and Integrations
 
 Optional local MaxMind GeoLite lookups use a file supplied by the operator. Under the EULA reviewed for this design, MaxMind requires database updates, deletion of superseded versions within 30 days of a new release, and compliance with the applicable use, disclosure, and attribution terms. Keep GeoLite files out of images, release artifacts, and long-retained ShortCircuit backups. Provide a fresh file separately after a restore. Geolocation values are approximate and have their own retention settings. An explicitly configured download contacts the provider using the operator's account. Visitor lookups stay local. [MaxMind GeoLite EULA](https://www.maxmind.com/en/geolite/eula) · [MaxMind GeoLite Documentation](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data/)
+
+## Report categories
+
+The analytics report groups redirects by coarse browser, operating system, device, and traffic-source categories. Classification uses request headers in memory. Stored data includes the selected labels, not the full user agent. Existing visits without these labels are included as unknown. Bot and inferred human classifications are estimates.
+
+The traffic-source category distinguishes direct visits, referrals, shared-host navigation, detected previews, automated traffic, and unknown entries. Disable referrer collection to suppress referrer values and referral classification. The date filter uses inclusive UTC dates. Tag rankings use the current assignment of tags to links. Report export returns the same aggregate view as the screen in versioned JSON.

@@ -1,7 +1,10 @@
 use std::borrow::Cow;
 
+use serde::{Deserialize, Serialize};
+
 use super::{BODY_LIMIT, EXCHANGE_VERSION, LinkMetadata, MAX_ITEMS};
 
+const MAX_COLUMNS: usize = 64;
 const HEADER: [&str; 8] = [
     "version",
     "host",
@@ -16,31 +19,66 @@ const HEADER: [&str; 8] = [
 #[derive(Debug)]
 pub(super) struct CsvError;
 
-pub(super) fn parse(input: &[u8]) -> Result<Vec<LinkMetadata>, CsvError> {
-    if input.len() > BODY_LIMIT {
-        return Err(CsvError);
-    }
-    let mut reader = csv::Reader::from_reader(input);
-    let header = reader.headers().map_err(|_| CsvError)?;
-    let field_count = header.len();
-    if !header.iter().take(HEADER.len()).eq(HEADER)
-        || !(field_count == HEADER.len()
-            || (field_count == HEADER.len() + 1 && header.get(HEADER.len()) == Some("description")))
-    {
-        return Err(CsvError);
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ImportQuery {
+    pub(super) preview: Option<bool>,
+    host: Option<String>,
+    host_column: Option<usize>,
+    slug_column: Option<usize>,
+    target_column: Option<usize>,
+    title_column: Option<usize>,
+    description_column: Option<usize>,
+    tags_column: Option<usize>,
+    enabled_column: Option<usize>,
+    analytics_enabled_column: Option<usize>,
+}
+
+impl ImportQuery {
+    pub(super) fn is_mapped(&self) -> bool {
+        self.host.is_some() || self.columns().into_iter().any(|column| column.is_some())
     }
 
+    fn columns(&self) -> [Option<usize>; 8] {
+        [
+            self.host_column,
+            self.slug_column,
+            self.target_column,
+            self.title_column,
+            self.description_column,
+            self.tags_column,
+            self.enabled_column,
+            self.analytics_enabled_column,
+        ]
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct Columns {
+    columns: Vec<String>,
+    native: bool,
+}
+
+pub(super) fn inspect(input: &[u8]) -> Result<Columns, CsvError> {
+    let (mut reader, header) = open(input)?;
+    read_records(&mut reader, |_| Ok(()))?;
+    Ok(Columns {
+        native: is_native(&header),
+        columns: header.iter().map(str::to_owned).collect(),
+    })
+}
+
+pub(super) fn parse(input: &[u8]) -> Result<Vec<LinkMetadata>, CsvError> {
+    let (mut reader, header) = open(input)?;
+    if !is_native(&header) {
+        return Err(CsvError);
+    }
     let version = EXCHANGE_VERSION.to_string();
-    let mut items = Vec::new();
-    for record in reader.records() {
-        let record = record.map_err(|_| CsvError)?;
-        if items.len() == MAX_ITEMS
-            || record.len() != field_count
-            || record.get(0) != Some(version.as_str())
-        {
+    read_records(&mut reader, |record| {
+        if record.get(0) != Some(version.as_str()) {
             return Err(CsvError);
         }
-        items.push(LinkMetadata {
+        Ok(LinkMetadata {
             host: unprotect(&record[1]).to_owned(),
             slug: unprotect(&record[2]).to_owned(),
             target: unprotect(&record[3]).to_owned(),
@@ -49,12 +87,97 @@ pub(super) fn parse(input: &[u8]) -> Result<Vec<LinkMetadata>, CsvError> {
             tags: serde_json::from_str(unprotect(&record[5])).map_err(|_| CsvError)?,
             enabled: parse_bool(&record[6])?,
             analytics_enabled: parse_bool(&record[7])?,
-        });
-    }
-    if items.is_empty() {
+        })
+    })
+}
+
+pub(super) fn parse_mapped(
+    input: &[u8],
+    mapping: &ImportQuery,
+) -> Result<Vec<LinkMetadata>, CsvError> {
+    let (mut reader, header) = open(input)?;
+    let (Some(slug), Some(target)) = (mapping.slug_column, mapping.target_column) else {
+        return Err(CsvError);
+    };
+    if mapping.host.is_some() == mapping.host_column.is_some() {
         return Err(CsvError);
     }
-    Ok(items)
+    let mut used = [false; MAX_COLUMNS];
+    for column in mapping.columns().into_iter().flatten() {
+        if column >= header.len() || used[column] {
+            return Err(CsvError);
+        }
+        used[column] = true;
+    }
+    read_records(&mut reader, |record| {
+        let value = |column: Option<usize>| column.and_then(|index| record.get(index)).unwrap_or("");
+        let host = mapping.host.as_deref().unwrap_or_else(|| value(mapping.host_column));
+        let description = value(mapping.description_column).replace("\r\n", "\n");
+        Ok(LinkMetadata {
+            host: host.to_owned(),
+            slug: record[slug].to_owned(),
+            target: record[target].to_owned(),
+            title: value(mapping.title_column).to_owned(),
+            description: description.replace('\r', "\n"),
+            tags: mapped_tags(value(mapping.tags_column))?,
+            enabled: mapped_bool(value(mapping.enabled_column))?,
+            analytics_enabled: mapped_bool(value(mapping.analytics_enabled_column))?,
+        })
+    })
+}
+
+fn open(input: &[u8]) -> Result<(csv::Reader<&[u8]>, csv::StringRecord), CsvError> {
+    if input.len() > BODY_LIMIT {
+        return Err(CsvError);
+    }
+    let mut reader = csv::Reader::from_reader(input);
+    let header = reader.headers().map_err(|_| CsvError)?.clone();
+    if !(2..=MAX_COLUMNS).contains(&header.len()) {
+        return Err(CsvError);
+    }
+    Ok((reader, header))
+}
+
+fn is_native(header: &csv::StringRecord) -> bool {
+    header.iter().take(HEADER.len()).eq(HEADER)
+        && (header.len() == HEADER.len()
+            || (header.len() == HEADER.len() + 1 && header.get(HEADER.len()) == Some("description")))
+}
+
+fn read_records<T>(
+    reader: &mut csv::Reader<&[u8]>,
+    mut parse_record: impl FnMut(csv::StringRecord) -> Result<T, CsvError>,
+) -> Result<Vec<T>, CsvError> {
+    let mut records = Vec::new();
+    for record in reader.records() {
+        if records.len() == MAX_ITEMS {
+            return Err(CsvError);
+        }
+        records.push(parse_record(record.map_err(|_| CsvError)?)?);
+    }
+    if records.is_empty() {
+        return Err(CsvError);
+    }
+    Ok(records)
+}
+
+fn mapped_tags(value: &str) -> Result<Vec<String>, CsvError> {
+    match value.trim() {
+        "" => Ok(Vec::new()),
+        value if value.starts_with('[') => serde_json::from_str(value).map_err(|_| CsvError),
+        value => Ok(value.split(',').map(str::to_owned).collect()),
+    }
+}
+
+fn mapped_bool(value: &str) -> Result<bool, CsvError> {
+    let value = value.trim();
+    if value.is_empty() || value == "0" || value.eq_ignore_ascii_case("false") {
+        Ok(false)
+    } else if value == "1" || value.eq_ignore_ascii_case("true") {
+        Ok(true)
+    } else {
+        Err(CsvError)
+    }
 }
 
 pub(super) fn page(rows: Vec<(i64, LinkMetadata)>) -> Result<(Vec<u8>, Option<i64>), CsvError> {
@@ -327,5 +450,51 @@ mod tests {
         overflow.extend_from_slice(b"1,go.example,extra,https://files.example/,,[],false,false\n");
         assert!(overflow.len() < BODY_LIMIT);
         assert!(parse(&overflow).is_err());
+    }
+
+    #[test]
+    fn mapped_columns_preserve_quoted_data_and_duplicate_labels_by_position() {
+        let input = b"Address,Name,Notes,Name,Labels,Active\r\n\
+            https://files.example/A%2fB?x=A+B,old,\"First, line\r\nSecond line\",docs,\"team, releases\",TRUE\r\n";
+        let columns = inspect(input).unwrap();
+        assert!(!columns.native);
+        assert_eq!(columns.columns[1], columns.columns[3]);
+        let mapping = ImportQuery {
+            target_column: Some(0),
+            slug_column: Some(3),
+            description_column: Some(2),
+            tags_column: Some(4),
+            enabled_column: Some(5),
+            host: Some("go.example".to_owned()),
+            ..Default::default()
+        };
+        let items = parse_mapped(input, &mapping).unwrap();
+        let item = &items[0];
+        assert_eq!(item.host, "go.example");
+        assert_eq!(item.slug, "docs");
+        assert_eq!(item.target, "https://files.example/A%2fB?x=A+B");
+        assert_eq!(item.description, "First, line\nSecond line");
+        assert_eq!(item.tags, ["team", " releases"]);
+        assert!(item.enabled);
+        assert!(!item.analytics_enabled);
+        assert!(
+            parse_mapped(
+                input,
+                &ImportQuery {
+                    slug_column: Some(0),
+                    ..mapping
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn column_inspection_checks_record_sizes_and_utf8() {
+        assert!(inspect(b"Code,Address\n").is_err());
+        assert!(inspect(b"Code,Address\nshort\n").is_err());
+        assert!(inspect(b"Code,Address,Ignored\nshort,https://example.test/,\xff").is_err());
+        let columns = vec!["column"; MAX_COLUMNS + 1].join(",");
+        assert!(inspect(columns.as_bytes()).is_err());
     }
 }

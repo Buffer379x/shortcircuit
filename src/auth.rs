@@ -1027,11 +1027,17 @@ mod tests {
             .await
             .unwrap();
         let old = auth
-            .create_key("reader", vec!["read".into()], Some("go.example".into()), Some(expiry))
+            .create_key(
+                "reader",
+                vec!["read".into()],
+                Some("go.example".into()),
+                Some(expiry),
+            )
             .await
             .unwrap();
         assert!(matches!(
-            auth.rotate_key(old.key.id, &session.token, NEW_PASSWORD).await,
+            auth.rotate_key(old.key.id, &session.token, NEW_PASSWORD)
+                .await,
             Err(AuthError::Unauthorized)
         ));
         assert!(auth.key(&old.token).await.is_ok());

@@ -42,7 +42,7 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Visit details and unmatched requests | Planned | P1 | Show retained details and classify requests to the site root, invalid short links, and other unmatched paths. Prevent sensitive URL values from entering analytics. |
 | Referrers, devices, and bots | Current / planned | P1 | Referrer capture can store hostnames. Coarse traffic classes are reported. Browser, operating system, and device breakdowns and more detailed visit filters are planned. |
 | Privacy settings, retention, and deletion | Current | P1 | Honor global and per-link opt-outs and Do Not Track, with configurable retention and a clear-all action. Analytics collection operates independently of visit limits. |
-| Period comparisons and report controls | Current | P1 | Compare fixed 7-, 30-, 90-, and 365-day views against the preceding UTC period. Custom dates and additional visualization are planned. |
+| Period comparisons and report controls | Current | P1 | Compare a preset or inclusive custom UTC period with its predecessor, filter by host, and download a versioned report. |
 | Geolocation | Optional | P1 | Use an operator-provided local GeoIP dataset. Apply the configured granularity and handle missing data explicitly in both reports and rules. |
 | Multiple segment comparisons | Optional | P2 | Compare selected links, tags, or domains when reporting needs justify the extra views. Use consistent time boundaries. |
 | Advanced visualizations and estimates | Optional | P4 | Evaluate local maps, heatmaps, milestones, and unique visitor estimates against accessibility and privacy requirements. |
@@ -55,10 +55,10 @@ Priority **P0** covers production readiness and safe operation. **P1** covers th
 | Admin API authorization and errors | Current | P0 | Browser sessions and scoped bearer keys authorize the link API. Errors use structured problem responses. The public listener serves redirects independently. |
 | Liveness and readiness | Current | P0 | The admin listener serves minimal status-only probes for process and database readiness. |
 | Interactive setup and authentication | Current | P0 | A short-lived CLI setup token, revocable sessions, CSRF protection, and documented recovery are available. Keep the administration interface behind LAN or VPN access. |
-| Scoped API credentials | Current | P0 | Issue keys with named scopes, optional domain restrictions and expiry, and revocation. The API reveals the secret only at creation. |
-| OpenAPI and API diagnostics | Current | P1 | The implemented API has an OpenAPI 3.1 document served through the admin interface. Request IDs and dedicated credential rotation are planned. |
-| Audit, diagnostics, and abuse controls | Planned | P0 | Add a dedicated audit trail for sensitive operations, rate-limit protected endpoints, and make detailed diagnostics available to authorized administrators. Bulk deletions currently produce a structured count in the application log. |
-| Backup and restore | Current | P0 | The CLI creates a verified local snapshot and restores it offline with an independent rollback copy. An opt-in scheduler retains verified copies. Administration through the browser is planned. |
+| Scoped API credentials | Current | P0 | Issue keys with named scopes, optional domain restrictions and expiry, and revocation. Password-confirmed rotation preserves the key metadata and discloses the new secret once. |
+| OpenAPI and API diagnostics | Current | P1 | The implemented API has an OpenAPI 3.1 document served through the admin interface. A browser-accessible system endpoint reports database and restore state. |
+| Audit, diagnostics, and abuse controls | Current | P0 | The administrative audit log records sensitive account, credential, and recovery actions. Separate configurable budgets limit login, admin API, and protected-link requests. The default client address is the transport peer. |
+| Backup and restore | Current | P0 | The CLI creates and restores verified SQLite snapshots. An opt-in scheduler retains verified copies. The browser can download a snapshot and stage a restore for the next controlled restart. |
 | Native data exchange | Current | P1 | Import and export bounded versioned JSON and CSV pages, preview conflicts, and apply transactionally. Field mapping is planned. |
 | Maintenance CLI and installation | Current | P1 | CLI commands handle setup, recovery, backups, restore, and readiness. The Unraid preview template uses the versioned amd64 non-root image. Production validation on the intended storage and proxy remains open. |
 | Cross-origin admin API access | Optional | P2 | Consider explicit origins for integrations that need browser access. |

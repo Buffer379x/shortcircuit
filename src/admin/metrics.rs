@@ -309,7 +309,11 @@ async fn query_summary(
             .into_iter()
             .map(|(category, total)| RankedCategory { category, total })
             .collect();
-        ranking.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.category.cmp(&b.category)));
+        ranking.sort_by(|a, b| {
+            b.total
+                .cmp(&a.total)
+                .then_with(|| a.category.cmp(&b.category))
+        });
         ranking
     });
 

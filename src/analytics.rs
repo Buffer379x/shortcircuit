@@ -789,7 +789,12 @@ mod tests {
         );
         let client = classify(&headers, "referral");
         assert_eq!(
-            (client.browser, client.os, client.device, client.traffic_source),
+            (
+                client.browser,
+                client.os,
+                client.device,
+                client.traffic_source
+            ),
             ("chrome", "android", "mobile", "referral"),
         );
 

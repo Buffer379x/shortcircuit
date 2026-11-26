@@ -68,7 +68,13 @@ pub fn public_router_on_port(
     public_port: u16,
     analytics: Option<Analytics>,
 ) -> Router {
-    public_router_with_controls(pool, hosts, public_port, analytics, PublicControls::default())
+    public_router_with_controls(
+        pool,
+        hosts,
+        public_port,
+        analytics,
+        PublicControls::default(),
+    )
 }
 
 pub fn public_router_with_controls(
@@ -87,7 +93,10 @@ pub fn public_router_with_controls(
             public_port,
             analytics,
             attempts: Arc::new(AttemptLimiter::with_limit(controls.password)),
-            public_limit: controls.public.map(AttemptLimiter::with_limit).map(Arc::new),
+            public_limit: controls
+                .public
+                .map(AttemptLimiter::with_limit)
+                .map(Arc::new),
             proxies: controls.proxies,
         })
         .layer(middleware::from_fn(response_headers))
@@ -117,7 +126,11 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         && let Some(ip) = peer
         && let Err(status) = limiter.allow(ip)
     {
-        return status.into_response();
+        return if status == StatusCode::TOO_MANY_REQUESTS {
+            (status, [(header::RETRY_AFTER, "60")]).into_response()
+        } else {
+            status.into_response()
+        };
     }
     let (parts, body) = request.into_parts();
     let uri = &parts.uri;
@@ -210,7 +223,7 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
                 .path_and_query()
                 .map_or(uri.path(), |path| path.as_str()),
         };
-        if let Some(peer) = peer {
+        if post && let Some(peer) = peer {
             result = match confirm(&state, action, lookup, &parts.headers, body, peer).await {
                 Ok(confirmed) => confirmed,
                 Err(StatusCode::UNAUTHORIZED) => return action.page(lookup.language, true),

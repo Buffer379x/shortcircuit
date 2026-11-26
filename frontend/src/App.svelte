@@ -16,10 +16,12 @@
   import Preferences from './Preferences.svelte';
   import Monitoring from './Monitoring.svelte';
   import Operations from './Operations.svelte';
+  import Overview from './Overview.svelte';
   import Audit from './Audit.svelte';
 
-  type Page = 'links' | 'exchange' | 'analytics' | 'domains' | 'tags' | 'apiKeys' | 'account' | 'operations' | 'monitoring' | 'auditLog';
+  type Page = 'overview' | 'links' | 'exchange' | 'analytics' | 'domains' | 'tags' | 'apiKeys' | 'account' | 'operations' | 'monitoring' | 'auditLog';
   const pages = [
+    { id: 'overview', icon: 'analytics' },
     { id: 'links', icon: 'link' },
     { id: 'analytics', icon: 'analytics' },
     { id: 'monitoring', icon: 'rule' },
@@ -38,7 +40,8 @@
   const t = $derived(messages[language]);
   let user = $state<User | null>(null);
   let setup = $state(false);
-  let page = $state<Page>('links');
+  let page = $state<Page>('overview');
+  let createRequested = $state(false);
   let main = $state<HTMLElement>();
   let sessionLoading = $state(true);
   let sessionError = $state<keyof Messages | null>(null);
@@ -121,7 +124,8 @@
   function resetSession(notice: keyof Messages | null = null) {
     user = null;
     domains = null;
-    page = 'links';
+    page = 'overview';
+    createRequested = false;
     authNotice = notice;
     signOutError = null;
   }
@@ -150,6 +154,11 @@
     } finally {
       signingOut = false;
     }
+  }
+
+  function createFromOverview() {
+    createRequested = true;
+    void navigate('links');
   }
 
   async function navigate(destination: Page) {
@@ -196,7 +205,9 @@
       </header>
       <main id="main-content" class="main" tabindex="-1" bind:this={main}>
         {#if signOutError}<p class="notice error page-notice" role="alert">{t[signOutError]}</p>{/if}
-        {#if page === 'account'}
+        {#if page === 'overview'}
+          <Overview {t} {language} {api} oncreate={createFromOverview} onnavigate={navigate} />
+        {:else if page === 'account'}
           <Account {t} {user} {api} onPasswordChanged={passwordChanged} />
         {:else if page === 'operations'}
           <Operations {language} {api} />
@@ -205,14 +216,14 @@
         {:else if page === 'monitoring'}
           <Monitoring {t} {language} {api} {domains} />
         {:else if page === 'exchange'}
-          <Exchange {t} {api} {language} />
+          <Exchange {t} {api} {language} {domains} />
         {:else if page === 'analytics'}
           <Analytics {t} {api} {language} />
         {:else if page === 'domains' || page === 'tags'}
           {#key page}<Catalog {t} {api} {language} kind={page} onDomainSaved={loadDomains} />{/key}
         {:else if domains}
           {#if page === 'links'}
-            <Links {t} {api} {domains} {language} />
+            <Links {t} {api} {domains} {language} bind:createRequested />
           {:else}
             <Keys {t} {api} {domains} {language} />
           {/if}

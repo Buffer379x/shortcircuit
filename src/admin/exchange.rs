@@ -11,7 +11,7 @@ use axum::{
     },
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
@@ -116,6 +116,7 @@ pub(super) fn routes(pool: SqlitePool, hosts: PublicHosts) -> Router {
             "/api/v1/exchange/links.csv",
             get(export_csv).post(import_csv),
         )
+        .route("/api/v1/exchange/links.csv/columns", post(csv_columns))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .with_state(ExchangeState { pool, hosts })
 }
@@ -244,19 +245,40 @@ async fn export_csv(
     Ok(response)
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CsvImportQuery {
-    preview: Option<bool>,
+async fn csv_columns(
+    headers: HeaderMap,
+    bytes: Result<Bytes, BytesRejection>,
+) -> Result<Json<csv_format::Columns>, Problem> {
+    let bytes = csv_body(&headers, bytes)?;
+    csv_format::inspect(&bytes).map(Json).map_err(|_| invalid())
 }
 
 async fn import_csv(
     State(state): State<ExchangeState>,
     headers: HeaderMap,
-    query: Result<Query<CsvImportQuery>, QueryRejection>,
+    query: Result<Query<csv_format::ImportQuery>, QueryRejection>,
     bytes: Result<Bytes, BytesRejection>,
 ) -> Result<(StatusCode, Json<ImportReport>), Problem> {
     let Query(query) = query.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
+    let bytes = csv_body(&headers, bytes)?;
+    let items = if query.is_mapped() {
+        csv_format::parse_mapped(&bytes, &query)
+    } else {
+        csv_format::parse(&bytes)
+    }
+    .map_err(|_| invalid())?;
+    apply_import(
+        &state,
+        ImportPage {
+            version: EXCHANGE_VERSION,
+            preview: query.preview.unwrap_or(true),
+            items,
+        },
+    )
+    .await
+}
+
+fn csv_body(headers: &HeaderMap, bytes: Result<Bytes, BytesRejection>) -> Result<Bytes, Problem> {
     let csv_body = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -268,17 +290,7 @@ async fn import_csv(
             "invalid_exchange",
         ));
     }
-    let bytes = bytes.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
-    let items = csv_format::parse(&bytes).map_err(|_| invalid())?;
-    apply_import(
-        &state,
-        ImportPage {
-            version: EXCHANGE_VERSION,
-            preview: query.preview.unwrap_or(true),
-            items,
-        },
-    )
-    .await
+    bytes.map_err(|error| Problem(error.status(), "invalid_exchange"))
 }
 
 #[derive(Deserialize)]
@@ -566,6 +578,19 @@ mod tests {
         .await
     }
 
+    async fn post_csv(router: &Router, path: &str, data: &'static str) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .header(header::CONTENT_TYPE, "text/csv")
+            .body(Body::from(data))
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 200_000).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
     async fn link_count(pool: &SqlitePool) -> i64 {
         sqlx::query_scalar("SELECT COUNT(*) FROM links")
             .fetch_one(pool)
@@ -609,6 +634,39 @@ mod tests {
                            "analytics_enabled": false}]
             })
         );
+    }
+
+    #[tokio::test]
+    async fn mapped_csv_uses_the_same_preview_and_apply_pipeline() {
+        let (_directory, pool, router) = app().await;
+        let file = "Code,Address,Notes,Site\n\
+            Case/One,https://example.test/A%2fB,\"A comma, and\r\na second line\",GO.example.\n";
+        let (status, columns) =
+            post_csv(&router, "/api/v1/exchange/links.csv/columns", file).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            columns,
+            json!({"columns": ["Code", "Address", "Notes", "Site"], "native": false})
+        );
+        let path = "/api/v1/exchange/links.csv?slug_column=0&target_column=1&description_column=2&host_column=3";
+        let (status, preview) = post_csv(&router, path, file).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(preview["preview"], true);
+        assert_eq!(preview["items"][0]["status"], "create");
+        assert_eq!(link_count(&pool).await, 0);
+        let (status, applied) = post_csv(&router, &format!("{path}&preview=false"), file).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(applied["applied"], true);
+        let (description, enabled, analytics): (String, bool, bool) = sqlx::query_as(
+            "SELECT description, enabled, analytics_enabled FROM links
+             WHERE host = 'go.example' AND slug = 'Case/One'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(description, "A comma, and\na second line");
+        assert!(!enabled);
+        assert!(!analytics);
     }
 
     #[tokio::test]

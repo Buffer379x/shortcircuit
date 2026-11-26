@@ -19,12 +19,17 @@ mod redirect;
 mod restore;
 mod store;
 
-pub use admin::{AdminConfig, Operations, admin_router, admin_router_with_analytics, admin_router_with_services};
+pub use admin::{
+    AdminConfig, Operations, admin_router, admin_router_with_analytics, admin_router_with_services,
+};
 pub use analytics::Analytics;
 pub use auth::{Auth, BootstrapKind};
 pub use backup::create_snapshot;
 pub use backup_schedule::BackupSchedule;
-pub use http::{PublicControls, public_router, public_router_on_port, public_router_with_analytics, public_router_with_controls};
+pub use http::{
+    PublicControls, public_router, public_router_on_port, public_router_with_analytics,
+    public_router_with_controls,
+};
 pub use input::PublicHosts;
 pub use monitor::Monitor;
 pub use rate_limit::{RateLimit, TrustedProxies};

@@ -158,7 +158,7 @@
 </script>
 
 <div class="page-head">
-  <h1>{text.title}</h1>
+  <h1>{t.operations}</h1>
   <button class="button" type="button" onclick={load} disabled={refreshing || !!busy}>{text.refresh}</button>
 </div>
 

@@ -10,9 +10,10 @@ use std::{
 };
 
 use shortcircuit::{
-    AdminConfig, Analytics, Auth, BackupSchedule, BootstrapKind, Monitor, Operations, PublicControls, PublicHosts, RateLimit, TrustedProxies,
-    admin_router_with_services, apply_pending_restore, create_snapshot, data_lock, open_database,
-    public_router_with_controls, restore_snapshot,
+    AdminConfig, Analytics, Auth, BackupSchedule, BootstrapKind, Monitor, Operations,
+    PublicControls, PublicHosts, RateLimit, TrustedProxies, admin_router_with_services,
+    apply_pending_restore, create_snapshot, data_lock, open_database, public_router_with_controls,
+    restore_snapshot,
 };
 use tokio::{net::TcpListener, sync::watch, time};
 use tracing_subscriber::EnvFilter;
@@ -95,11 +96,18 @@ fn rate_limit(variable: &str) -> Result<Option<RateLimit>, AppError> {
     if limit.is_empty() {
         return Ok(None);
     }
-    let invalid = || io::Error::other(format!("invalid {variable}, expected per-peer,global per minute"));
+    let invalid = || {
+        io::Error::other(format!(
+            "invalid {variable}, expected per-peer,global per minute"
+        ))
+    };
     let (per_peer, global) = limit.split_once(',').ok_or_else(invalid)?;
-    RateLimit::new(per_peer.parse().map_err(|_| invalid())?, global.parse().map_err(|_| invalid())?)
-        .map(Some)
-        .map_err(|reason| io::Error::other(format!("invalid {variable}: {reason}")).into())
+    RateLimit::new(
+        per_peer.parse().map_err(|_| invalid())?,
+        global.parse().map_err(|_| invalid())?,
+    )
+    .map(Some)
+    .map_err(|reason| io::Error::other(format!("invalid {variable}: {reason}")).into())
 }
 
 fn monitor_settings() -> Result<Monitor, AppError> {
@@ -108,15 +116,40 @@ fn monitor_settings() -> Result<Monitor, AppError> {
         "false" => false,
         _ => return Err(io::Error::other("MONITOR_ENABLED must be true or false").into()),
     };
-    let webhook = setting("MONITOR_WEBHOOK_URL", "")?;
-    Monitor::new(enabled, (!webhook.is_empty()).then_some(webhook))
+    let hourly = |name, default| -> Result<u16, AppError> {
+        setting(name, default)?
+            .parse::<u16>()
+            .map_err(|_| io::Error::other(format!("invalid {name}")).into())
+    };
+    let interval_hours = hourly("MONITOR_INTERVAL_HOURS", "24")?;
+    let priority_default = interval_hours.min(6).to_string();
+    let priority_hours = hourly("MONITOR_PRIORITY_HOURS", &priority_default)?;
+    let configured = setting("MONITOR_WEBHOOK_URL", "")?;
+    let webhook = if let Some(file) = env::var_os("MONITOR_WEBHOOK_URL_FILE") {
+        if !configured.is_empty() {
+            return Err(io::Error::other("set only one monitor webhook URL configuration").into());
+        }
+        let source = std::fs::File::open(file)
+            .map_err(|_| io::Error::other("could not open MONITOR_WEBHOOK_URL_FILE"))?;
+        let mut value = String::new();
+        source.take(4098).read_to_string(&mut value)
+            .map_err(|_| io::Error::other("could not read MONITOR_WEBHOOK_URL_FILE"))?;
+        if value.len() > 4097 || value.trim_end_matches(['\r', '\n']).is_empty() {
+            return Err(io::Error::other("invalid MONITOR_WEBHOOK_URL_FILE").into());
+        }
+        Some(value.trim_end_matches(['\r', '\n']).to_owned())
+    } else {
+        (!configured.is_empty()).then_some(configured)
+    };
+    Monitor::new(enabled, webhook, interval_hours, priority_hours)
         .map_err(|error| io::Error::other(error).into())
 }
 
 async fn serve() -> Result<(), AppError> {
     let backup_schedule = backup_schedule()?;
     let monitor = monitor_settings()?;
-    let proxies = TrustedProxies::parse(&setting("TRUSTED_PROXIES", "")?).map_err(io::Error::other)?;
+    let proxies =
+        TrustedProxies::parse(&setting("TRUSTED_PROXIES", "")?).map_err(io::Error::other)?;
     let public_controls = PublicControls {
         proxies: proxies.clone(),
         password: rate_limit("RATE_LIMIT_PUBLIC_PASSWORD")?.unwrap_or(RateLimit::PASSWORD_DEFAULT),

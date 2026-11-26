@@ -177,6 +177,6 @@
 
 <style>
   section { margin-top: var(--space-4, 16px); }
-  .monitor-item { padding-block: .75rem; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+  .monitor-item { padding-block: .75rem; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
   .monitor-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 </style>

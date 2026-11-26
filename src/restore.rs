@@ -265,7 +265,9 @@ impl Drop for RollbackFile {
 
 fn check_snapshot_header(file: &mut File, metadata: &Metadata) -> io::Result<()> {
     if !(100..=MAX_SNAPSHOT_BYTES).contains(&metadata.len()) {
-        return Err(invalid_data("snapshot size is outside the supported bounds"));
+        return Err(invalid_data(
+            "snapshot size is outside the supported bounds",
+        ));
     }
     let mut header = [0; 100];
     file.read_exact(&mut header)?;

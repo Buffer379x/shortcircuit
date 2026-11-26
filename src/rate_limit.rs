@@ -91,7 +91,8 @@ impl TrustedProxies {
 
 impl Network {
     fn parse(value: &str) -> Result<Self, &'static str> {
-        let error = "TRUSTED_PROXIES must contain IP addresses or CIDR networks with nonzero prefixes";
+        let error =
+            "TRUSTED_PROXIES must contain IP addresses or CIDR networks with nonzero prefixes";
         let (address, prefix) = match value.split_once('/') {
             Some((address, prefix)) => (address, Some(prefix.parse::<u32>().map_err(|_| error)?)),
             None => (value, None),

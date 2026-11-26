@@ -562,12 +562,56 @@ async function verify() {
     assert.equal(robots.status(), 200);
     assert.equal(await robots.text(), 'User-agent: *\nDisallow: /\n');
 
+    {
+      await page.getByRole('button', { name: 'Link monitor', exact: true }).click();
+      await page.getByText('Monitoring is off.', { exact: false }).waitFor();
+      const monitor = await page.request.get(admin + '/api/v1/monitoring');
+      assert.deepEqual(await monitor.json(), { enabled: false, items: [], next_after: null });
+      assert.equal((await page.request.get(publicOrigin + '/api/v1/monitoring')).status(), 404);
+
+      await page.getByRole('button', { name: 'System and backups', exact: true }).click();
+      await page.getByRole('heading', { name: 'Diagnostics', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Download backup', exact: true }).click();
+      const operations = page.getByRole('dialog', { name: 'Download backup', exact: true });
+      await operations.getByLabel('Current password', { exact: true }).fill('ci-browser-password-example');
+      const backupEvent = page.waitForEvent('download');
+      await operations.getByRole('button', { name: 'Download backup', exact: true }).click();
+      const backupFile = await backupEvent;
+      assert.equal(backupFile.suggestedFilename(), 'shortcircuit-backup.sqlite');
+      const backupBytes = await readFile(await backupFile.path());
+      assert.equal(backupBytes.subarray(0, 16).toString(), 'SQLite format 3\0');
+
+      await page.getByLabel('SQLite backup file', { exact: true }).setInputFiles({
+        name: backupFile.suggestedFilename(), mimeType: 'application/octet-stream', buffer: backupBytes,
+      });
+      await page.getByRole('button', { name: 'Validate and stage restore', exact: true }).click();
+      const restore = page.getByRole('dialog', { name: 'Validate and stage restore', exact: true });
+      await restore.getByLabel('Current password', { exact: true }).fill('ci-browser-password-example');
+      await restore.getByRole('checkbox').check();
+      await restore.getByRole('button', { name: 'Validate and stage restore', exact: true }).click();
+      await page.getByText('Pending restart', { exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Discard pending restore', exact: true }).click();
+      const discard = page.getByRole('dialog', { name: 'Discard pending restore', exact: true });
+      await discard.getByLabel('Current password', { exact: true }).fill('ci-browser-password-example');
+      await discard.getByRole('button', { name: 'Discard pending restore', exact: true }).click();
+      await page.getByText('Pending restore discarded.', { exact: true }).waitFor();
+
+      await page.getByRole('button', { name: 'Audit log', exact: true }).click();
+      await page.getByText('Restore discarded', { exact: true }).waitFor();
+      await page.getByText('Backup download', { exact: true }).waitFor();
+      for (const [width, height] of [[1920,1080], [1440,900], [1280,800], [1024,768], [768,1024], [390,844], [320,568]]) {
+        await page.setViewportSize({ width, height });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      }
+      await page.setViewportSize({ width: 1360, height: 900 });
+    }
+
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);
     assert.equal((await page.request.get(admin + '/api/v1/openapi.json')).status(), 401);
     assert.deepEqual(errors, []);
-    console.log('Browser smoke passed: setup, create link, styled QR preview, templates, download and validation, link history, visit limits, protected links, analytics controls, JSON and CSV exchange, URL tools, catalog search, bulk actions, mobile layout and sign-out.');
+    console.log('Browser smoke passed: setup, create link, styled QR preview, templates, download and validation, link history, visit limits, protected links, analytics controls, JSON and CSV exchange, URL tools, catalog search, bulk actions, monitoring defaults, browser backup and staged restore, auditing, responsive layout and sign-out.');
   } finally {
     await browser.close();
   }

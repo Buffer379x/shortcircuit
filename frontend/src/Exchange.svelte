@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { ApiError } from './api';
-  import type { Api } from './api';
+  import type { Api, Domains } from './api';
   import { problemMessage } from './format';
   import Icon from './Icon.svelte';
   import type { Language, Messages } from './i18n';
@@ -41,7 +41,21 @@
     items: { host: string; slug: string; status: 'create' | 'unchanged' | 'conflict' }[];
   }
 
-  let { t, language, api }: { t: Messages; language: Language; api: Api } = $props();
+  const csvFields = ['target', 'slug', 'host', 'title', 'description', 'tags', 'enabled', 'analytics_enabled'] as const;
+  type CsvField = typeof csvFields[number];
+  type ColumnSelection = Partial<Record<CsvField, number>>;
+  const fieldLabels: Record<CsvField, keyof Messages> = {
+    target: 'target',
+    slug: 'exchangeCsvSlug',
+    host: 'domain',
+    title: 'title',
+    description: 'linkDescription',
+    tags: 'tags',
+    enabled: 'enabled',
+    analytics_enabled: 'analyticsEnabled',
+  };
+
+  let { t, language, api, domains }: { t: Messages; language: Language; api: Api; domains: Domains | null } = $props();
 
   const path = '/exchange/links';
   const maxFileBytes = 32 * 1024;
@@ -57,14 +71,24 @@
 
   let fileInput: HTMLInputElement;
   let importFile = $state.raw<ExchangeFile | Blob | null>(null);
+  let csvColumns = $state.raw<string[] | null>(null);
+  let csvSelection = $state<ColumnSelection>({});
+  let chosenHost = $state('');
   let report = $state.raw<ImportReport | null>(null);
   let reading = $state(false);
   let submitting = $state<'preview' | 'apply' | null>(null);
   let importError = $state<keyof Messages | null>(null);
 
   const busy = $derived(reading || submitting !== null);
+  const selectedColumns = $derived(Object.values(csvSelection));
+  const importHost = $derived(chosenHost || (domains?.hosts.length === 1 ? domains.hosts[0] : ''));
+  const mappingReady = $derived(
+    csvColumns === null || (csvSelection.target !== undefined && csvSelection.slug !== undefined
+      && (csvSelection.host !== undefined || !!importHost)
+      && new Set(selectedColumns).size === selectedColumns.length),
+  );
   const canApply = $derived(
-    importFile !== null && report?.preview === true && !report.applied
+    importFile !== null && mappingReady && report?.preview === true && !report.applied
       && (importFile instanceof Blob || report.items.length === importFile.items.length)
       && report.items.every(({ status }) => status === 'create' || status === 'unchanged'),
   );
@@ -130,7 +154,14 @@
   function resetImport() {
     if (busy) return;
     fileInput.value = '';
+    clearImport();
+  }
+
+  function clearImport() {
     importFile = null;
+    csvColumns = null;
+    csvSelection = {};
+    chosenHost = '';
     report = null;
     importError = null;
   }
@@ -138,21 +169,30 @@
   async function chooseFile(event: Event & { currentTarget: HTMLInputElement }) {
     if (busy) return;
     const file = event.currentTarget.files?.[0];
-    importFile = null;
-    report = null;
-    importError = null;
+    clearImport();
     if (!file) return;
     if (file.size > maxFileBytes) {
       importError = 'exchangeFileTooLarge';
       return;
     }
 
-    if (file.name.toLowerCase().endsWith('.csv')) {
-      importFile = new Blob([file], { type: 'text/csv' });
-      return;
-    }
+    const isCsv = file.name.toLowerCase().endsWith('.csv');
     reading = true;
     try {
+      if (isCsv) {
+        const csv = new Blob([file], { type: 'text/csv' });
+        const header = await api<{ columns: string[]; native: boolean }>(path + '.csv/columns', 'POST', csv);
+        if (!header.native) {
+          csvColumns = header.columns;
+          const names = header.columns.map((name) => name.trim().toLowerCase());
+          for (const field of csvFields) {
+            const index = names.indexOf(field);
+            if (index !== -1 && index === names.lastIndexOf(field)) csvSelection[field] = index;
+          }
+        }
+        importFile = csv;
+        return;
+      }
       const data: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer()));
       if (!isExchangeFile(data)) {
         importError = 'exchangeInvalidFile';
@@ -164,11 +204,43 @@
         return;
       }
       importFile = data;
-    } catch {
-      importError = 'exchangeInvalidJson';
+    } catch (error) {
+      if (!isCsv) importError = 'exchangeInvalidJson';
+      else if (error instanceof ApiError && error.code === 'invalid_exchange') importError = 'exchangeInvalidCsv';
+      else importError = problemMessage(error);
     } finally {
       reading = false;
     }
+  }
+
+  function changeColumn(field: CsvField, value: string) {
+    if (value === '') delete csvSelection[field];
+    else csvSelection[field] = Number(value);
+    report = null;
+    importError = null;
+  }
+
+  function changeImportHost(event: Event & { currentTarget: HTMLSelectElement }) {
+    chosenHost = event.currentTarget.value;
+    report = null;
+    importError = null;
+  }
+
+  function csvQuery(preview: boolean): string {
+    const query = new URLSearchParams({ preview: String(preview) });
+    if (csvColumns !== null) {
+      for (const field of csvFields) {
+        const column = csvSelection[field];
+        if (column !== undefined) query.set(field + '_column', String(column));
+      }
+      if (csvSelection.host === undefined && importHost) query.set('host', importHost);
+    }
+    return query.toString();
+  }
+
+  function columnName(value: string, index: number): string {
+    const label = Array.from(value.trim().replace(/\s+/gu, ' ')).slice(0, 120).join('');
+    return number.format(index + 1) + '. ' + (label || t.exchangeCsvUnnamedColumn);
   }
 
   function isExchangeFile(value: unknown): value is ExchangeFile {
@@ -192,20 +264,20 @@
   }
 
   async function submitImport(preview: boolean) {
-    if (!importFile || busy || (!preview && !canApply)) return;
+    if (!importFile || busy || !mappingReady || (!preview && !canApply)) return;
     submitting = preview ? 'preview' : 'apply';
     importError = null;
     report = null;
     try {
       report = importFile instanceof Blob
-        ? await api<ImportReport>(path + '.csv?preview=' + preview, 'POST', importFile)
+        ? await api<ImportReport>(path + '.csv?' + csvQuery(preview), 'POST', importFile)
         : await api<ImportReport>(path, 'POST', {
           version: importFile.version, preview, items: importFile.items,
         });
     } catch (error) {
-      importError = !preview && error instanceof ApiError && error.status === 409
-        ? 'exchangeApplyConflict'
-        : problemMessage(error);
+      if (!preview && error instanceof ApiError && error.status === 409) importError = 'exchangeApplyConflict';
+      else if (csvColumns !== null && error instanceof ApiError && error.code === 'invalid_exchange') importError = 'exchangeCsvInvalidRows';
+      else importError = problemMessage(error);
     } finally {
       submitting = null;
     }
@@ -262,8 +334,39 @@
       <input type="file" accept=".json,.csv,application/json,text/csv" bind:this={fileInput} onchange={chooseFile} disabled={busy} aria-labelledby={panelId + '-file-label'} aria-describedby={panelId + '-file-hint'} />
       <small id={panelId + '-file-hint'}>{t.exchangeFileHint}</small>
     </label>
+    {#if csvColumns}
+      <fieldset class="csv-mapping stack" disabled={busy}>
+        <legend>{t.exchangeCsvMapping}</legend>
+        <p class="muted">{t.exchangeCsvMappingHint}</p>
+        <div class="csv-columns">
+          {#each csvFields as field (field)}
+            <label class="field">
+              <span>{t[fieldLabels[field]]}</span>
+              <select value={csvSelection[field]?.toString() ?? ''} onchange={(event) => changeColumn(field, event.currentTarget.value)}>
+                <option value="">{field === 'target' || field === 'slug' ? t.exchangeCsvSelectColumn : t.exchangeCsvSkipColumn}</option>
+                {#each csvColumns as column, index (index)}
+                  <option value={String(index)} disabled={selectedColumns.includes(index) && csvSelection[field] !== index}>{columnName(column, index)}</option>
+                {/each}
+              </select>
+            </label>
+          {/each}
+          {#if csvSelection.host === undefined}
+            <label class="field">
+              <span>{t.exchangeCsvImportDomain}</span>
+              <select value={importHost} onchange={changeImportHost}>
+                <option value="">{t.exchangeCsvChooseDomain}</option>
+                {#each domains?.hosts ?? [] as host (host)}
+                  <option value={host}>{host}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
+        </div>
+        <small class="muted">{t.exchangeCsvDefaults}</small>
+      </fieldset>
+    {/if}
     <div class="exchange-actions row">
-      <button class="button" type="button" disabled={busy || !importFile} onclick={() => submitImport(true)}>{t.exchangePreview}</button>
+      <button class="button" type="button" disabled={busy || !importFile || !mappingReady} onclick={() => submitImport(true)}>{t.exchangePreview}</button>
       <button class="button primary" type="button" disabled={busy || !canApply} onclick={() => submitImport(false)}>{t.exchangeApply}</button>
       <button class="button" type="button" disabled={busy || (!importFile && !importError)} onclick={resetImport}>{t.exchangeReset}</button>
     </div>
@@ -296,6 +399,10 @@
 
 <style>
   .exchange-actions { flex-wrap: wrap; }
+
+  .csv-mapping { min-inline-size: 0; border: 1px solid var(--line); border-radius: 8px; }
+  .csv-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: 12px; }
+  .csv-columns .field { min-inline-size: 0; }
 
   .page-details {
     display: flex;

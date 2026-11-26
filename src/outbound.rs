@@ -94,7 +94,10 @@ async fn follow(mut url: Url, mut method: Method) -> Result<(Response, u8), Fail
         let client = pinned_client(&url).await?;
         let mut response = send(&client, method.clone(), url.clone()).await?;
         if method == Method::HEAD
-            && matches!(response.status(), StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED)
+            && matches!(
+                response.status(),
+                StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED
+            )
         {
             method = Method::GET;
             drop(response);
@@ -201,13 +204,20 @@ async fn pinned_client(url: &Url) -> Result<Client, Failure> {
         .connect_timeout(Duration::from_secs(2))
         .read_timeout(Duration::from_secs(3))
         .user_agent("ShortCircuit link monitor")
-        .default_headers([(ACCEPT_ENCODING, "identity".parse().expect("valid encoding"))].into_iter().collect());
+        .default_headers(
+            [(ACCEPT_ENCODING, "identity".parse().expect("valid encoding"))]
+                .into_iter()
+                .collect(),
+        );
     match url.host().ok_or(Failure::Blocked)? {
         Host::Ipv4(ip) if public_ipv4(ip) => {}
         Host::Ipv6(ip) if public_ipv6(ip) => {}
         Host::Domain(name) => {
             let canonical = name.trim_end_matches('.');
-            if !canonical.contains('.') || canonical.ends_with(".localhost") || canonical.ends_with(".local") {
+            if !canonical.contains('.')
+                || canonical.ends_with(".localhost")
+                || canonical.ends_with(".local")
+            {
                 return Err(Failure::Blocked);
             }
             let absolute = format!("{canonical}.");
@@ -222,7 +232,9 @@ async fn pinned_client(url: &Url) -> Result<Client, Failure> {
     builder.build().map_err(|_| Failure::Protocol)
 }
 
-fn approved_addresses(values: impl Iterator<Item = SocketAddr>) -> Result<Vec<SocketAddr>, Failure> {
+fn approved_addresses(
+    values: impl Iterator<Item = SocketAddr>,
+) -> Result<Vec<SocketAddr>, Failure> {
     let mut addresses = Vec::new();
     for address in values {
         let public = match address.ip() {
@@ -270,9 +282,13 @@ fn public_ipv6(ip: Ipv6Addr) -> bool {
     }
     let [first, second, third, ..] = ip.segments();
     (0x2000..=0x3fff).contains(&first)
-        && !matches!((first, second, third),
-            (0x2001, 0..=0x01ff | 0x0db8, _) | (0x2002, _, _) | (0x3fff, 0..=0x0fff, _)
-            | (0x2620, 0x004f, 0x8000))
+        && !matches!(
+            (first, second, third),
+            (0x2001, 0..=0x01ff | 0x0db8, _)
+                | (0x2002, _, _)
+                | (0x3fff, 0..=0x0fff, _)
+                | (0x2620, 0x004f, 0x8000)
+        )
 }
 
 #[cfg(test)]
@@ -283,9 +299,22 @@ mod tests {
     fn blocks_mixed_answers_and_nonpublic_literal_addresses() {
         let approved: SocketAddr = "93.184.216.34:443".parse().unwrap();
         let refused: SocketAddr = "127.0.0.1:443".parse().unwrap();
-        assert_eq!(approved_addresses([approved, refused].into_iter()), Err(Failure::Blocked));
-        assert_eq!(approved_addresses([approved, approved].into_iter()).unwrap(), [approved]);
-        for input in ["::1", "::ffff:127.0.0.1", "fe80::1", "fc00::1", "2001:db8::1", "3fff::f"] {
+        assert_eq!(
+            approved_addresses([approved, refused].into_iter()),
+            Err(Failure::Blocked)
+        );
+        assert_eq!(
+            approved_addresses([approved, approved].into_iter()).unwrap(),
+            [approved]
+        );
+        for input in [
+            "::1",
+            "::ffff:127.0.0.1",
+            "fe80::1",
+            "fc00::1",
+            "2001:db8::1",
+            "3fff::f",
+        ] {
             assert!(!public_ipv6(input.parse().unwrap()), "{input}");
         }
         assert!(public_ipv6("2606:4700::1111".parse().unwrap()));
@@ -302,7 +331,9 @@ mod tests {
             assert_eq!(parse_url(target), Err(Failure::Blocked), "{target}");
         }
         assert_eq!(
-            parse_url("https://example.test/?a=1#part").unwrap().as_str(),
+            parse_url("https://example.test/?a=1#part")
+                .unwrap()
+                .as_str(),
             "https://example.test/?a=1"
         );
     }

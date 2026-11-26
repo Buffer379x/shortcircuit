@@ -16,7 +16,9 @@
   import TagMark from './TagMark.svelte';
   import type { Language, Messages } from './i18n';
 
-  let { t, language, api, domains }: { t: Messages; language: Language; api: Api; domains: Domains } = $props();
+  let { t, language, api, domains, createRequested = $bindable(false) }: {
+    t: Messages; language: Language; api: Api; domains: Domains; createRequested?: boolean;
+  } = $props();
 
   const maxSelection = 50;
   let items = $state<CatalogLink[]>([]);
@@ -101,6 +103,13 @@
   onMount(() => {
     void loadTags();
     return () => tagRequests.abort();
+  });
+
+  $effect(() => {
+    if (createRequested) {
+      createRequested = false;
+      openForm();
+    }
   });
 
   $effect(() => {

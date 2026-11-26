@@ -1489,9 +1489,15 @@ async fn rotation_requires_browser_reauthentication_and_replaces_the_key_once() 
     let old_bearer = format!("Bearer {}", old_key.token);
     for headers in [&[][..], &[("authorization", old_bearer.as_str())][..]] {
         assert_eq!(
-            request(&app.admin, Method::POST, &path, headers, Some(password.clone()))
-                .await
-                .status(),
+            request(
+                &app.admin,
+                Method::POST,
+                &path,
+                headers,
+                Some(password.clone())
+            )
+            .await
+            .status(),
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(
@@ -1526,7 +1532,13 @@ async fn rotation_requires_browser_reauthentication_and_replaces_the_key_once() 
     assert!(app.auth.key(&old_key.token).await.is_ok());
 
     let (first, second) = tokio::join!(
-        request(&app.admin, Method::POST, &path, &browser, Some(password.clone())),
+        request(
+            &app.admin,
+            Method::POST,
+            &path,
+            &browser,
+            Some(password.clone())
+        ),
         request(&app.admin, Method::POST, &path, &browser, Some(password)),
     );
     let (created, absent) = if first.status() == StatusCode::CREATED {
@@ -1576,12 +1588,14 @@ async fn rotation_requires_browser_reauthentication_and_replaces_the_key_once() 
 
 #[tokio::test]
 async fn admin_api_limit_covers_session_status_and_supplies_retry_after() {
-    let config = AdminConfig::new(ORIGIN, 8080).unwrap().with_access_controls(
-        TrustedProxies::default(),
-        RateLimit::PASSWORD_DEFAULT,
-        RateLimit::SENSITIVE_DEFAULT,
-        RateLimit::new(1, 10).unwrap(),
-    );
+    let config = AdminConfig::new(ORIGIN, 8080)
+        .unwrap()
+        .with_access_controls(
+            TrustedProxies::default(),
+            RateLimit::PASSWORD_DEFAULT,
+            RateLimit::SENSITIVE_DEFAULT,
+            RateLimit::new(1, 10).unwrap(),
+        );
     let app = App::start_configured(config).await;
     let path = "/api/v1/auth/session";
     let first = request(&app.admin, Method::GET, path, &[], None).await;

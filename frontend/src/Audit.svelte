@@ -75,7 +75,7 @@
 {/if}
 
 <style>
-  .audit-event { display: grid; gap: .35rem; padding-block: .65rem; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+  .audit-event { display: grid; gap: .35rem; padding-block: .65rem; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
   .audit-event:last-child { border-bottom: 0; }
   @media (min-width: 720px) { .audit-event { grid-template-columns: 1.2fr 1fr 1fr; } }
 </style>

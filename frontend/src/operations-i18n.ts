@@ -1,7 +1,6 @@
 import type { Language } from './i18n';
 
 const en = {
-  title: 'System',
   refresh: 'Refresh diagnostics',
   diagnostics: 'Diagnostics',
   version: 'ShortCircuit version',
@@ -11,7 +10,7 @@ const en = {
   schedule: 'Scheduled backups',
   restoreStatus: 'Restore status',
   restoreNone: 'No pending restore',
-  restorePending: 'Waiting for restart',
+  restorePending: 'Pending restart',
   restoreApplied: 'Last staged restore applied',
   restoreFailed: 'Last staged restore failed',
   restoreInterrupted: 'Last staged restore was interrupted. Check the active data before attempting another restore.',
@@ -44,7 +43,6 @@ const en = {
 };
 
 const de: typeof en = {
-  title: 'System',
   refresh: 'Diagnose aktualisieren',
   diagnostics: 'Diagnose',
   version: 'ShortCircuit-Version',
@@ -54,7 +52,7 @@ const de: typeof en = {
   schedule: 'Geplante Sicherungen',
   restoreStatus: 'Wiederherstellungsstatus',
   restoreNone: 'Keine ausstehende Wiederherstellung',
-  restorePending: 'Wartet auf Neustart',
+  restorePending: 'Neustart ausstehend',
   restoreApplied: 'Letzte vorbereitete Wiederherstellung angewendet',
   restoreFailed: 'Letzte vorbereitete Wiederherstellung fehlgeschlagen',
   restoreInterrupted: 'Die letzte vorbereitete Wiederherstellung wurde unterbrochen. Prüfe die aktuellen Daten vor einem weiteren Versuch.',

@@ -208,7 +208,11 @@ async fn analytics_respects_request_and_link_privacy() {
         "start=9999-12-31&end=9999-12-31",
     ] {
         let response = send(&admin, "GET", &format!("{summary}?{query}"), &authenticated).await;
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY, "{query}");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{query}"
+        );
         let body = to_bytes(response.into_body(), 10_000).await.unwrap();
         let problem: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(problem["code"], "invalid_period", "{query}");

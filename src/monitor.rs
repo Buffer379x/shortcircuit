@@ -2,7 +2,10 @@ use std::{sync::Arc, time::Duration};
 
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tokio::{sync::{Notify, Semaphore, watch}, time};
+use tokio::{
+    sync::{Notify, Semaphore, watch},
+    time,
+};
 use url::Url;
 
 use crate::outbound::{Failure, Fetcher, Probe};
@@ -16,6 +19,8 @@ pub struct Monitor(Arc<Service>);
 struct Service {
     enabled: bool,
     webhook: Option<String>,
+    interval: i64,
+    priority_interval: i64,
     fetcher: Fetcher,
     job: Semaphore,
     changed: Notify,
@@ -61,9 +66,18 @@ impl From<sqlx::Error> for CheckError {
 }
 
 impl Monitor {
-    pub fn new(enabled: bool, webhook: Option<String>) -> Result<Self, &'static str> {
+    pub fn new(
+        enabled: bool,
+        webhook: Option<String>,
+        interval_hours: u16,
+        priority_hours: u16,
+    ) -> Result<Self, &'static str> {
+        if !(1..=720).contains(&interval_hours) || !(1..=interval_hours).contains(&priority_hours) {
+            return Err("monitor intervals require 1 <= priority hours <= regular hours <= 720");
+        }
         if let Some(target) = &webhook
-            && (!enabled || !crate::input::valid_target(target)
+            && (!enabled
+                || !crate::input::valid_target(target)
                 || !Url::parse(target).is_ok_and(|url| url.scheme() == "https"))
         {
             return Err("MONITOR_WEBHOOK_URL requires enabled monitoring and a valid HTTPS URL");
@@ -71,6 +85,8 @@ impl Monitor {
         Ok(Self(Arc::new(Service {
             enabled,
             webhook,
+            interval: i64::from(interval_hours) * 3_600,
+            priority_interval: i64::from(priority_hours) * 3_600,
             fetcher: Fetcher::new(),
             job: Semaphore::new(1),
             changed: Notify::new(),
@@ -86,7 +102,10 @@ impl Monitor {
     }
 
     pub(crate) async fn list(
-        &self, pool: &SqlitePool, after: i64, limit: i64,
+        &self,
+        pool: &SqlitePool,
+        after: i64,
+        limit: i64,
     ) -> Result<Vec<LinkCheck>, sqlx::Error> {
         sqlx::query_as(
             "SELECT l.id, l.host, l.slug, m.priority, m.status, m.last_checked,
@@ -125,14 +144,16 @@ impl Monitor {
             });
         };
         self.process_rows(pool, &[&row]).await?;
-        self.list(pool, id - 1, 1).await?
+        self.list(pool, id - 1, 1)
+            .await?
             .into_iter()
             .find(|check| check.id == id)
             .ok_or(CheckError::Missing)
     }
 
     pub(crate) async fn check_domain(
-        &self, origin: &str,
+        &self,
+        origin: &str,
     ) -> Result<Result<Probe, Failure>, CheckError> {
         let _job = self.try_job()?;
         Ok(self.0.fetcher.probe(origin).await)
@@ -189,7 +210,10 @@ impl Monitor {
         .fetch_all(pool)
         .await?;
         if let Some(first) = due.first() {
-            let matching: Vec<_> = due.iter().filter(|row| row.target == first.target).collect();
+            let matching: Vec<_> = due
+                .iter()
+                .filter(|row| row.target == first.target)
+                .collect();
             self.process_rows(pool, &matching).await?;
             return Ok(Duration::from_secs(3));
         }
@@ -203,7 +227,9 @@ impl Monitor {
         )
         .fetch_one(pool)
         .await?;
-        Ok(Duration::from_secs(next.unwrap_or(900).clamp(15, 900) as u64))
+        Ok(Duration::from_secs(
+            next.unwrap_or(900).clamp(15, 900) as u64
+        ))
     }
 
     async fn process_rows(&self, pool: &SqlitePool, rows: &[&DueLink]) -> Result<(), sqlx::Error> {
@@ -211,10 +237,10 @@ impl Monitor {
         let mut changes = Vec::new();
         for row in rows {
             let (status, failures, failure) = classify(&result, row.consecutive_failures);
-            let (http_status, elapsed_ms, redirects) = result.as_ref().map_or(
-                (None, None, None),
-                |p| (Some(p.status), Some(p.elapsed_ms as i64), Some(p.redirects)),
-            );
+            let (http_status, elapsed_ms, redirects) =
+                result.as_ref().map_or((None, None, None), |p| {
+                    (Some(p.status), Some(p.elapsed_ms as i64), Some(p.redirects))
+                });
             let updated = sqlx::query(
                 "UPDATE link_monitor SET status = ?, last_checked = unixepoch(),
                     next_check = unixepoch() + ?, http_status = ?, elapsed_ms = ?, redirects = ?,
@@ -228,7 +254,7 @@ impl Monitor {
                  )",
             )
             .bind(status)
-            .bind(interval(row, failures, status))
+            .bind(self.interval(row, failures, status))
             .bind(http_status)
             .bind(elapsed_ms)
             .bind(redirects)
@@ -250,11 +276,29 @@ impl Monitor {
         Ok(())
     }
 
+    fn interval(&self, row: &DueLink, failures: u8, status: &str) -> i64 {
+        let jitter = row.id % 301;
+        let seconds = if status == "unknown" {
+            self.0.interval
+        } else if failures > 0 {
+            1_800 * (1 << (failures - 1).min(5))
+        } else if row.priority {
+            self.0.priority_interval
+        } else {
+            self.0.interval
+        };
+        seconds + jitter
+    }
+
     async fn notify(&self, changes: Vec<serde_json::Value>) {
-        let Some(webhook) = &self.0.webhook else { return; };
+        let Some(webhook) = &self.0.webhook else {
+            return;
+        };
         let payload = serde_json::json!({
             "version": 1, "event": "link_health_changed", "changes": changes
-        }).to_string().into_bytes();
+        })
+        .to_string()
+        .into_bytes();
         for attempt in 0..2 {
             if attempt > 0 {
                 time::sleep(Duration::from_secs(2)).await;
@@ -275,11 +319,22 @@ fn changed_health(previous: &str, current: &str) -> bool {
         && (failed(current) || (failed(previous) && matches!(current, "healthy" | "redirected")))
 }
 
-fn classify(result: &Result<Probe, Failure>, previous: u8) -> (&'static str, u8, Option<&'static str>) {
+fn classify(
+    result: &Result<Probe, Failure>,
+    previous: u8,
+) -> (&'static str, u8, Option<&'static str>) {
     let failures = previous.saturating_add(1);
     match result {
         Ok(probe) => match probe.status {
-            200..=299 => (if probe.redirects == 0 { "healthy" } else { "redirected" }, 0, None),
+            200..=299 => (
+                if probe.redirects == 0 {
+                    "healthy"
+                } else {
+                    "redirected"
+                },
+                0,
+                None,
+            ),
             401 | 403 | 429 => ("warning", failures, None),
             404 | 410 if failures >= 2 => ("broken", failures, None),
             500..=599 if failures >= 2 => ("unreachable", failures, None),
@@ -304,21 +359,16 @@ fn classify(result: &Result<Probe, Failure>, previous: u8) -> (&'static str, u8,
     }
 }
 
-fn interval(row: &DueLink, failures: u8, status: &str) -> i64 {
-    let jitter = row.id % 301;
-    let seconds = if status == "unknown" { 86_400 }
-        else if failures > 0 { 1_800 * (1 << (failures - 1).min(5)) }
-        else if row.priority { 21_600 }
-        else { 86_400 };
-    seconds + jitter
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn response(status: u16, redirects: u8) -> Result<Probe, Failure> {
-        Ok(Probe {status, redirects, elapsed_ms: 10})
+        Ok(Probe {
+            status,
+            redirects,
+            elapsed_ms: 10,
+        })
     }
 
     #[test]
