@@ -97,6 +97,114 @@ async fn response_body(response: Response) -> Value {
     serde_json::from_slice(&to_bytes(response.into_body(), 64_000).await.unwrap()).unwrap()
 }
 
+const QR_TEMPLATES: &str = "/api/v1/qr/templates";
+
+fn qr_template(name: &str) -> Value {
+    json!({
+        "name": name, "size": 512, "foreground": "002040", "background": "FFF4E0",
+        "transparent": true, "correction": "H", "quiet_zone": 8,
+    })
+}
+
+#[tokio::test]
+async fn qr_templates_are_private_and_validate_styles_before_storing_them() {
+    let app = App::start().await;
+    let (cookie, csrf) = app.setup().await;
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    assert_eq!(
+        request(&app.public, Method::GET, QR_TEMPLATES, &[("host", "go.example")], None)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request(&app.admin, Method::GET, QR_TEMPLATES, &[], None).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(&app.admin, Method::POST, QR_TEMPLATES, &headers[..2], Some(qr_template("Print")))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+
+    for (field, value, code) in [
+        ("name", json!("  "), "invalid_qr_template_name"),
+        ("foreground", json!("eeeeee"), "invalid_qr_contrast"),
+        ("background", json!("invalid"), "invalid_qr_color"),
+        ("quiet_zone", json!(3), "invalid_qr_quiet_zone"),
+        ("correction", json!("X"), "invalid_qr_correction"),
+        ("size", json!(127), "invalid_qr_size"),
+    ] {
+        let mut input = qr_template("Print");
+        input[field] = value;
+        let response = request(&app.admin, Method::POST, QR_TEMPLATES, &headers, Some(input)).await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response_body(response).await["code"], code);
+    }
+
+    let created = request(
+        &app.admin, Method::POST, QR_TEMPLATES, &headers, Some(qr_template("  Druckvorlage Ä  ")),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = response_body(created).await;
+    let mut expected = qr_template("Druckvorlage Ä");
+    expected["id"] = created["id"].clone();
+    expected["background"] = json!("fff4e0");
+    assert_eq!(created, expected);
+    let duplicate = request(
+        &app.admin, Method::POST, QR_TEMPLATES, &headers, Some(qr_template("Druckvorlage Ä")),
+    )
+    .await;
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+    assert_eq!(response_body(duplicate).await["code"], "qr_template_exists");
+
+    let listed = request(&app.admin, Method::GET, QR_TEMPLATES, &headers[..1], None).await;
+    assert_eq!(response_body(listed).await, json!({"items":[expected]}));
+
+    let id = created["id"].as_i64().unwrap();
+    let resource = format!("{QR_TEMPLATES}/{id}");
+    for status in [StatusCode::NO_CONTENT, StatusCode::NOT_FOUND] {
+        assert_eq!(request(&app.admin, Method::DELETE, &resource, &headers, None).await.status(), status);
+    }
+}
+
+#[tokio::test]
+async fn simultaneous_qr_template_writes_respect_the_installation_limit() {
+    let app = App::start().await;
+    let (cookie, csrf) = app.setup().await;
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    sqlx::query(
+        "WITH RECURSIVE counter(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM counter WHERE n < 31)
+         INSERT INTO qr_templates (name, size, foreground, background, transparent, correction, quiet_zone)
+         SELECT 'Template ' || n, 512, '000000', 'ffffff', 0, 'M', 4 FROM counter",
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let (first, second) = tokio::join!(
+        request(&app.admin, Method::POST, QR_TEMPLATES, &headers, Some(qr_template("Print"))),
+        request(&app.admin, Method::POST, QR_TEMPLATES, &headers, Some(qr_template("Screen"))),
+    );
+    let (created, limited) = if first.status() == StatusCode::CREATED {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(limited.status(), StatusCode::CONFLICT);
+    assert_eq!(response_body(limited).await["code"], "qr_template_limit");
+}
+
 #[tokio::test]
 async fn first_run_is_hidden_on_public_and_rejects_other_origins_and_hosts() {
     let app = App::start().await;
