@@ -208,6 +208,63 @@ async fn qr_style_rejects_unsafe_colors_and_undersized_margins() {
 }
 
 #[tokio::test]
+async fn logo_upload_is_bounded_and_requires_a_browser_session() {
+    let _guard = QR_TESTS.lock().await;
+    let app = Fixture::start().await;
+    let id = app.create("go.example", "Logo", "https://example.test", &[]).await;
+    let path = format!("/api/v1/links/{id}/qr/logo");
+    let upload = |suffix: &str, content_type: &str, session: bool, csrf: bool, bytes: Vec<u8>| {
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("{path}{suffix}"))
+            .header(header::HOST, ADMIN)
+            .header(header::ORIGIN, ORIGIN)
+            .header(header::CONTENT_TYPE, content_type);
+        if session {
+            request = request.header(header::COOKIE, &app.cookie);
+        }
+        if csrf {
+            request = request.header("x-csrf-token", &app.csrf);
+        }
+        app.admin.clone().oneshot(request.body(Body::from(bytes)).unwrap())
+    };
+    for (reply, status, code) in [
+        (upload("", "image/png", false, false, vec![]).await.unwrap(), StatusCode::UNAUTHORIZED, "authentication_required"),
+        (upload("", "image/png", true, false, vec![]).await.unwrap(), StatusCode::FORBIDDEN, "invalid_csrf"),
+        (upload("", "image/svg+xml", true, true, vec![]).await.unwrap(), StatusCode::UNSUPPORTED_MEDIA_TYPE, "invalid_qr_logo_type"),
+        (upload("", "image/png", true, true, vec![0; 256 * 1024 + 1]).await.unwrap(), StatusCode::PAYLOAD_TOO_LARGE, "invalid_qr_logo_body"),
+        (upload("", "image/png", true, true, vec![0; 40 * 1024]).await.unwrap(), StatusCode::UNPROCESSABLE_ENTITY, "invalid_qr_logo"),
+    ] {
+        assert_eq!(reply.status(), status);
+        assert_eq!(read_json(reply).await["code"], code);
+    }
+
+    let mut image = Vec::new();
+    let mut encoder = png::Encoder::new(&mut image, 16, 8);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&[33, 102, 163].repeat(128)).unwrap();
+    writer.finish().unwrap();
+    let response = upload("?format=png&transparent=true", "image/png", true, true, image.clone()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "image/png");
+    let png = to_bytes(response.into_body(), 1_000_000).await.unwrap();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+    let mut decoded = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut decoded).unwrap();
+    assert_eq!(info.color_type, png::ColorType::Rgba);
+    assert_eq!(decoded[3], 0);
+    let center = (192 * 384 + 192) * 4;
+    assert_eq!(&decoded[center..center + 4], &[33, 102, 163, 255]);
+
+    let invalid_correction = upload("?correction=M", "image/png", true, true, image).await.unwrap();
+    assert_eq!(invalid_correction.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(read_json(invalid_correction).await["code"], "invalid_qr_logo_correction");
+}
+
+#[tokio::test]
 async fn link_history_restores_exact_metadata_and_can_be_cleared() {
     let app = Fixture::start().await;
     let target = "https://example.test/one?Signature=A%2fb#Original";

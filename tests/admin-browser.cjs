@@ -150,6 +150,24 @@ async function verify() {
     await qr.getByText('Template deleted.', { exact: true }).waitFor();
     assert.equal(await template.getByRole('option', { name: 'Print style' }).count(), 0);
     assert.equal(await styledPreview.getAttribute('src'), previewUrl.pathname + previewUrl.search);
+    await qr.getByRole('combobox', { name: 'Error correction', exact: true }).selectOption('Q');
+    const logo = qr.getByLabel('PNG logo', { exact: true });
+    await logo.setInputFiles({
+      name: 'fixture.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAYAAADwdn+XAAAAFUlEQVR4nGNQTFv8nxLMMGrAcDAAAC6wFJBQyGgvAAAAAElFTkSuQmCC', 'base64'),
+    });
+    const logoPreview = qr.locator('canvas[role="img"]:visible');
+    await logoPreview.waitFor();
+    assert.equal(await qr.getByRole('combobox', { name: 'Error correction', exact: true }).inputValue(), 'H');
+    assert.deepEqual(await logoPreview.evaluate(canvas =>
+      [...canvas.getContext('2d').getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data]), [33, 102, 163, 255]);
+    const logoDownload = page.waitForEvent('download');
+    await qr.getByRole('button', { name: 'Download SVG', exact: true }).click();
+    assert.match(await readFile(await (await logoDownload).path(), 'utf8'), /fill="#2166a3"/);
+    await qr.getByRole('button', { name: 'Remove logo', exact: true }).click();
+    await logoPreview.waitFor({ state: 'hidden' });
+    await styledPreview.waitFor({ state: 'visible' });
     await qr.getByRole('button', { name: 'Close', exact: true }).click();
     await page.setViewportSize({ width: 1360, height: 900 });
 
