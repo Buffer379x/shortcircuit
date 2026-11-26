@@ -4,7 +4,9 @@
 
 The container workflow measures one existing short link in its synthetic test data after the restore exercise. It warms the app with 64 requests, then times 1,024 requests across eight HTTP/1.1 connections. The runner records architecture, virtual CPU count, time percentiles, throughput, errors, and a Docker memory snapshot. Analytics uses its default settings. This loopback result describes the test runner and the small fixture.
 
-The measurement helper checks the response and never follows its destination. Repeat `--slug` to visit multiple known short paths. Use a separate client on the target LAN for the production benchmark. Record the CPU model, database size, number of links, active features, and proxy layout alongside the result.
+The first verified run used an x86-64 runner with four virtual CPUs. All 1,024 requests returned the expected status. P50, P95, and P99 were 0.702 ms, 1.184 ms, and 1.829 ms. Docker reported 4.453 MiB immediately after traffic. Record idle process RSS and memory accounting separately on the target hardware. [Verified CI measurement](https://github.com/Buffer379x/shortcircuit/actions/runs/45766453106)
+
+The measurement ends at the short link response. Repeat `--slug` to visit multiple known short paths. Use a separate client on the target LAN for the production benchmark. Record the CPU model, database size, number of links, active features, and proxy layout alongside the result.
 
 ```sh
 python3 tests/redirect_benchmark.py --base-url http://localhost:8080 --slug example --warmup 200 --requests 10000 --concurrency 16

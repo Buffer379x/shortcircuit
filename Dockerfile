@@ -10,6 +10,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock rust-toolchain.toml build.rs ./
 COPY src/ ./src/
 COPY migrations/ ./migrations/
+COPY docs/openapi.json ./docs/openapi.json
 COPY assets/branding/favicon.svg ./assets/branding/favicon.svg
 COPY --from=frontend /web/dist ./frontend/dist
 RUN cargo build --locked --release

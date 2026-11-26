@@ -1,5 +1,7 @@
 # API Contract
 
+The [OpenAPI document](openapi.json) covers the implemented administrative endpoints. Signed-in administrators can also download it from `/api/v1/openapi.json`. The build checks the set of paths and methods against the application. [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.0.html)
+
 ## Current API
 
 The admin listener exposes `GET /healthz` and `GET /readyz` with status-only responses. The admin interface and its API use the configured `ADMIN_ORIGIN`. The public listener resolves enabled short links.
@@ -63,7 +65,7 @@ Query and extra path forwarding are both off by default. Query forwarding append
 
 ## Planned API
 
-The JSON API under `/api/v1` runs on the admin listener. Same-origin browser clients use revocable sessions with CSRF protection for unsafe methods. Automation uses bearer keys with explicitly assigned permissions. A trusted reverse proxy terminates TLS. The versioned contract generates OpenAPI, and CI checks for unintended breaking changes. Swagger UI is an optional authenticated static interface.
+The JSON API under `/api/v1` runs on the admin listener. Same-origin browser clients use revocable sessions with CSRF protection for unsafe methods. Automation uses bearer keys with explicitly assigned permissions. A trusted reverse proxy terminates TLS. New operations require updates to the versioned contract. Swagger UI is an optional authenticated static interface.
 
 | Resource | Planned operations |
 |---|---|

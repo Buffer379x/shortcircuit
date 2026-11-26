@@ -79,6 +79,7 @@ fn build_admin_router(
             access::entry_access,
         ));
     let session_routes = Router::new()
+        .route("/api/v1/openapi.json", get(openapi))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/password", post(change_password))
         .route("/api/v1/keys", get(list_keys).post(create_key))
@@ -128,6 +129,13 @@ fn build_admin_router(
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(middleware::from_fn(assets::security_headers))
         .layer(middleware::from_fn(response_headers))
+}
+
+async fn openapi() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        include_str!("../docs/openapi.json"),
+    )
 }
 
 async fn readiness(pool: SqlitePool) -> StatusCode {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Document the implemented management endpoints in OpenAPI 3.1 and serve the specification on the admin listener.
+
 - Add native CSV exchange with bounded pages, spreadsheet-oriented escaping, and transactional import.
 
 - Add optional scheduled backups with independent retention.

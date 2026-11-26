@@ -53,6 +53,13 @@ async function verify() {
       .getByText('Test guide', { exact: true }).waitFor();
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
 
+    const specResponse = await page.request.get(admin + '/api/v1/openapi.json');
+    assert.equal(specResponse.status(), 200);
+    const spec = await specResponse.json();
+    assert.equal(spec.openapi, '3.1.0');
+    assert.ok(spec.paths['/api/v1/links/{id}/policy'].patch);
+    assert.equal((await page.request.get(publicOrigin + '/api/v1/openapi.json')).status(), 404);
+
     const redirect = await page.request.get(publicOrigin + '/test/guide', { maxRedirects: 0 });
     assert.equal(redirect.status(), 302);
     assert.equal(redirect.headers().location, target);
@@ -141,6 +148,7 @@ async function verify() {
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     assert.equal((await page.request.get(admin + '/api/v1/links')).status(), 401);
+    assert.equal((await page.request.get(admin + '/api/v1/openapi.json')).status(), 401);
     assert.deepEqual(errors, []);
     console.log('Browser smoke passed: setup, create link, QR, visit limits, analytics controls, JSON and CSV exchange, URL tools, mobile layout and sign-out.');
   } finally {
