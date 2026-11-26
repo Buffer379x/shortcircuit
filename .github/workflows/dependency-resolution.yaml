@@ -1,0 +1,23 @@
+name: Resolve development dependencies
+on:
+  push:
+    branches: [development-dependency-resolution]
+permissions:
+  contents: read
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.100.0 --profile minimal
+      - run: cargo metadata --format-version=1 --filter-platform x86_64-unknown-linux-gnu > /dev/null
+      - run: |
+          echo SHORTCIRCUIT_LOCK_BEGIN
+          cat Cargo.lock
+          echo SHORTCIRCUIT_LOCK_END
+          sha256sum Cargo.lock
