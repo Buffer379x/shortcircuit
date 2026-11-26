@@ -4,7 +4,11 @@ use axum::{
     routing::post,
 };
 
-use crate::{domains, input::{normalize_host, tag_name}, store::catalog::{self, Search, SearchPage}};
+use crate::{
+    domains,
+    input::{normalize_host, tag_name},
+    store::catalog::{self, Search, SearchPage},
+};
 
 use super::{AppState, Problem, json_payload};
 
@@ -28,11 +32,17 @@ async fn search_links(
         filter.host = Some(normalize_host(host).ok_or_else(|| Problem::invalid("invalid_host"))?);
     }
     if let Some(tag) = &filter.tag {
-        filter.tag = Some(tag_name(tag).ok_or_else(|| Problem::invalid("invalid_tags"))?.to_owned());
+        filter.tag = Some(
+            tag_name(tag)
+                .ok_or_else(|| Problem::invalid("invalid_tags"))?
+                .to_owned(),
+        );
     }
-    if filter.after.as_ref().is_some_and(|after| {
-        after.id <= 0 || after.key.len() > 4096 || after.sort != filter.sort
-    }) {
+    if filter
+        .after
+        .as_ref()
+        .is_some_and(|after| after.id <= 0 || after.key.len() > 4096 || after.sort != filter.sort)
+    {
         return Err(Problem::invalid("invalid_link_cursor"));
     }
     let hosts: Vec<String> = domains::list(&state.pool, &state.hosts, state.config.local_port)

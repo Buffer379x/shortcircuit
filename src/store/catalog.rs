@@ -168,15 +168,24 @@ pub(crate) async fn search(
         .await?;
     let has_more = items.len() > PAGE_SIZE;
     items.truncate(PAGE_SIZE);
-    let positions: HashMap<_, _> = items.iter().enumerate().map(|(pos, link)| (link.id, pos)).collect();
+    let positions: HashMap<_, _> = items
+        .iter()
+        .enumerate()
+        .map(|(pos, link)| (link.id, pos))
+        .collect();
     if !positions.is_empty() {
-        let mut tags = QueryBuilder::<Sqlite>::new("SELECT link_id, tag FROM link_tags WHERE link_id IN (");
+        let mut tags =
+            QueryBuilder::<Sqlite>::new("SELECT link_id, tag FROM link_tags WHERE link_id IN (");
         let mut ids = tags.separated(", ");
         for id in positions.keys() {
             ids.push_bind(id);
         }
         ids.push_unseparated(") ORDER BY link_id, tag");
-        for (id, tag) in tags.build_query_as::<(i64, String)>().fetch_all(&mut *transaction).await? {
+        for (id, tag) in tags
+            .build_query_as::<(i64, String)>()
+            .fetch_all(&mut *transaction)
+            .await?
+        {
             items[positions[&id]].tags.push(tag);
         }
     }
