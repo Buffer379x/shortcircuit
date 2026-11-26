@@ -31,6 +31,12 @@ struct Settings {
     transparent: bool,
     correction: String,
     quiet_zone: i64,
+    #[serde(default = "default_frame")]
+    frame: String,
+}
+
+fn default_frame() -> String {
+    "none".to_owned()
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -48,7 +54,7 @@ struct TemplateList {
 
 async fn list(State(state): State<AppState>) -> Result<Json<TemplateList>, Problem> {
     let items = sqlx::query_as(
-        "SELECT id, name, size, foreground, background, transparent, correction, quiet_zone
+        "SELECT id, name, size, foreground, background, transparent, correction, quiet_zone, frame
          FROM qr_templates ORDER BY id DESC LIMIT ?",
     )
     .bind(MAX_TEMPLATES)
@@ -74,13 +80,14 @@ async fn create(
         transparent: Some(input.transparent),
         correction: Some(input.correction.clone()),
         quiet_zone: Some(input.quiet_zone),
+        frame: Some(input.frame.clone()),
     };
     options.validate()?;
     // SQLite serializes writes. Checking capacity in the insert prevents concurrent overflow.
     let template = sqlx::query_as(
-        "INSERT INTO qr_templates (name, size, foreground, background, transparent, correction, quiet_zone)
-         SELECT ?, ?, ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM qr_templates) < ?
-         RETURNING id, name, size, foreground, background, transparent, correction, quiet_zone",
+        "INSERT INTO qr_templates (name, size, foreground, background, transparent, correction, quiet_zone, frame)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM qr_templates) < ?
+         RETURNING id, name, size, foreground, background, transparent, correction, quiet_zone, frame",
     )
     .bind(name)
     .bind(input.size)
@@ -89,6 +96,7 @@ async fn create(
     .bind(input.transparent)
     .bind(input.correction)
     .bind(input.quiet_zone)
+    .bind(input.frame)
     .bind(MAX_TEMPLATES)
     .fetch_optional(&state.pool)
     .await
@@ -129,6 +137,7 @@ impl From<QrError> for Problem {
             QrError::InvalidContrast => Self::invalid("invalid_qr_contrast"),
             QrError::InvalidCorrection => Self::invalid("invalid_qr_correction"),
             QrError::InvalidQuietZone => Self::invalid("invalid_qr_quiet_zone"),
+            QrError::InvalidFrame => Self::invalid("invalid_qr_frame"),
             QrError::DataTooLong => Self::invalid("qr_data_too_long"),
             QrError::EncodingFailed => Self::unavailable(),
         }

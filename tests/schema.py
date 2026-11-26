@@ -7,6 +7,7 @@ MIGRATION = pathlib.Path(__file__).resolve().parents[1] / "migrations" / "0001_l
 PROTECTION = MIGRATION.with_name("0007_link_protection.sql")
 HISTORY = MIGRATION.with_name("0008_link_history.sql")
 QR_TEMPLATES = MIGRATION.with_name("0009_qr_templates.sql")
+QR_FRAMES = MIGRATION.with_name("0010_qr_frames.sql")
 
 
 class LinkSchemaTests(unittest.TestCase):
@@ -133,6 +134,20 @@ class LinkSchemaTests(unittest.TestCase):
                 db.execute(insert, (name, color))
         db.execute("DELETE FROM links")
         self.assertEqual(db.execute("SELECT name FROM qr_templates").fetchone(), ("Print",))
+
+    def test_qr_frame_upgrade_preserves_existing_templates(self):
+        self.assertTrue(QR_FRAMES.is_file(), "expected a versioned QR frame migration")
+        db = self.database()
+        db.executescript(QR_TEMPLATES.read_text())
+        db.execute("""INSERT INTO qr_templates
+                      (name, size, foreground, background, transparent, correction, quiet_zone)
+                      VALUES ('Print', 512, '002040', 'fff4e0', 1, 'H', 8)""")
+        db.executescript(QR_FRAMES.read_text())
+        self.assertEqual(db.execute("SELECT name, size, frame FROM qr_templates").fetchone(), ("Print", 512, "none"))
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute("UPDATE qr_templates SET frame = 'custom'")
+        db.execute("UPDATE qr_templates SET frame = 'outline'")
+        self.assertEqual(db.execute("SELECT frame FROM qr_templates").fetchone(), ("outline",))
 
 
 if __name__ == "__main__":

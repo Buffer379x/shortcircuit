@@ -161,6 +161,16 @@ async fn qr_style_exports_keep_the_selected_colors_and_transparency() {
         Some(&[0, 32, 64, 255, 244, 224][..])
     );
     assert_eq!(info.trns.as_deref(), Some(&[255, 0][..]));
+
+    let framed = app
+        .admin_request(
+            Method::GET,
+            &format!("{route}?format=svg&{style}&frame=outline"),
+            None,
+        )
+        .await;
+    assert_eq!(framed.status(), StatusCode::OK);
+    assert_ne!(to_bytes(framed.into_body(), 128_000).await.unwrap(), body);
 }
 
 #[tokio::test]
@@ -183,6 +193,7 @@ async fn qr_style_rejects_unsafe_colors_and_undersized_margins() {
         ("quiet_zone=3", "invalid_qr_quiet_zone"),
         ("quiet_zone=13", "invalid_qr_quiet_zone"),
         ("correction=Z", "invalid_qr_correction"),
+        ("frame=custom", "invalid_qr_frame"),
     ] {
         let response = app
             .admin_request(Method::GET, &format!("{route}?{query}"), None)

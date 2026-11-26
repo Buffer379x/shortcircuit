@@ -103,6 +103,7 @@ export interface QrStyle {
   transparent: boolean;
   correction: 'L' | 'M' | 'Q' | 'H';
   quiet_zone: number;
+  frame: 'none' | 'outline';
 }
 
 export interface QrTemplate extends QrStyle {

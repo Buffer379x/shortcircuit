@@ -591,8 +591,8 @@ mod tests {
         old.close().await;
         let source_pool = database(&directory.path().join("source.sqlite"), "restored").await;
         sqlx::query(
-            "INSERT INTO qr_templates (name, size, foreground, background, transparent, correction, quiet_zone)
-             VALUES ('Print', 512, '002040', 'fff4e0', 1, 'H', 8)",
+            "INSERT INTO qr_templates (name, size, foreground, background, transparent, correction, quiet_zone, frame)
+             VALUES ('Print', 512, '002040', 'fff4e0', 1, 'H', 8, 'outline')",
         )
         .execute(&source_pool)
         .await
@@ -643,8 +643,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(counts, (0, 0, 0));
-        let template: (String, i64, String, String, bool, String, i64) = sqlx::query_as(
-            "SELECT name, size, foreground, background, transparent, correction, quiet_zone FROM qr_templates",
+        let template: (String, i64, String, String, bool, String, i64, String) = sqlx::query_as(
+            "SELECT name, size, foreground, background, transparent, correction, quiet_zone, frame FROM qr_templates",
         )
         .fetch_one(&pool)
         .await
@@ -659,6 +659,7 @@ mod tests {
                 true,
                 "H".to_owned(),
                 8,
+                "outline".to_owned(),
             )
         );
     }

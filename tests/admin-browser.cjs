@@ -93,12 +93,15 @@ async function verify() {
     await qr.getByRole('checkbox', { name: 'Transparent background', exact: true }).check();
     await qr.getByRole('combobox', { name: 'Error correction', exact: true }).selectOption('H');
     await qr.getByRole('combobox', { name: 'Quiet zone in modules', exact: true }).selectOption('8');
-    const styledPreview = qr.locator('img[src*="quiet_zone=8"]');
+    const qrFrame = qr.getByRole('combobox', { name: 'QR frame', exact: true });
+    assert.equal(await qrFrame.inputValue(), 'none');
+    await qrFrame.selectOption('outline');
+    const styledPreview = qr.locator('img[src*="frame=outline"]');
     await styledPreview.waitFor({ state: 'visible' });
     const previewUrl = new URL(await styledPreview.getAttribute('src'), admin);
     assert.deepEqual(Object.fromEntries(previewUrl.searchParams), {
       format: 'svg', size: '512', foreground: '002040', background: 'fff4e0',
-      transparent: 'true', correction: 'H', quiet_zone: '8',
+      transparent: 'true', correction: 'H', quiet_zone: '8', frame: 'outline',
     });
     assert.equal(await qr.evaluate(dialog => dialog.scrollWidth > dialog.clientWidth), false);
     const styledDownload = page.waitForEvent('download');
@@ -132,6 +135,7 @@ async function verify() {
     await template.selectOption({ label: 'Print style' });
     await qr.getByRole('button', { name: 'Apply template', exact: true }).click();
     await styledPreview.waitFor({ state: 'visible' });
+    assert.equal(await qrFrame.inputValue(), 'outline');
     assert.equal(await styledPreview.getAttribute('src'), previewUrl.pathname + previewUrl.search);
     assert.equal(await qr.evaluate(dialog => dialog.scrollWidth > dialog.clientWidth), false);
     const removeTemplate = qr.getByRole('button', { name: 'Delete template', exact: true });
