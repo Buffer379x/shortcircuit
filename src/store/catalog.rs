@@ -84,14 +84,22 @@ pub(crate) struct Search {
 
 #[derive(Serialize)]
 pub(crate) struct SearchPage {
-    items: Vec<Link>,
+    items: Vec<SearchItem>,
     next_cursor: Option<Cursor>,
+}
+
+#[derive(Serialize)]
+struct SearchItem {
+    #[serde(flatten)]
+    link: Link,
+    selection_key: String,
 }
 
 #[derive(sqlx::FromRow)]
 struct SearchRow {
     #[sqlx(flatten)]
     link: Link,
+    selection_key: String,
     tags_json: String,
 }
 
@@ -106,7 +114,7 @@ pub(crate) async fn search(
         .map(|domain| (domain.host.as_str(), domain.origin.as_str()))
         .collect();
     let mut query = QueryBuilder::<Sqlite>::new(
-        "SELECT id, host, slug, target, created_at, title, enabled, analytics_enabled,
+        "SELECT id, host, slug, target, created_at, title, enabled, analytics_enabled, selection_key,
                 (SELECT json_group_array(tag ORDER BY tag) FROM link_tags WHERE link_id = links.id) AS tags_json
          FROM links WHERE 1",
     );
@@ -159,7 +167,10 @@ pub(crate) async fn search(
             .as_deref()
             .is_none_or(|text| matches_query(&row.link, origin, text))
         {
-            items.push(row.link);
+            items.push(SearchItem {
+                link: row.link,
+                selection_key: row.selection_key,
+            });
             if items.len() > PAGE_SIZE {
                 break;
             }
@@ -168,8 +179,8 @@ pub(crate) async fn search(
     let has_more = items.len() > PAGE_SIZE;
     items.truncate(PAGE_SIZE);
     let next_cursor = items.last().filter(|_| has_more).map(|link| Cursor {
-        id: link.id,
-        key: sort.key(link),
+        id: link.link.id,
+        key: sort.key(&link.link),
         sort,
     });
     Ok(SearchPage { items, next_cursor })

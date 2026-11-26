@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { linkName, linkSorts, shortUrl } from './api';
-  import type { Api, Domains, Link, LinkCursor, LinkMetadata, LinkProtectionChange, LinkSearch, LinkSearchPage, LinkSort, Tag } from './api';
+  import type { Api, BulkLinkResult, CatalogLink, Domains, Link, LinkCursor, LinkMetadata, LinkProtectionChange, LinkSearch, LinkSearchPage, LinkSort, Tag } from './api';
+  import BulkLinks from './BulkLinks.svelte';
   import Dialog from './Dialog.svelte';
-  import { formatDate, passwordAllowed, problemMessage } from './format';
+  import { downloadFile, formatDate, passwordAllowed, problemMessage } from './format';
   import DuplicateLookup from './DuplicateLookup.svelte';
   import UrlCleaner from './UrlCleaner.svelte';
   import LinkQr from './LinkQr.svelte';
@@ -16,7 +17,11 @@
 
   let { t, language, api, domains }: { t: Messages; language: Language; api: Api; domains: Domains } = $props();
 
-  let items = $state<Link[]>([]);
+  const maxSelection = 50;
+  let items = $state<CatalogLink[]>([]);
+  let selected = $state.raw(new Set<string>());
+  let selectShownInput = $state<HTMLInputElement>();
+  let bulkBusy = $state(false);
   let cursor = $state.raw<LinkCursor | null>(null);
   let loading = $state(false);
   let initialized = $state(false);
@@ -54,6 +59,9 @@
     ...catalogTags, ...items.flatMap((link) => link.tags), ...(tag ? [tag] : []),
   ])].sort((a, b) => a.localeCompare(b, language)));
   const availableDomains = $derived(Object.keys(domains.origins).sort());
+  const selectedLinks = $derived(items.filter((item) => selected.has(item.selection_key)));
+  const selectable = $derived(items.slice(0, maxSelection));
+  const allShownSelected = $derived(selectable.length > 0 && selectable.every((item) => selected.has(item.selection_key)));
   const limit = $derived(new Intl.NumberFormat(language));
   const tagRequests = new AbortController();
   let tagGeneration = 0;
@@ -77,6 +85,10 @@
   });
 
   $effect(() => {
+    if (selectShownInput) selectShownInput.indeterminate = selectedLinks.length > 0 && !allShownSelected;
+  });
+
+  $effect(() => {
     void revision;
     const criteria: LinkSearch = {
       query: search.trim() || undefined,
@@ -93,6 +105,7 @@
     queryKey = key;
     if (retainedDepth === 0) {
       items = [];
+      selected = new Set();
       cursor = null;
       initialized = false;
       loadedPages = 0;
@@ -143,6 +156,7 @@
         if (!next) break;
       }
       items = collected;
+      selected = new Set(collected.map((item) => item.selection_key).filter((key) => selected.has(key)));
       cursor = next;
       loadedPages = depth;
       initialized = true;
@@ -164,6 +178,27 @@
     pageRequest?.abort();
     revision += 1;
     if (refreshTags) void loadTags();
+  }
+
+  function updateSelection(key: string, checked: boolean) {
+    const next = new Set(selected);
+    if (checked && next.size < maxSelection) next.add(key);
+    if (!checked) next.delete(key);
+    selected = next;
+  }
+
+  function applyBulk(result: BulkLinkResult, selection: CatalogLink[]) {
+    const keys = new Map(selection.map((item) => [item.id, item.selection_key]));
+    for (const updated of result.items) {
+      if (items.some((item) => item.id === updated.id && item.selection_key === keys.get(item.id))) {
+        patchListedLink(updated.id, updated);
+      }
+    }
+    const deleted = new Set(result.deleted_ids);
+    items = items.filter((item) => !deleted.has(item.id) || item.selection_key !== keys.get(item.id));
+    selected = new Set();
+    notice = result.deleted_ids.length ? 'bulkLinksDeleted' : 'bulkLinksUpdated';
+    refreshCatalog();
   }
 
   function patchListedLink(id: number, changes: LinkMetadata) {
@@ -325,19 +360,15 @@
   }
 
   function exportVisible() {
-    const data = new Blob([JSON.stringify(items, null, 2) + '\n'], { type: 'application/json' });
-    const url = URL.createObjectURL(data);
-    const download = document.createElement('a');
-    download.href = url;
-    download.download = 'shortcircuit-links.json';
-    download.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const listed = items.map(({ selection_key: _key, ...link }) => link);
+    const data = new Blob([JSON.stringify(listed, null, 2) + '\n'], { type: 'application/json' });
+    downloadFile(data, 'shortcircuit-links.json');
   }
 </script>
 
 <div class="page-head">
   <div><h1>{t.links}</h1><p>{t.linksDescription}</p></div>
-  <button class="button primary" type="button" onclick={() => openForm()}><Icon name="plus" />{t.addLink}</button>
+  <button class="button primary" type="button" disabled={bulkBusy} onclick={() => openForm()}><Icon name="plus" />{t.addLink}</button>
 </div>
 
 {#if notice}<p class="notice page-notice" role="status">{t[notice]}</p>{/if}
@@ -382,6 +413,19 @@
   </div>
 
   {#if items.length}
+    <div class="toolbar selection-toolbar">
+      <label class="row">
+        <input type="checkbox" bind:this={selectShownInput} checked={allShownSelected} disabled={bulkBusy}
+          onchange={(event) => selected = new Set(event.currentTarget.checked ? selectable.map((item) => item.selection_key) : [])} />
+        {items.length > maxSelection ? t.bulkSelectFirst50 : t.bulkSelectShown}
+      </label>
+    </div>
+  {/if}
+  <BulkLinks {api} {t} {language} selection={selectedLinks} bind:busy={bulkBusy}
+    onclear={() => selected = new Set()} onapplied={applyBulk}
+    onrefresh={() => { selected = new Set(); refreshCatalog(); }} />
+
+  {#if items.length}
     <div class="table-wrap">
       <!-- svelte-ignore a11y_no_redundant_roles (Mobile card layout overrides native table display.) -->
       <table class="links-table" role="table" aria-label={t.links}>
@@ -395,7 +439,12 @@
             <tr role="row">
               <td role="cell">
                 <div class="row link-cell">
-                  <span class="link-symbol"><Icon name="link" /></span>
+                  <label class="link-selection">
+                    <input type="checkbox" aria-label={`${t.bulkSelectLink} ${link.host}/${link.slug}`}
+                      checked={selected.has(link.selection_key)}
+                      disabled={bulkBusy || (!selected.has(link.selection_key) && selectedLinks.length >= maxSelection)}
+                      onchange={(event) => updateSelection(link.selection_key, event.currentTarget.checked)} />
+                  </label>
                   <div class="link-text">
                     {#if link.title}<strong>{link.title}</strong>{/if}
                     <a class="mono link-short" href={shortUrl(link, domains)} target="_blank" rel="noreferrer">{link.host}/{link.slug}</a>
@@ -415,13 +464,13 @@
               <td role="cell">
                 <div class="row row-actions">
                   <button class="icon-button ghost" type="button" aria-label={t.copyUrl} title={t.copyUrl} onclick={() => copy(link)}><Icon name="copy" /></button>
-                  <button class="icon-button ghost" type="button" aria-label={t.editLink} title={t.editLink} onclick={() => openForm(link)}><Icon name="edit" /></button>
-                  <button class="icon-button ghost" type="button" aria-label={t.redirectPolicy} title={t.redirectPolicy} onclick={() => policyLink = link}><Icon name="rule" /></button>
-                  <button class="icon-button ghost" type="button" aria-label={t.linkProtection} title={t.linkProtection} onclick={() => protectionLink = link}><Icon name="lock" /></button>
-                  <button class="icon-button ghost" type="button" aria-label={t.linkHistory} title={t.linkHistory} onclick={() => historyLink = link}><Icon name="history" /></button>
+                  <button class="icon-button ghost" type="button" disabled={bulkBusy} aria-label={t.editLink} title={t.editLink} onclick={() => openForm(link)}><Icon name="edit" /></button>
+                  <button class="icon-button ghost" type="button" disabled={bulkBusy} aria-label={t.redirectPolicy} title={t.redirectPolicy} onclick={() => policyLink = link}><Icon name="rule" /></button>
+                  <button class="icon-button ghost" type="button" disabled={bulkBusy} aria-label={t.linkProtection} title={t.linkProtection} onclick={() => protectionLink = link}><Icon name="lock" /></button>
+                  <button class="icon-button ghost" type="button" disabled={bulkBusy} aria-label={t.linkHistory} title={t.linkHistory} onclick={() => historyLink = link}><Icon name="history" /></button>
                   <button class="icon-button ghost" type="button" aria-label={t.qrCode} title={t.qrCode} onclick={() => qrLink = link}><Icon name="qr" /></button>
-                  <button class="button toggle-button" type="button" disabled={updating !== null} onclick={() => toggle(link)}>{link.enabled ? t.disable : t.enable}</button>
-                  <button class="icon-button ghost delete-button" type="button" aria-label={t.deleteLink} title={t.deleteLink} onclick={() => { formError = null; removing = link; }}><Icon name="trash" /></button>
+                  <button class="button toggle-button" type="button" disabled={bulkBusy || updating !== null} onclick={() => toggle(link)}>{link.enabled ? t.disable : t.enable}</button>
+                  <button class="icon-button ghost delete-button" type="button" disabled={bulkBusy} aria-label={t.deleteLink} title={t.deleteLink} onclick={() => { formError = null; removing = link; }}><Icon name="trash" /></button>
                 </div>
               </td>
             </tr>
@@ -527,6 +576,17 @@
 </Dialog>
 
 <style>
+  .selection-toolbar {
+    border-top: 1px solid var(--line);
+  }
+
+  .link-selection {
+    display: grid;
+    place-items: center;
+    flex: 0 0 var(--hit);
+    min-block-size: var(--hit);
+  }
+
   .protection-options { border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; }
   .protection-options[open] { padding-bottom: 12px; }
   .protection-options summary { padding-block: 11px; cursor: pointer; font-weight: 650; }

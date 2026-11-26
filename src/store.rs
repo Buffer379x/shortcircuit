@@ -18,6 +18,7 @@ use crate::{
     protection::{self, ProtectionDraft},
 };
 
+pub(crate) mod bulk;
 pub(crate) mod catalog;
 
 static MIGRATIONS: Migrator = sqlx::migrate!();
@@ -201,9 +202,22 @@ pub(crate) async fn update_link_in(
     actor: &Actor,
     action: Action,
 ) -> Result<Option<Link>, sqlx::Error> {
-    let Some(mut link) = read_link(connection, hosts, id).await? else {
+    let Some(link) = read_link(connection, hosts, id).await? else {
         return Ok(None);
     };
+    write_link_in(connection, link, update, actor, action)
+        .await
+        .map(Some)
+}
+
+pub(crate) async fn write_link_in(
+    connection: &mut SqliteConnection,
+    mut link: Link,
+    update: LinkUpdate,
+    actor: &Actor,
+    action: Action,
+) -> Result<Link, sqlx::Error> {
+    let id = link.id;
     let previous = Metadata::from(&link);
     link.target = update.target.unwrap_or(link.target);
     link.title = update.title.unwrap_or(link.title);
@@ -219,7 +233,7 @@ pub(crate) async fn update_link_in(
         false
     };
     if previous == Metadata::from(&link) {
-        return Ok(Some(link));
+        return Ok(link);
     }
 
     sqlx::query(
@@ -247,7 +261,7 @@ pub(crate) async fn update_link_in(
         Some(Snapshot::Metadata(previous)),
     )
     .await?;
-    Ok(Some(link))
+    Ok(link)
 }
 
 async fn insert_tags(

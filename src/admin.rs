@@ -1,5 +1,6 @@
 mod access;
 mod assets;
+mod bulk;
 mod catalog;
 mod catalog_search;
 mod duplicates;
@@ -90,6 +91,7 @@ fn build_admin_router(
         .merge(qr_templates::routes())
         .merge(links::qr_logo_routes())
         .merge(catalog_search::routes())
+        .merge(bulk::routes())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             access::browser_access,

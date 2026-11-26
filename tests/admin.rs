@@ -217,6 +217,136 @@ async fn catalog_search_spans_pages_and_a_deleted_cursor_anchor() {
 
 const QR_TEMPLATES: &str = "/api/v1/qr/templates";
 
+#[tokio::test]
+async fn selected_link_operations_are_atomic_and_protected_exports_are_disabled() {
+    let app = App::start().await;
+    let (cookie, csrf) = app.setup().await;
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("origin", ORIGIN),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    sqlx::raw_sql(
+        "INSERT INTO links(id, host, slug, target, title) VALUES
+            (1, 'go.example', 'first', 'https://example.test/first', '=Sample'),
+            (2, 's.example', 'second', 'https://example.test/second', '');
+         INSERT INTO link_protection(link_id, one_time) VALUES (2, 1);
+         WITH RECURSIVE counter(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM counter WHERE n < 20)
+         INSERT INTO link_tags(link_id, tag) SELECT 2, printf('tag%02d', n) FROM counter;",
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let catalog = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links/search",
+        &headers,
+        Some(json!({})),
+    )
+    .await;
+    let catalog = response_body(catalog).await;
+    let selection: Vec<_> = catalog["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|link| {
+            assert_eq!(link["selection_key"].as_str().unwrap_or("").len(), 32);
+            json!({"id":link["id"], "key":link["selection_key"]})
+        })
+        .collect();
+    let bulk = "/api/v1/links/bulk";
+    let action = |action: Value| json!({"links":selection, "change":action});
+    let overflow = request(
+        &app.admin,
+        Method::POST,
+        bulk,
+        &headers,
+        Some(action(json!({"action":"add_tags", "tags":["new"]}))),
+    )
+    .await;
+    assert_eq!(overflow.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response_body(overflow).await["code"], "bulk_tag_limit");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM link_tags WHERE tag = 'new'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let export = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links/bulk/export",
+        &headers,
+        Some(json!({"links":selection, "format":"json"})),
+    )
+    .await;
+    assert_eq!(export.status(), StatusCode::OK);
+    let export = response_body(export).await;
+    assert_eq!(export["version"], 1);
+    assert_eq!(export["items"][0]["slug"], "first");
+    assert_eq!(export["items"][0]["enabled"], true);
+    assert_eq!(export["items"][1]["enabled"], false);
+    assert!(export["items"][1].get("id").is_none());
+    let csv = request(
+        &app.admin,
+        Method::POST,
+        "/api/v1/links/bulk/export",
+        &headers,
+        Some(json!({"links":selection, "format":"csv"})),
+    )
+    .await;
+    assert_eq!(csv.status(), StatusCode::OK);
+    let csv = to_bytes(csv.into_body(), 32_768).await.unwrap();
+    assert!(std::str::from_utf8(&csv).unwrap().contains("\"'=Sample\""));
+
+    let change = request(
+        &app.admin,
+        Method::POST,
+        bulk,
+        &headers,
+        Some(action(json!({"action":"set_enabled", "enabled":false}))),
+    )
+    .await;
+    assert_eq!(change.status(), StatusCode::OK);
+    assert_eq!(response_body(change).await["items"][1]["enabled"], false);
+    let history_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM link_history WHERE action = 'metadata' AND actor_label = 'Owner'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(history_count, 2);
+    let delete = request(
+        &app.admin,
+        Method::POST,
+        bulk,
+        &headers,
+        Some(action(json!({"action":"delete", "confirmed":false}))),
+    )
+    .await;
+    assert_eq!(delete.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    sqlx::raw_sql(
+        "DELETE FROM links WHERE id = 2;
+         INSERT INTO links(id, host, slug, target) VALUES (2, 's.example', 'second', 'https://example.test/recreated');",
+    ).execute(&app.pool).await.unwrap();
+    let stale = request(
+        &app.admin,
+        Method::POST,
+        bulk,
+        &headers,
+        Some(action(json!({"action":"delete", "confirmed":true}))),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(response_body(stale).await["code"], "bulk_selection_changed");
+    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM links")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining, 2);
+}
+
 fn qr_template(name: &str) -> Value {
     json!({
         "name": name, "size": 512, "foreground": "002040", "background": "FFF4E0",

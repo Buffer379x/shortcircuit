@@ -19,6 +19,7 @@ use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
 use crate::{
     domains,
     input::{PublicHosts, normalize_host, valid_slug, valid_target},
+    store::Link,
 };
 
 use super::{BODY_LIMIT, Problem, catalog::tag_name};
@@ -26,6 +27,77 @@ use super::{BODY_LIMIT, Problem, catalog::tag_name};
 const EXCHANGE_VERSION: u8 = 1;
 const MAX_ITEMS: usize = 100;
 const MAX_SERIALIZED_ITEMS: usize = BODY_LIMIT - 768;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ExportFormat {
+    Json,
+    Csv,
+}
+
+#[derive(Serialize)]
+struct SelectedFile {
+    version: u8,
+    items: Vec<LinkMetadata>,
+}
+
+pub(super) fn export_selected(
+    links: Vec<(Link, bool)>,
+    format: ExportFormat,
+) -> Result<Response, Problem> {
+    let rows = links.into_iter().map(|(link, protected)| {
+        (
+            link.id,
+            LinkMetadata {
+                host: link.host,
+                slug: link.slug,
+                target: link.target,
+                title: link.title,
+                tags: link.tags,
+                enabled: link.enabled && !protected,
+                analytics_enabled: link.analytics_enabled,
+            },
+        )
+    });
+    let too_large = || Problem::invalid("bulk_export_too_large");
+    let (bytes, media, disposition) = match format {
+        ExportFormat::Json => {
+            let file = SelectedFile {
+                version: EXCHANGE_VERSION,
+                items: rows.map(|(_, item)| item).collect(),
+            };
+            let data = serde_json::to_vec(&file).map_err(|_| Problem::unavailable())?;
+            if data.len() > MAX_SERIALIZED_ITEMS {
+                return Err(too_large());
+            }
+            (
+                data,
+                "application/json",
+                "attachment; filename=shortcircuit-selected-links.json",
+            )
+        }
+        ExportFormat::Csv => {
+            let (data, next) =
+                csv_format::page(rows.collect()).map_err(|_| Problem::unavailable())?;
+            if next.is_some() {
+                return Err(too_large());
+            }
+            (
+                data,
+                "text/csv; charset=utf-8",
+                "attachment; filename=shortcircuit-selected-links.csv",
+            )
+        }
+    };
+    Ok((
+        [
+            (header::CONTENT_TYPE, media),
+            (header::CONTENT_DISPOSITION, disposition),
+        ],
+        Bytes::from(bytes),
+    )
+        .into_response())
+}
 
 #[derive(Clone)]
 struct ExchangeState {

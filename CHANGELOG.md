@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Apply status or tag changes to selected links, export the selection as JSON or CSV, or confirm atomic deletion.
 - Search, filter, and sort all links in the catalog with stable cursor pagination and keep search terms in the request body.
 - Add optional PNG logos to the QR dialog with verified output in PNG and SVG.
 - Add an optional QR outline outside the quiet zone. The preview, PNG, SVG, and saved templates support the same setting.

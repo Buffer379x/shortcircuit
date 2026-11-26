@@ -113,8 +113,17 @@ export interface LinkSearch {
 }
 
 export interface LinkSearchPage {
-  items: Link[];
+  items: CatalogLink[];
   next_cursor: LinkCursor | null;
+}
+
+export interface CatalogLink extends Link {
+  selection_key: string;
+}
+
+export interface BulkLinkResult {
+  items: Link[];
+  deleted_ids: number[];
 }
 
 export interface QrStyle {

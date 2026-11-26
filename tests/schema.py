@@ -8,6 +8,7 @@ PROTECTION = MIGRATION.with_name("0007_link_protection.sql")
 HISTORY = MIGRATION.with_name("0008_link_history.sql")
 QR_TEMPLATES = MIGRATION.with_name("0009_qr_templates.sql")
 QR_FRAMES = MIGRATION.with_name("0010_qr_frames.sql")
+LINK_SELECTION = MIGRATION.with_name("0011_link_selection.sql")
 
 
 class LinkSchemaTests(unittest.TestCase):
@@ -148,6 +149,19 @@ class LinkSchemaTests(unittest.TestCase):
             db.execute("UPDATE qr_templates SET frame = 'custom'")
         db.execute("UPDATE qr_templates SET frame = 'outline'")
         self.assertEqual(db.execute("SELECT frame FROM qr_templates").fetchone(), ("outline",))
+
+    def test_link_selection_key_changes_when_a_row_id_is_reused(self):
+        db = self.database()
+        self.insert(db, "go.example", "saved")
+        db.executescript(LINK_SELECTION.read_text())
+        link_id, key = db.execute("SELECT id, selection_key FROM links").fetchone()
+        self.assertRegex(key, r"^[0-9a-f]{32}$")
+        db.execute("DELETE FROM links")
+        self.insert(db, "go.example", "saved")
+        recreated_id, recreated_key = db.execute("SELECT id, selection_key FROM links").fetchone()
+        self.assertEqual(recreated_id, link_id)
+        self.assertRegex(recreated_key, r"^[0-9a-f]{32}$")
+        self.assertNotEqual(recreated_key, key)
 
 
 if __name__ == "__main__":

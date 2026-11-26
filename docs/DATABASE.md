@@ -4,6 +4,8 @@
 
 The versioned SQL migration creates a strict `links` table with an integer `id`, `host`, case-sensitive `slug`, `target`, and a UTC `created_at` timestamp. The unique index on `(host, slug)` also supports redirect lookups. The database stores the validated destination string as supplied so redirects preserve its encoding, query, and fragment. The source checks for SQLite 3.51.3 or newer at startup and configures WAL, foreign keys, `synchronous=FULL`, a pool of up to four connections, and two-second busy and pool-acquisition timeouts.
 
+Schema version 11 assigns a unique 128-bit selection key to each existing link and to rows on insert. Bulk requests verify both the numeric ID and the key inside the write transaction. A reused SQLite row ID represents a new selection.
+
 ## Protected links
 
 Migration `0007` adds `link_protection` with the link ID, optional Argon2id password hash, one-time and consumed flags, and a protection revision. A deleted link cascades to its protection record. An existing link has no protection by default. Changes to protection increment its revision. Confirmation checks that revision before consuming the one-time flag and any existing visit limit in the same write transaction. Signed confirmation tokens expire in memory and require no challenge rows.
