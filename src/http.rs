@@ -106,11 +106,15 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
             "User-agent: *\nDisallow:\n"
         };
         return match parts.method {
-            Method::GET => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body)
-                .into_response(),
+            Method::GET => {
+                ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response()
+            }
             Method::HEAD => (
                 [
-                    (header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8")),
+                    (
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("text/plain; charset=utf-8"),
+                    ),
                     (header::CONTENT_LENGTH, HeaderValue::from(body.len())),
                 ],
                 "",
@@ -197,7 +201,10 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         Outcome::Challenge(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     if response.status().is_redirection()
-        && result.subject.as_ref().is_some_and(|subject| subject.noindex)
+        && result
+            .subject
+            .as_ref()
+            .is_some_and(|subject| subject.noindex)
     {
         response.headers_mut().insert(
             "x-robots-tag",

@@ -587,10 +587,7 @@ struct Attributes<'a> {
     query: &'a str,
 }
 
-fn matched_rule<'a>(
-    rules: &'a [Rule],
-    request: RedirectRequest<'_>,
-) -> Option<(usize, &'a Rule)> {
+fn matched_rule<'a>(rules: &'a [Rule], request: RedirectRequest<'_>) -> Option<(usize, &'a Rule)> {
     if rules.is_empty() {
         return None;
     }
@@ -629,7 +626,9 @@ pub(crate) async fn simulate(
     for (value, limit) in [(&input.user_agent, 1024), (&input.accept_language, 256)] {
         if value.as_deref().is_some_and(|value| {
             value.len() > limit
-                || !value.bytes().all(|byte| matches!(byte, b' '..=b'~' | b'\t'))
+                || !value
+                    .bytes()
+                    .all(|byte| matches!(byte, b' '..=b'~' | b'\t'))
         }) {
             return Err(PolicyError::Invalid("invalid_simulation_header"));
         }
@@ -643,7 +642,8 @@ pub(crate) async fn simulate(
     }) {
         return Err(PolicyError::Invalid("invalid_simulation_query"));
     }
-    let mut select = QueryBuilder::<Sqlite>::new("SELECT host, slug, target FROM links WHERE id = ");
+    let mut select =
+        QueryBuilder::<Sqlite>::new("SELECT host, slug, target FROM links WHERE id = ");
     select.push_bind(id);
     push_host_scope(&mut select, hosts);
     let Some((host, slug, fallback)) = select
@@ -655,7 +655,9 @@ pub(crate) async fn simulate(
     };
     let suffix = input.extra_path.as_deref().unwrap_or_default();
     if !suffix.is_empty()
-        && (!input.policy.forward_path || !valid_slug(suffix) || slug.len() + 1 + suffix.len() > 200)
+        && (!input.policy.forward_path
+            || !valid_slug(suffix)
+            || slug.len() + 1 + suffix.len() > 200)
     {
         return Err(PolicyError::Invalid("invalid_simulation_path"));
     }
@@ -1197,6 +1199,12 @@ mod tests {
             ));
         }
         let details = read_policy(&pool, &hosts, link).await.unwrap().unwrap();
-        assert_eq!(details.policy, Policy::default());
+        assert_eq!(
+            details.policy,
+            Policy {
+                noindex: Some(false),
+                ..Policy::default()
+            }
+        );
     }
 }

@@ -33,6 +33,7 @@ use super::{
 const SHORTCODE_ALPHABET: &[u8; 64] =
     b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
 const MAX_CODE_ATTEMPTS: usize = 8;
+const SIMULATION_BODY_LIMIT: usize = super::BODY_LIMIT + 12 * 1024;
 
 #[derive(Clone)]
 pub(super) struct LinkState {
@@ -49,7 +50,10 @@ pub(super) fn routes(pool: SqlitePool, app: AppState) -> Router {
             "/api/v1/links/{id}/policy",
             get(read_policy).patch(replace_policy),
         )
-        .route("/api/v1/links/{id}/policy/simulate", post(simulate_policy))
+        .route(
+            "/api/v1/links/{id}/policy/simulate",
+            post(simulate_policy).layer(DefaultBodyLimit::max(SIMULATION_BODY_LIMIT)),
+        )
         .route(
             "/api/v1/links/{id}/protection",
             get(read_protection).patch(replace_protection),

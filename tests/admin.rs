@@ -477,23 +477,46 @@ async fn crawler_controls_are_host_bound_and_preserve_direct_redirects() {
     ] {
         let response = request(&app.public, Method::GET, robots, &[("host", host)], None).await;
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers()[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "text/plain; charset=utf-8"
+        );
         assert_eq!(to_bytes(response.into_body(), 256).await.unwrap(), expected);
     }
-    let unknown = request(&app.public, Method::GET, robots, &[("host", "other.example")], None).await;
+    let unknown = request(
+        &app.public,
+        Method::GET,
+        robots,
+        &[("host", "other.example")],
+        None,
+    )
+    .await;
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
-    let head = request(&app.public, Method::HEAD, robots, &[("host", "go.example")], None).await;
+    let head = request(
+        &app.public,
+        Method::HEAD,
+        robots,
+        &[("host", "go.example")],
+        None,
+    )
+    .await;
     assert_eq!(head.status(), StatusCode::OK);
     assert!(to_bytes(head.into_body(), 256).await.unwrap().is_empty());
     let created = request(
-        &app.admin, Method::POST, "/api/v1/links", &headers,
+        &app.admin,
+        Method::POST,
+        "/api/v1/links",
+        &headers,
         Some(json!({"host":"s.example", "slug":"search", "target":"https://example.test/notes"})),
     )
     .await;
     assert_eq!(created.status(), StatusCode::CREATED);
     let id = response_body(created).await["id"].as_i64().unwrap();
     let policy = request(
-        &app.admin, Method::PATCH, &format!("/api/v1/links/{id}/policy"), &headers,
+        &app.admin,
+        Method::PATCH,
+        &format!("/api/v1/links/{id}/policy"),
+        &headers,
         Some(json!({"noindex":true})),
     )
     .await;
@@ -509,10 +532,19 @@ async fn crawler_controls_are_host_bound_and_preserve_direct_redirects() {
     .await;
     assert_eq!(response_body(updated).await["noindex"], true);
     for method in [Method::GET, Method::HEAD] {
-        let redirect =
-            request(&app.public, method, "/search", &[("host", "s.example")], None).await;
+        let redirect = request(
+            &app.public,
+            method,
+            "/search",
+            &[("host", "s.example")],
+            None,
+        )
+        .await;
         assert_eq!(redirect.status(), StatusCode::FOUND);
-        assert_eq!(redirect.headers()[header::LOCATION], "https://example.test/notes");
+        assert_eq!(
+            redirect.headers()[header::LOCATION],
+            "https://example.test/notes"
+        );
         assert_eq!(redirect.headers()["x-robots-tag"], "noindex, nofollow");
     }
 }
@@ -527,7 +559,10 @@ async fn simulator_checks_draft_rule_precedence_and_leaves_the_live_link_unchang
         ("x-csrf-token", csrf.as_str()),
     ];
     let created = request(
-        &app.admin, Method::POST, "/api/v1/links", &headers,
+        &app.admin,
+        Method::POST,
+        "/api/v1/links",
+        &headers,
         Some(json!({"slug":"docs","target":"https://example.test/default"})),
     )
     .await;
@@ -535,7 +570,11 @@ async fn simulator_checks_draft_rule_precedence_and_leaves_the_live_link_unchang
     let id = response_body(created).await["id"].as_i64().unwrap();
     let path = format!("/api/v1/links/{id}/policy");
     let saved = request(
-        &app.admin, Method::PATCH, &path, &headers, Some(json!({"max_visits":1})),
+        &app.admin,
+        Method::PATCH,
+        &path,
+        &headers,
+        Some(json!({"max_visits":1})),
     )
     .await;
     assert_eq!(saved.status(), StatusCode::OK);
@@ -548,27 +587,66 @@ async fn simulator_checks_draft_rule_precedence_and_leaves_the_live_link_unchang
         ]},
         "accept_language":"de-AT,en;q=0.7", "query":"team=ops&sig=A%2f", "extra_path":"Guide/PDF"
     });
-    let denied = request(&app.admin, Method::POST, &preview, &headers[..2], Some(draft.clone())).await;
+    let denied = request(
+        &app.admin,
+        Method::POST,
+        &preview,
+        &headers[..2],
+        Some(draft.clone()),
+    )
+    .await;
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
     let result = request(&app.admin, Method::POST, &preview, &headers, Some(draft)).await;
     assert_eq!(result.status(), StatusCode::OK);
-    assert_eq!(response_body(result).await, json!({
-        "target":"https://example.test/first/Guide/PDF?base=1&team=ops&sig=A%2f#keep",
-        "status":307,"rule":1
-    }));
+    assert_eq!(
+        response_body(result).await,
+        json!({
+            "target":"https://example.test/first/Guide/PDF?base=1&team=ops&sig=A%2f#keep",
+            "status":307,"rule":1
+        })
+    );
     let fallback = request(
-        &app.admin, Method::POST, &preview, &headers, Some(json!({"policy":{}})),
+        &app.admin,
+        Method::POST,
+        &preview,
+        &headers,
+        Some(json!({"policy":{}})),
     )
     .await;
-    assert_eq!(response_body(fallback).await, json!({
-        "target":"https://example.test/default","status":302,"rule":null
-    }));
+    assert_eq!(
+        response_body(fallback).await,
+        json!({
+            "target":"https://example.test/default","status":302,"rule":null
+        })
+    );
+    let long_rule = json!({
+        "target":format!("https://example.test/{}", "a".repeat(3980)),
+        "conditions":[{"type":"language","value":"de"}]
+    });
+    let large_draft = json!({
+        "policy":{"rules":vec![long_rule; 7]},
+        "query":format!("q={}", "a".repeat(4094)),
+        "user_agent":"a".repeat(1024)
+    });
+    assert!(large_draft.to_string().len() > 32 * 1024);
+    let result = request(&app.admin, Method::POST, &preview, &headers, Some(large_draft)).await;
+    assert_eq!(result.status(), StatusCode::OK);
     let policy = request(&app.admin, Method::GET, &path, &headers, None).await;
     let policy = response_body(policy).await;
     assert_eq!(policy["visits_used"], 0);
     assert_eq!(policy["rules"], json!([]));
-    let live = request(&app.public, Method::GET, "/docs", &[("host", "go.example")], None).await;
-    assert_eq!(live.headers()[header::LOCATION], "https://example.test/default");
+    let live = request(
+        &app.public,
+        Method::GET,
+        "/docs",
+        &[("host", "go.example")],
+        None,
+    )
+    .await;
+    assert_eq!(
+        live.headers()[header::LOCATION],
+        "https://example.test/default"
+    );
 }
 
 #[tokio::test]

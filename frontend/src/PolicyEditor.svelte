@@ -39,7 +39,7 @@
   let simulating = $state(false);
   let simulationError = $state<keyof Messages | null>(null);
   let simulation = $state<{ key: string; result: SimulationResult } | null>(null);
-  const currentSimulation = $derived(simulation?.key === JSON.stringify(simulationInput()) ? simulation?.result : null);
+  const currentSimulation = $derived(simulation && simulation.key === JSON.stringify(simulationInput()) ? simulation.result : null);
 
   onMount(() => { void load(); });
 

@@ -237,7 +237,7 @@ async function verify() {
     await firstRule.getByLabel('Destination URL', { exact: true }).fill('https://example.test/simulator');
     await firstRule.getByLabel('Parameter name', { exact: true }).fill('team');
     await firstRule.getByLabel('Match value', { exact: true }).fill('ops');
-    await policy.getByText('Redirect simulator', { exact: true }).click();
+    await policy.locator('summary').filter({ hasText: /^Redirect simulator$/ }).click();
     await policy.getByLabel('Query string', { exact: true }).fill('team=ops');
     await policy.getByRole('button', { name: 'Simulate redirect', exact: true }).click();
     await policy.getByText('https://example.test/simulator', { exact: true }).waitFor();

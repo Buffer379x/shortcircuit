@@ -3911,7 +3911,7 @@
             }
           },
           "413": {
-            "description": "The request body exceeds 32,768 bytes.",
+            "description": "The JSON body exceeds the 44 KiB simulation limit.",
             "content": {
               "application/problem+json": {
                 "schema": {
