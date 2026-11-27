@@ -102,7 +102,14 @@
     overlays.create = false;
     overlays.palette = false;
     window.scrollTo(0, 0);
-    requestAnimationFrame(() => document.querySelector<HTMLElement>('main h1')?.focus({ preventScroll: true }));
+    // Move to the new page's heading once it renders, unless focus has moved since navigating:
+    // a quick click or keystroke on the new page must keep its focus.
+    const initial = document.activeElement;
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active !== initial && active !== document.body && active?.isConnected) return;
+      document.querySelector<HTMLElement>('main h1')?.focus({ preventScroll: true });
+    });
   });
 
   async function refreshSession() {
