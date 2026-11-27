@@ -43,6 +43,9 @@ pub(crate) struct LinkCheck {
     pub(crate) id: i64,
     host: String,
     slug: String,
+    /// The link's title and destination, so a monitoring list needs no request per link.
+    title: String,
+    target: String,
     priority: bool,
     status: String,
     last_checked: Option<i64>,
@@ -104,7 +107,7 @@ impl Monitor {
         limit: i64,
     ) -> Result<Vec<LinkCheck>, sqlx::Error> {
         sqlx::query_as(
-            "SELECT l.id, l.host, l.slug, m.priority, m.status, m.last_checked,
+            "SELECT l.id, l.host, l.slug, coalesce(l.title, '') AS title, l.target, m.priority, m.status, m.last_checked,
                     m.http_status, m.elapsed_ms, m.redirects, m.failure, m.consecutive_failures
              FROM link_monitor m JOIN links l ON l.id = m.link_id
              WHERE l.id > ? ORDER BY l.id LIMIT ?",
@@ -422,6 +425,9 @@ mod tests {
         assert_eq!(items[0].status, "unknown");
         assert_eq!(items[0].failure.as_deref(), Some("blocked"));
         assert_eq!(items[1].status, "not_checked");
+        // Each item names its link, so the admin list needs no request per link.
+        assert_eq!(items[0].title, "");
+        assert_eq!(items[0].target, "http://127.0.0.1/private");
     }
 
     #[test]

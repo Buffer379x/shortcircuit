@@ -26,6 +26,8 @@
     id: number;
     host: string;
     slug: string;
+    title: string;
+    target: string;
     priority: boolean;
     status: MonitorStatus;
     last_checked: number | null;
@@ -69,32 +71,13 @@
   let picks = $state<number[]>([]);
   let searchRequest: AbortController | undefined;
   /** Title and destination per link (GET /links/{id}). Optional: rows fall back to the short URL. */
-  let details = $state.raw<Record<number, CatalogLink>>({});
-  const detailRequest = new AbortController();
 
   onMount(() => {
     void load();
     return () => {
       searchRequest?.abort();
-      detailRequest.abort();
     };
   });
-
-  /** Loads missing details for the listed links, at most four requests at a time. */
-  async function loadDetails(ids: number[]) {
-    const queue = ids.filter((id) => !details[id]);
-    const worker = async () => {
-      for (let id = queue.shift(); id !== undefined && !detailRequest.signal.aborted; id = queue.shift()) {
-        try {
-          const link = await app.api<CatalogLink>(`/links/${id}`, 'GET', undefined, 'json', detailRequest.signal);
-          if (link?.target) details = { ...details, [id]: link };
-        } catch {
-          /* The row keeps its short URL. */
-        }
-      }
-    };
-    await Promise.all(Array.from({ length: 4 }, worker));
-  }
 
   function message(error: unknown): keyof Messages {
     if (error instanceof ApiError && error.code === 'monitoring_busy') return 'monitorBusy';
@@ -117,7 +100,6 @@
   async function fetchReport(after?: number) {
     const next = await app.api<Report>(after ? `/monitoring?after=${after}` : '/monitoring');
     report = after && report ? { ...next, items: [...report.items, ...next.items] } : next;
-    void loadDetails(next.items.map((item) => item.id));
   }
 
   async function load(after?: number) {
@@ -255,7 +237,7 @@
     const needle = query.trim().toLowerCase();
     return items
       .filter((item) => (filter === 'all' || health(item.status) === filter)
-        && (!needle || `${item.host}/${item.slug} ${details[item.id]?.title ?? ''} ${details[item.id]?.target ?? ''}`.toLowerCase().includes(needle)))
+        && (!needle || `${item.host}/${item.slug} ${item.title} ${item.target}`.toLowerCase().includes(needle)))
       .sort((a, b) => order[health(a.status)] - order[health(b.status)] || a.id - b.id);
   });
   const shownTiles = $derived(tiles.filter(([key]) => key === 'all' || key === filter || counts[key] > 0 || key === 'down' || key === 'redirect' || key === 'up'));
@@ -352,7 +334,7 @@
               {#each rows as item (item.id)}
                 {@const name = `${item.host}/${item.slug}`}
                 {@const info = detail(item)}
-                {@const link = details[item.id]}
+                {@const link = item}
                 <tr aria-busy={working?.endsWith(`:${item.id}`) || undefined}>
                   <td class="c-link">
                     <a class="cell-link" href={href('links', item.id, { tab: 'health' })}>
