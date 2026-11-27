@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- API v1, additive: catalog search items and the new `GET /api/v1/links/{id}` report the live `state`, policy window and visit limit, `protection`, `rule_count`, 30-day redirects, a 14-day trend, and the last health check. Keys without the `analytics` scope receive no traffic fields. The analytics summary and download accept `link=<id>`, and the Overview lists up to eight links that need attention.
+
 ## 0.7.0-preview.1
 
 - The Unraid template enables daily scheduled backups, adds a Trusted proxies field, and links the installation guide for this release.

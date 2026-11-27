@@ -56,8 +56,14 @@ pub(super) fn routes() -> Router {
             "/apple-touch-icon.png",
             get(|| async { asset("image/png", TOUCH_ICON) }),
         )
-        .route("/pwa-192.png", get(|| async { asset("image/png", PWA_192) }))
-        .route("/pwa-512.png", get(|| async { asset("image/png", PWA_512) }))
+        .route(
+            "/pwa-192.png",
+            get(|| async { asset("image/png", PWA_192) }),
+        )
+        .route(
+            "/pwa-512.png",
+            get(|| async { asset("image/png", PWA_512) }),
+        )
         .route(
             "/pwa-maskable-512.png",
             get(|| async { asset("image/png", PWA_MASKABLE) }),

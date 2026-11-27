@@ -8,7 +8,7 @@ use axum::{
         rejection::{JsonRejection, PathRejection, QueryRejection},
     },
     http::{StatusCode, header},
-    routing::{get, patch, post},
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -21,7 +21,10 @@ use crate::{
     protection::{self, PasswordChange, ProtectionDetails, ProtectionDraft, ProtectionError},
     qr::{self, Format},
     redirect::{self, Policy, PolicyDetails, PolicyError, SimulationInput, SimulationResult},
-    store::{self, Link, LinkDraft, LinkUpdate, PAGE_SIZE},
+    store::{
+        self, Link, LinkDraft, LinkUpdate, PAGE_SIZE,
+        catalog::{self, CatalogLink},
+    },
 };
 
 use super::{
@@ -45,7 +48,10 @@ pub(super) fn routes(pool: SqlitePool, app: AppState) -> Router {
     Router::new()
         .route("/api/v1/domains", get(domains))
         .route("/api/v1/links", get(list_links).post(create_link))
-        .route("/api/v1/links/{id}", patch(update_link).delete(remove_link))
+        .route(
+            "/api/v1/links/{id}",
+            get(read_link).patch(update_link).delete(remove_link),
+        )
         .route(
             "/api/v1/links/{id}/policy",
             get(read_policy).patch(replace_policy),
@@ -295,6 +301,25 @@ async fn list_links(
         items,
         next_after_id,
     }))
+}
+
+/// Reads one link with the same fields as a catalog search item. A link outside the caller's
+/// hosts is reported as not found. Traffic fields require analytics access.
+async fn read_link(
+    State(state): State<LinkState>,
+    Extension(access): Extension<LinkAccess>,
+    id: Result<Path<i64>, PathRejection>,
+) -> Result<Json<CatalogLink>, Problem> {
+    let id = resource_id(id)?;
+    let hosts = access.allowed_hosts(&state, false).await?;
+    let active = domains::active_hosts(&state.pool, &state.app.hosts)
+        .await
+        .map_err(|_| Problem::unavailable())?;
+    catalog::find(&state.pool, &hosts, &active, id, access.analytics)
+        .await
+        .map_err(|_| Problem::unavailable())?
+        .map(Json)
+        .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
 }
 
 #[derive(Deserialize)]

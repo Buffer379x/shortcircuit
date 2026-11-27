@@ -18,6 +18,33 @@ use crate::{
     protection::{self, ProtectionDraft},
 };
 
+/// Live lifecycle state of the link `l`, as the public listener would treat it now.
+///
+/// Requires the joins from `link_state_joins`. `?1` binds the current Unix time and `?2` a
+/// JSON array of the active public hosts. Archiving does not change this state; callers that
+/// report archived links as a separate state test `l.archived` first.
+macro_rules! link_state_sql {
+    () => {
+        "CASE
+            WHEN l.enabled = 0 OR l.host NOT IN (SELECT value FROM json_each(?2)) THEN 'disabled'
+            WHEN p.starts_at > ?1 THEN 'scheduled'
+            WHEN p.expires_at <= ?1 THEN 'expired'
+            WHEN protection.consumed = 1 OR p.visits_used >= p.max_visits THEN 'exhausted'
+            ELSE 'active'
+         END"
+    };
+}
+
+/// Joins the redirect policy `p` and access protection `protection` of the link `l`.
+macro_rules! link_state_joins {
+    () => {
+        " LEFT JOIN link_redirect_policies p ON p.link_id = l.id
+          LEFT JOIN link_protection protection ON protection.link_id = l.id "
+    };
+}
+
+pub(crate) use {link_state_joins, link_state_sql};
+
 pub(crate) mod bulk;
 pub(crate) mod catalog;
 
