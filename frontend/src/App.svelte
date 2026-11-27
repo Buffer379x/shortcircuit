@@ -1,128 +1,113 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
-  import Analytics from './Analytics.svelte';
-  import Account from './Account.svelte';
+  import { onMount } from 'svelte';
   import { ApiError, createApi } from './api';
   import type { Api, Domains, Session, User } from './api';
-  import Catalog from './Catalog.svelte';
-  import Auth from './Auth.svelte';
   import { problemMessage } from './format';
-  import Exchange from './Exchange.svelte';
-  import Icon from './Icon.svelte';
-  import { messages } from './i18n';
-  import type { Language, Messages, Theme } from './i18n';
-  import Keys from './Keys.svelte';
-  import Links from './Links.svelte';
-  import Preferences from './Preferences.svelte';
-  import Monitoring from './Monitoring.svelte';
-  import Operations from './Operations.svelte';
-  import Overview from './Overview.svelte';
+  import type { Language, Messages } from './i18n';
+  import Icon from './lib/Icon.svelte';
+  import Menu from './lib/ui/Menu.svelte';
+  import Logo from './lib/ui/Logo.svelte';
+  import { NAV, pageTitle } from './lib/nav';
+  import { route, href } from './lib/router.svelte';
+  import { theme, setTheme } from './lib/theme.svelte';
+  import { toasts, dismiss } from './lib/toast.svelte';
+  import { overlays, openCreate } from './lib/overlays.svelte';
+  import { app, loadTags } from './lib/app.svelte';
+  import { locale, setLanguage, tr } from './lib/locale.svelte';
+  import { tip } from './lib/tooltip';
   import { isTimeZone, provideTimeZone } from './timezone';
-  import Audit from './Audit.svelte';
-  import DestinationPolicy from './DestinationPolicy.svelte';
+  import CommandPalette from './features/CommandPalette.svelte';
+  import CreateLink from './features/CreateLink.svelte';
+  import EditLink from './features/EditLink.svelte';
+  import QrDialog from './features/QrDialog.svelte';
+  import Auth from './pages/Auth.svelte';
+  import Overview from './pages/Overview.svelte';
+  import Links from './pages/Links.svelte';
+  import LinkDetail from './pages/LinkDetail.svelte';
+  import Analytics from './pages/Analytics.svelte';
+  import Health from './pages/Health.svelte';
+  import QrStudio from './pages/QrStudio.svelte';
+  import DomainsPage from './pages/Domains.svelte';
+  import Exchange from './pages/Exchange.svelte';
+  import Keys from './pages/Keys.svelte';
+  import System from './pages/System.svelte';
+  import Settings from './pages/Settings.svelte';
 
-  type Page = 'overview' | 'links' | 'exchange' | 'analytics' | 'domains' | 'tags' | 'apiKeys' | 'account' | 'operations' | 'monitoring' | 'auditLog';
-  const pages = [
-    { id: 'overview', icon: 'analytics' },
-    { id: 'links', icon: 'link' },
-    { id: 'analytics', icon: 'analytics' },
-    { id: 'monitoring', icon: 'rule' },
-    { id: 'domains', icon: 'globe' },
-    { id: 'tags', icon: 'tag' },
-    { id: 'exchange', icon: 'exchange' },
-    { id: 'apiKeys', icon: 'key' },
-    { id: 'account', icon: 'account' },
-    { id: 'operations', icon: 'archive' },
-    { id: 'auditLog', icon: 'history' },
-  ] as const;
+  interface InstanceStatus {
+    version: string;
+    last_backup_status: 'verified' | 'failed' | null;
+    last_verified_backup_at: number | null;
+    storage: { status: 'healthy' | 'low' | 'unavailable' };
+  }
 
-  let language = $state<Language>('en');
-  let theme = $state<Theme>('dark');
   let timeZone = $state<string>();
   provideTimeZone(() => timeZone);
-  let systemDark = $state(false);
-  const t = $derived(messages[language]);
-  let user = $state<User | null>(null);
   let setup = $state(false);
-  let page = $state<Page>('overview');
-  let createRequested = $state(false);
-  let main = $state<HTMLElement>();
   let sessionLoading = $state(true);
   let sessionError = $state<keyof Messages | null>(null);
   let authNotice = $state<keyof Messages | null>(null);
-  let domains = $state<Domains | null>(null);
   let domainError = $state<keyof Messages | null>(null);
-  let signingOut = $state(false);
-  let menuOpen = $state(false);
-  let menuButton = $state<HTMLButtonElement>();
-
-  // Each page has a hash route, so reload, Back, and bookmarks keep the location.
-  function pageFromHash(): Page | null {
-    const id = location.hash.slice(1);
-    return pages.some((entry) => entry.id === id) ? id as Page : null;
-  }
-
-  function followHash() {
-    const destination = pageFromHash();
-    if (destination && destination !== page) {
-      page = destination;
-      menuOpen = false;
-      void tick().then(() => main?.focus());
-    }
-  }
   let signOutError = $state<keyof Messages | null>(null);
+  let instance = $state<InstanceStatus | null>(null);
+  let collapsed = $state(readFlag('shortcircuit-rail'));
 
-  const request = createApi(() => user?.csrf);
+  const request = createApi(() => app.user?.csrf);
   const api: Api = async (path, method, data, responseFormat, signal) => {
-    const activeUser = user;
+    const activeUser = app.user;
     try {
       return await request(path, method, data, responseFormat, signal);
     } catch (error) {
-      if (activeUser && activeUser === user && error instanceof ApiError && error.status === 401) {
+      if (activeUser && activeUser === app.user && error instanceof ApiError && error.status === 401) {
         if (path === '/auth/password') void refreshSession();
         else if (error.code !== 'invalid_credentials') resetSession('sessionExpired');
       }
       throw error;
     }
   };
+  app.api = api;
+
+  const detailId = $derived(route.page === 'links' && /^\d+$/.test(route.id) ? Number(route.id) : null);
+  const activePage = $derived(route.page === 'tags' ? 'links' : route.page);
+  // One pink action per view: the global New link is primary only where creating links is the main task.
+  const globalPrimary = $derived(['overview', 'links', 'tags'].includes(route.page) && detailId == null);
+  const instanceOk = $derived(
+    !instance || (instance.storage.status !== 'low' && instance.last_backup_status !== 'failed' && app.counts.unreachable === 0),
+  );
+
+  function readFlag(key: string) {
+    try {
+      return localStorage.getItem(key) === '1';
+    } catch {
+      return false;
+    }
+  }
 
   onMount(() => {
     try {
       const savedLanguage = localStorage.getItem('shortcircuit-language');
-      const savedTheme = localStorage.getItem('shortcircuit-theme');
       const savedZone = localStorage.getItem('shortcircuit-timezone');
       if (savedZone && isTimeZone(savedZone)) timeZone = savedZone;
-      if (savedLanguage === 'en' || savedLanguage === 'de') language = savedLanguage;
-      if (savedTheme === 'dark' || savedTheme === 'light' || savedTheme === 'system') theme = savedTheme;
+      if (savedLanguage === 'en' || savedLanguage === 'de') setLanguage(savedLanguage as Language);
+      else setLanguage(navigator.language.toLowerCase().startsWith('de') ? 'de' : 'en');
     } catch {
-      // Preferences can still be used for this page when storage is unavailable.
+      setLanguage('en');
     }
-    const query = matchMedia('(prefers-color-scheme: dark)');
-    systemDark = query.matches;
-    const change = (event: MediaQueryListEvent) => { systemDark = event.matches; };
-    query.addEventListener('change', change);
-    page = pageFromHash() ?? page;
-    window.addEventListener('popstate', followHash);
-    window.addEventListener('hashchange', followHash);
     void refreshSession();
-    return () => {
-      query.removeEventListener('change', change);
-      window.removeEventListener('popstate', followHash);
-      window.removeEventListener('hashchange', followHash);
-    };
   });
 
   $effect(() => {
-    document.documentElement.lang = language;
-    document.documentElement.dataset.theme = theme === 'system' ? systemDark ? 'dark' : 'light' : theme;
-    try {
-      localStorage.setItem('shortcircuit-language', language);
-      localStorage.setItem('shortcircuit-theme', theme);
-      if (timeZone) localStorage.setItem('shortcircuit-timezone', timeZone);
-      else localStorage.removeItem('shortcircuit-timezone');
-    } catch {
-      // Allow the controls to work when storage is unavailable.
-    }
+    const title = detailId != null ? tr('navLinks') : pageTitle(route.page);
+    document.title = app.user ? `${title} – ShortCircuit` : 'ShortCircuit';
+  });
+
+  $effect(() => {
+    void route.page;
+    void route.id;
+    overlays.navOpen = false;
+    overlays.create = false;
+    overlays.palette = false;
+    window.scrollTo(0, 0);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('main h1')?.focus({ preventScroll: true }));
   });
 
   async function refreshSession() {
@@ -130,11 +115,11 @@
     sessionError = null;
     try {
       const session = await request<Session>('/auth/session');
-      const loadDomainList = !user && session.user;
+      const loadData = !app.user && session.user;
       setup = session.setup_required;
-      if (!session.user && user) resetSession('sessionExpired');
-      else user = session.user;
-      if (loadDomainList) void loadDomains();
+      if (!session.user && app.user) resetSession('sessionExpired');
+      else app.user = session.user;
+      if (loadData) loadSessionData();
     } catch (error) {
       sessionError = problemMessage(error);
     } finally {
@@ -144,151 +129,258 @@
 
   async function loadDomains() {
     domainError = null;
-    const activeUser = user;
+    const activeUser = app.user;
     try {
       const result = await api<Domains>('/domains');
-      if (activeUser === user) domains = result;
+      if (activeUser === app.user) app.domains = result;
     } catch (error) {
-      if (activeUser === user) domainError = problemMessage(error);
+      if (activeUser === app.user) domainError = problemMessage(error);
     }
   }
 
+  async function loadCounts() {
+    try {
+      const overview = await api<{ links: { total: number; archived?: number }; active_domains: number; monitoring: { attention: number } }>('/overview');
+      app.counts.links = overview.links.total - (overview.links.archived ?? 0);
+      app.counts.domains = overview.active_domains;
+      app.counts.unreachable = overview.monitoring.attention;
+    } catch {
+      /* Counts are optional decoration in the sidebar. */
+    }
+    try {
+      instance = await api<InstanceStatus>('/system');
+    } catch {
+      instance = null;
+    }
+  }
+
+  function loadSessionData() {
+    void loadDomains();
+    void loadTags();
+    void loadCounts();
+  }
+
   function resetSession(notice: keyof Messages | null = null) {
-    user = null;
-    domains = null;
-    page = 'overview';
-    createRequested = false;
+    app.user = null;
+    app.domains = null;
+    app.tags = [];
+    instance = null;
     authNotice = notice;
     signOutError = null;
   }
 
   function signedIn(account: User) {
-    user = account;
+    app.user = account;
     setup = false;
     authNotice = null;
-    void loadDomains();
+    loadSessionData();
   }
 
   async function passwordChanged(updated?: User) {
-    if (updated) user = updated;
+    if (updated) app.user = updated;
     else await refreshSession();
   }
 
   async function signOut() {
-    if (signingOut) return;
-    signingOut = true;
     signOutError = null;
     try {
       await api<void>('/auth/logout', 'POST');
       resetSession();
+      location.hash = '#/overview';
     } catch (error) {
-      if (user) signOutError = problemMessage(error);
-    } finally {
-      signingOut = false;
+      if (app.user) signOutError = problemMessage(error);
     }
   }
 
-  function createFromOverview() {
-    createRequested = true;
-    void navigate('links');
+  function toggleRail() {
+    collapsed = !collapsed;
+    try {
+      localStorage.setItem('shortcircuit-rail', collapsed ? '1' : '0');
+    } catch {
+      /* The choice still applies to this page. */
+    }
   }
 
-  async function navigate(destination: Page) {
-    menuOpen = false;
-    if (page === destination) return;
-    page = destination;
-    if (location.hash !== '#' + destination) history.pushState(null, '', '#' + destination);
-    await tick();
-    main?.focus();
+  function keys(e: KeyboardEvent) {
+    if (!app.user) return;
+    const target = e.target as HTMLElement;
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable;
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      overlays.palette = true;
+    } else if (!typing && e.key.toLowerCase() === 'n' && !e.metaKey && !e.ctrlKey && !e.altKey && !document.querySelector('dialog[open], [role="dialog"]')) {
+      e.preventDefault();
+      openCreate();
+    } else if (e.key === 'Escape' && overlays.navOpen) overlays.navOpen = false;
   }
 </script>
 
-<svelte:window onkeydown={(event) => { if (event.key === 'Escape' && menuOpen) { menuOpen = false; menuButton?.focus(); } }} />
+<svelte:window onkeydown={keys} />
 
-<svelte:head><title>{user ? `${t[page]} · ShortCircuit` : 'ShortCircuit'}</title></svelte:head>
-
-<a class="skip" href="#main-content">{t.skip}</a>
-
-{#if user && !sessionError}
-  <div class="app-shell">
-    <aside class="rail">
-      <div class="brand"><img src="/favicon.svg" alt="" />ShortCircuit</div>
-      <nav id="main-navigation" class:open={menuOpen} aria-label={t.mainNavigation}>
-        {#each pages as entry (entry.id)}
-          <button class="nav-item" type="button" aria-current={page === entry.id ? 'page' : undefined} onclick={() => navigate(entry.id)}>
-            <Icon name={entry.icon} />{t[entry.id]}
+{#if app.user && !sessionError}
+  <div class="app" id="shell" data-collapsed={collapsed || undefined} data-nav-open={overlays.navOpen || undefined}>
+    <a class="skip-link" href="#main" onclick={(e) => { e.preventDefault(); document.querySelector<HTMLElement>('main h1')?.focus(); }}>{tr('skipToContent')}</a>
+    {#if overlays.navOpen}<div class="scrim" aria-hidden="true" onclick={() => (overlays.navOpen = false)}></div>{/if}
+    <aside class="sidebar" aria-label={tr('navSidebar')}>
+      <div class="brand">
+        <a href={href('overview')} aria-label="ShortCircuit">
+          <Logo compact={collapsed} />
+        </a>
+        {#if !collapsed}
+          <button class="btn collapse-button" data-variant="ghost" data-size="sm" data-icon-only aria-label={tr('navCollapse')} use:tip={tr('navCollapse')} onclick={toggleRail}>
+            <Icon name="panel-left" />
           </button>
+        {/if}
+      </div>
+      <nav id="main-navigation" aria-label={tr('navMain')} class="nav">
+        {#each NAV as group (group.label ?? 'main')}
+          <div class="nav-group">
+            {#if group.label}<div class="nav-label">{tr(group.label)}</div>{/if}
+            {#each group.items as item (item.page)}
+              <a
+                class="nav-item"
+                href={href(item.page)}
+                aria-current={activePage === item.page ? 'page' : undefined}
+                aria-label={collapsed ? tr(item.label) : undefined}
+                use:tip={collapsed ? tr(item.label) : ''}
+              >
+                <Icon name={item.icon} />
+                <span>{tr(item.label)}</span>
+                {#if item.page === 'health' && app.counts.unreachable}
+                  <span class="count" data-tone="error" aria-label={tr('navUnreachable', { count: app.counts.unreachable })}>{app.counts.unreachable}</span>
+                {:else if item.page === 'links' && app.counts.links != null}
+                  <span class="count">{app.counts.links}</span>
+                {:else if item.page === 'domains' && app.counts.domains != null}
+                  <span class="count">{app.counts.domains}</span>
+                {/if}
+              </a>
+            {/each}
+          </div>
         {/each}
       </nav>
-      <div class="rail-foot">
-        <div class="profile row">
-          <span class="avatar" aria-hidden="true"><Icon name="account" /></span>
-          <strong title={user.username}>{user.username}</strong>
+      <div class="sidebar-foot">
+        {#if instance}
+          <a class="instance" href={href('system')} aria-label={tr('instanceLabel')}>
+            <span class="instance-head"><i class="dot" data-ok={instanceOk || undefined} aria-hidden="true"></i>{instanceOk ? tr('instanceRunning') : tr('instanceAttention')}</span>
+            <dl>
+              <dt>{tr('instanceVersion')}</dt><dd>{instance.version}</dd>
+              <dt>{tr('instanceBackup')}</dt>
+              <dd>{instance.last_verified_backup_at ? new Intl.DateTimeFormat(locale.language, { dateStyle: 'short' }).format(instance.last_verified_backup_at * 1000) : tr('instanceNoBackup')}</dd>
+            </dl>
+          </a>
+        {/if}
+        <div class="user-row">
+          <span class="avatar" aria-hidden="true">{app.user.username.slice(0, 2).toUpperCase()}</span>
+          <div><span class="truncate">{app.user.username}</span><small>{tr('administrator')}</small></div>
+          <Menu label={tr('accountMenu')} icon="ellipsis" size="sm" align="start">
+            {#snippet children(close)}
+              <a class="menu-item" role="menuitem" href={href('settings')} onclick={close}><Icon name="user" />{tr('accountSettings')}</a>
+              {#if collapsed}<button class="menu-item" role="menuitem" onclick={() => { toggleRail(); close(); }}><Icon name="panel-left" />{tr('navExpand')}</button>{/if}
+              <div class="menu-sep"></div>
+              <button class="menu-item" role="menuitem" onclick={() => { close(); void signOut(); }}><Icon name="log-out" />{tr('signOut')}</button>
+            {/snippet}
+          </Menu>
         </div>
       </div>
     </aside>
 
-    <div class="workspace">
+    <div class="main-col">
       <header class="topbar">
-        <div class="crumb" aria-hidden="true"><span>{t.mainNavigation}</span><Icon name="chevron" /><strong>{t[page]}</strong></div>
-        <div class="brand mobile-brand"><img src="/favicon.svg" alt="" />ShortCircuit</div>
-        <button class="button menu-toggle" type="button" bind:this={menuButton} aria-expanded={menuOpen} aria-controls="main-navigation"
-          onclick={() => menuOpen = !menuOpen}><Icon name={menuOpen ? 'close' : 'rule'} />{t.menu}<span class="visually-hidden">: {t[page]}</span></button>
-        <div class="top-actions">
-          <Preferences {t} bind:language bind:theme />
-          <button type="button" class="button signout" disabled={signingOut} onclick={signOut} aria-label={t.signOut} title={t.signOut}>
-            <Icon name="exit" /><span>{t.signOut}</span>
-          </button>
-        </div>
-      </header>
-      <main id="main-content" class="main" tabindex="-1" bind:this={main}>
-        {#if signOutError}<p class="notice error page-notice" role="alert">{t[signOutError]}</p>{/if}
-        {#if page === 'overview'}
-          <Overview {t} {language} {api} oncreate={createFromOverview} onnavigate={navigate} />
-        {:else if page === 'account'}
-          <Account {t} {user} {api} bind:timeZone onPasswordChanged={passwordChanged} />
-        {:else if page === 'operations'}
-          <Operations {language} {api} />
-        {:else if page === 'auditLog'}
-          <Audit {t} {language} {api} />
-        {:else if page === 'monitoring'}
-          <Monitoring {t} {language} {api} {domains} />
-        {:else if page === 'exchange'}
-          <Exchange {t} {api} {language} {domains} />
-        {:else if page === 'analytics'}
-          <Analytics {t} {api} {language} />
-        {:else if page === 'domains' || page === 'tags'}
-          {#key page}<Catalog {t} {api} {language} kind={page} onDomainSaved={loadDomains} />{/key}
-          {#if page === 'domains'}<DestinationPolicy {t} {api} {language} />{/if}
-        {:else if domains}
-          {#if page === 'links'}
-            <Links {t} {api} {domains} {language} bind:createRequested />
-          {:else}
-            <Keys {t} {api} {domains} {language} />
+        <button class="btn menu-button" data-variant="ghost" data-icon-only aria-label={tr('navOpen')} aria-expanded={overlays.navOpen} aria-controls="main-navigation" onclick={() => (overlays.navOpen = true)}>
+          <Icon name="menu" />
+        </button>
+        <nav class="crumbs" aria-label={tr('navBreadcrumb')}>
+          {#if detailId != null}
+            <a href={href('links')}>{tr('navLinks')}</a><Icon name="chevron-right" /><span aria-current="page" class="truncate">{app.crumb}</span>
+          {:else if route.page === 'tags'}
+            <a href={href('links')}>{tr('navLinks')}</a><Icon name="chevron-right" /><span aria-current="page">{tr('navTags')}</span>
           {/if}
-        {:else if domainError}
-          <div class="panel panel-pad stack"><p class="notice error" role="alert">{t[domainError]}</p><div><button class="button" type="button" onclick={loadDomains}>{t.retry}</button></div></div>
+        </nav>
+        <div class="spacer"></div>
+        <button class="search-trigger" aria-keyshortcuts="Control+K Meta+K" onclick={() => (overlays.palette = true)}>
+          <Icon name="search" /><span>{tr('searchTrigger')}</span><kbd class="kbd" aria-hidden="true">Ctrl K</kbd>
+        </button>
+        <Menu label={tr('themeLabel')} icon={theme.choice === 'system' ? 'monitor' : theme.choice === 'dark' ? 'moon' : 'sun'} width={180}>
+          {#snippet children(close)}
+            <div class="menu-label">{tr('themeLabel')}</div>
+            {#each [['dark', 'moon', 'themeDark'], ['light', 'sun', 'themeLight'], ['system', 'monitor', 'themeSystem']] as const as [value, icon, label] (value)}
+              <button class="menu-item" role="menuitemradio" aria-checked={theme.choice === value} onclick={() => { setTheme(value); close(); }}>
+                <Icon name={icon} />{tr(label)}
+              </button>
+            {/each}
+          {/snippet}
+        </Menu>
+        <button class="btn new-link" data-variant={globalPrimary ? 'primary' : 'secondary'} aria-label={tr('newLink')} aria-keyshortcuts="N" onclick={() => openCreate()} use:tip={tr('newLinkShortcut')}>
+          <Icon name="plus" /><span>{tr('newLink')}</span>
+        </button>
+      </header>
+
+      <main id="main" class="content">
+        {#if signOutError}<div class="notice" data-tone="error" role="alert"><Icon name="circle-alert" /><div><p>{locale.t[signOutError]}</p></div></div>{/if}
+        {#if domainError}
+          <div class="notice" data-tone="error" role="alert"><Icon name="circle-alert" /><div><p>{locale.t[domainError]}</p></div><button class="btn" data-size="sm" onclick={loadDomains}>{tr('tryAgain')}</button></div>
+        {:else if !app.domains}
+          <p class="muted" role="status">{tr('loadingPage')}</p>
         {:else}
-          <p role="status">{t.loading}</p>
+          {#key route.page + route.id}
+            {#if route.page === 'overview'}<Overview />
+            {:else if route.page === 'links' && detailId != null}<LinkDetail id={detailId} />
+            {:else if route.page === 'links' || route.page === 'tags'}<Links />
+            {:else if route.page === 'analytics'}<Analytics />
+            {:else if route.page === 'health'}<Health />
+            {:else if route.page === 'qr'}<QrStudio />
+            {:else if route.page === 'domains'}<DomainsPage onchange={loadDomains} />
+            {:else if route.page === 'exchange'}<Exchange />
+            {:else if route.page === 'keys'}<Keys />
+            {:else if route.page === 'system'}<System />
+            {:else if route.page === 'settings'}<Settings bind:timeZone onPasswordChanged={passwordChanged} />
+            {:else}<Overview />
+            {/if}
+          {/key}
         {/if}
       </main>
     </div>
   </div>
+
+  {#if app.domains}
+    <CreateLink />
+    <EditLink />
+    <QrDialog />
+  {/if}
+  <CommandPalette />
 {:else}
-  <div class="entry-shell">
-    <header class="entry-header"><Preferences {t} bind:language bind:theme /></header>
-    <main id="main-content" class="entry-main" tabindex="-1">
-      {#if sessionLoading}
-        <p role="status">{t.loading}</p>
-      {:else if sessionError}
-        <section class="panel auth-card stack">
-          <div class="brand"><img src="/favicon.svg" alt="" />ShortCircuit</div>
-          <p class="notice error" role="alert">{t[sessionError]}</p>
-          <button class="button" type="button" onclick={refreshSession}>{t.retry}</button>
-        </section>
-      {:else}
-        <Auth {t} {setup} {api} notice={authNotice} {signedIn} {refreshSession} />
-      {/if}
-    </main>
-  </div>
+  <main id="main" class="solo">
+    {#if sessionLoading}
+      <p class="muted" role="status">{tr('loadingPage')}</p>
+    {:else if sessionError}
+      <div class="solo-card">
+        <Logo />
+        <div class="notice" data-tone="error" role="alert"><Icon name="circle-alert" /><div><p>{locale.t[sessionError]}</p></div></div>
+        <button class="btn" onclick={refreshSession}>{tr('tryAgain')}</button>
+      </div>
+    {:else}
+      <Auth {setup} notice={authNotice} {signedIn} {refreshSession} />
+    {/if}
+  </main>
 {/if}
+
+<section class="toasts" aria-label={tr('notifications')}>
+  <div role="status" aria-live="polite" class="toast-list">
+    {#each toasts.filter((t) => t.tone !== 'error') as t (t.id)}
+      <div class="toast" data-tone={t.tone}>
+        <Icon name={t.tone === 'info' ? 'info' : 'circle-check'} />
+        <div><b>{t.title}</b>{#if t.body}<p class="truncate">{t.body}</p>{/if}</div>
+        <button class="btn" data-variant="ghost" data-size="sm" data-icon-only aria-label={tr('dismiss')} onclick={() => dismiss(t.id)}><Icon name="x" /></button>
+      </div>
+    {/each}
+  </div>
+  <div role="alert" class="toast-list">
+    {#each toasts.filter((t) => t.tone === 'error') as t (t.id)}
+      <div class="toast" data-tone="error">
+        <Icon name="circle-alert" />
+        <div><b>{t.title}</b>{#if t.body}<p>{t.body}</p>{/if}</div>
+        <button class="btn" data-variant="ghost" data-size="sm" data-icon-only aria-label={tr('dismiss')} onclick={() => dismiss(t.id)}><Icon name="x" /></button>
+      </div>
+    {/each}
+  </div>
+</section>
