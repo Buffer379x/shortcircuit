@@ -1,5 +1,7 @@
 # ShortCircuit
 
+![ShortCircuit, take the shorter route.](assets/branding/readme-banner.png)
+
 ShortCircuit is a self-hosted URL shortener and link manager. It uses Rust and SQLite and is designed to run in one Docker container. You can recreate an existing short URL by configuring its original host and creating a link with the same slug.
 
 **0.7.0-preview.1.** ShortCircuit is licensed under the [MIT License](LICENSE). See the [project plan](docs/PROJECT_PLAN.md) and [verification status](docs/PROJECT_STATUS.md).
@@ -35,26 +37,9 @@ cargo run --locked
 
 Run `cargo run --locked -- setup-token` in a second shell, using the same `DATA_DIR` if configured. The Docker image embeds the frontend in the Rust binary. [API reference](docs/API.md) · [CI results](https://github.com/Buffer379x/shortcircuit/actions)
 
-## Design preview
+## Interface
 
-Open [prototype/index.html](prototype/index.html) in a browser. You can also serve the repository locally and open `http://127.0.0.1:8765/prototype/`.
-
-```sh
-python3 -m http.server 8765 --bind 127.0.0.1
-```
-
-The preview uses sample data and stores changes in your browser profile. To reset it, clear the preview's site data or use a fresh profile. Use the sidebar to navigate, open the sign-in preview from the profile button, and switch themes from the top bar. The preview runs offline without a build.
-
-[Desktop dark](assets/design-renders/desktop-overview-dark.png) · [Desktop light](assets/design-renders/desktop-overview-light.png) · [Mobile dashboard](assets/design-renders/mobile-overview.png) · [Mobile link creation](assets/design-renders/mobile-create-link.png) · [Design system](docs/DESIGN_SYSTEM.md)
-
-The PNGs above are design renders. To capture the interactive preview in Chromium, run the capture script with Node.js and Playwright. The following commands install Playwright in a temporary directory.
-
-```sh
-sc_capture_deps=$(mktemp -d)
-npm install --prefix "$sc_capture_deps" --no-save playwright
-"$sc_capture_deps/node_modules/.bin/playwright" install chromium
-SHORTCIRCUIT_PLAYWRIGHT="$sc_capture_deps/node_modules/playwright" node prototype/capture.cjs
-```
+The admin interface uses the Polar Signal design system: a dark-first, near-monochrome interface with pink as the signal color, Geist type, and a light theme. [Design system](docs/DESIGN_SYSTEM.md) · [UI guidelines](docs/UI_GUIDELINES.md) · [Branding](docs/BRANDING.md)
 
 ## Documentation
 
