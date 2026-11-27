@@ -41,6 +41,8 @@ use super::{
 };
 
 const AUTHORIZATION_TTL: Duration = Duration::from_secs(120);
+/// How long diagnostics reuse the raw analytics event count before counting again.
+const RAW_EVENT_COUNT_TTL: Duration = Duration::from_secs(30);
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(1800);
 const SNAPSHOT_MEDIA_TYPE: &str = "application/octet-stream";
 
@@ -57,6 +59,11 @@ struct OperationsState {
     started: Instant,
     grants: Mutex<[Option<Grant>; 2]>,
     transfer: Arc<Semaphore>,
+    cpu: crate::resources::CpuSampler,
+    /// The last raw event count and when it was taken. The async lock allows one count at a time.
+    raw_events: tokio::sync::Mutex<Option<(Instant, i64)>>,
+    /// One stored-backup listing at a time.
+    listing: tokio::sync::Mutex<()>,
 }
 
 struct Grant {
@@ -83,6 +90,9 @@ impl Operations {
                 started: Instant::now(),
                 grants: Mutex::new([None, None]),
                 transfer: Arc::new(Semaphore::new(1)),
+                cpu: crate::resources::CpuSampler::default(),
+                raw_events: tokio::sync::Mutex::new(None),
+                listing: tokio::sync::Mutex::new(()),
             }),
             monitoring_enabled: false,
         }
@@ -91,6 +101,28 @@ impl Operations {
     pub fn with_monitoring(mut self, enabled: bool) -> Self {
         self.monitoring_enabled = enabled;
         self
+    }
+
+    /// The background CPU sampler for diagnostics. It runs until `stop` is set.
+    pub fn sample_resources(
+        &self,
+        stop: tokio::sync::watch::Receiver<bool>,
+    ) -> impl Future<Output = ()> + Send + 'static {
+        self.shared.cpu.clone().run(stop)
+    }
+
+    async fn raw_event_count(&self, pool: &sqlx::SqlitePool) -> Result<i64, sqlx::Error> {
+        let mut cached = self.shared.raw_events.lock().await;
+        if let Some((counted, count)) = *cached
+            && counted.elapsed() < RAW_EVENT_COUNT_TTL
+        {
+            return Ok(count);
+        }
+        let count = sqlx::query_scalar("SELECT count(*) FROM analytics_events")
+            .fetch_one(pool)
+            .await?;
+        *cached = Some((Instant::now(), count));
+        Ok(count)
     }
 
     pub async fn record_backup_result(database: &Path, succeeded: bool) {
@@ -160,6 +192,7 @@ impl Operations {
 pub(super) fn routes(operations: Operations) -> Router<AppState> {
     Router::new()
         .route("/api/v1/system", get(diagnostics))
+        .route("/api/v1/system/backups", get(stored_backups))
         .route("/api/v1/system/backup/authorize", post(authorize_backup))
         .route("/api/v1/system/restore/authorize", post(authorize_restore))
         .route("/api/v1/system/backup", get(download))
@@ -199,7 +232,6 @@ struct DatabaseDiagnostics {
     schema_version: i64,
     database_bytes: i64,
     link_count: i64,
-    raw_event_count: i64,
     analytics_enabled: bool,
     last_monitor_check_at: Option<i64>,
 }
@@ -214,7 +246,6 @@ async fn diagnostics(
              (SELECT page_count FROM pragma_page_count()) *
                  (SELECT page_size FROM pragma_page_size()) AS database_bytes,
              (SELECT count(*) FROM links) AS link_count,
-             (SELECT count(*) FROM analytics_events) AS raw_event_count,
              (SELECT enabled FROM analytics_settings WHERE id = 1) AS analytics_enabled,
              (SELECT max(last_checked) FROM link_monitor WHERE last_checked >= 0)
                  AS last_monitor_check_at",
@@ -222,9 +253,13 @@ async fn diagnostics(
     .fetch_one(&state.pool)
     .await
     .map_err(|_| Problem::unavailable())?;
+    let raw_event_count = operations
+        .raw_event_count(&state.pool)
+        .await
+        .map_err(|_| Problem::unavailable())?;
     let database = operations.shared.database.clone();
     let database_bytes = u64::try_from(metrics.database_bytes).unwrap_or_default();
-    let cpu = crate::resources::sample_cpu();
+    let cpu = operations.shared.cpu.latest();
     let readings = tokio::task::spawn_blocking(move || {
         let directory = database
             .parent()
@@ -239,9 +274,8 @@ async fn diagnostics(
             crate::resources::container_memory(),
         )
     });
-    let (cpu, readings) = tokio::join!(cpu, readings);
     let (backup, restore_status, process_rss_bytes, storage, container_memory) =
-        readings.map_err(|_| Problem::unavailable())?;
+        readings.await.map_err(|_| Problem::unavailable())?;
     Ok(Json(Diagnostics {
         version: env!("CARGO_PKG_VERSION"),
         build_revision: crate::build_revision(),
@@ -252,7 +286,7 @@ async fn diagnostics(
         schema_version: metrics.schema_version,
         database_bytes: metrics.database_bytes,
         link_count: metrics.link_count,
-        raw_event_count: metrics.raw_event_count,
+        raw_event_count,
         analytics_enabled: metrics.analytics_enabled,
         scheduled_backups: operations.shared.scheduled_backups,
         last_backup_status: backup.status,
@@ -266,6 +300,18 @@ async fn diagnostics(
         cpu,
         container_memory,
     }))
+}
+
+/// Lists stored snapshots and rollback copies by file name. Read-only; downloads stay limited to
+/// the freshly verified snapshot of `GET /api/v1/system/backup`.
+async fn stored_backups(
+    Extension(operations): Extension<Operations>,
+) -> Result<Json<crate::backup_inventory::StoredBackups>, Problem> {
+    let _listing = operations.shared.listing.lock().await;
+    crate::backup_inventory::list(&operations.shared.database)
+        .await
+        .map(Json)
+        .map_err(|_| Problem::unavailable())
 }
 
 #[cfg(target_os = "linux")]
@@ -692,6 +738,28 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn the_raw_event_count_is_reused_for_a_short_time() {
+        let work = tempfile::tempdir().unwrap();
+        let database = work.path().join("live.sqlite");
+        let pool = open_database(&database).await.unwrap();
+        let operations = Operations::new(database, false);
+        assert_eq!(operations.raw_event_count(&pool).await.unwrap(), 0);
+        sqlx::query(
+            "INSERT INTO analytics_events (occurred_at, host, kind, visit_class, source)
+             VALUES (unixepoch(), 'go.example', 'missing', 'unknown', 'unknown')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(operations.raw_event_count(&pool).await.unwrap(), 0);
+        let Some(expired) = Instant::now().checked_sub(RAW_EVENT_COUNT_TTL) else {
+            return;
+        };
+        *operations.shared.raw_events.lock().await = Some((expired, 0));
+        assert_eq!(operations.raw_event_count(&pool).await.unwrap(), 1);
+    }
+
     #[test]
     fn reads_only_a_valid_linux_resident_memory_value() {
         assert_eq!(
@@ -718,6 +786,7 @@ mod tests {
         let password = "synthetic-test-password";
         let account = auth.setup(&setup, "owner", password).await.unwrap();
         let cookie = format!("__Host-shortcircuit_session={}", account.token);
+        let state_pool = pool.clone();
         let router = super::super::admin_router_with(
             pool,
             PublicHosts::parse("go.example").unwrap(),
@@ -833,7 +902,10 @@ mod tests {
         );
         assert!(report["storage"]["available_bytes"].as_u64().is_some());
         assert!(report["storage"]["low_threshold_bytes"].as_u64().unwrap() >= 512 * 1024 * 1024);
-        assert!(report["cpu"]["window_ms"].as_u64().unwrap() >= 250);
+        // No sampler runs in this router, so CPU use is honestly unavailable without a sample.
+        assert_eq!(report["cpu"]["window_ms"], 0);
+        assert_eq!(report["cpu"]["sampled_at"], Value::Null);
+        assert_eq!(report["cpu"]["age_seconds"], Value::Null);
         for scope in ["process", "container"] {
             let state = report["cpu"][scope].as_str().unwrap();
             assert!(["measured", "unavailable"].contains(&state));
@@ -855,6 +927,59 @@ mod tests {
         assert_eq!(report["monitoring_enabled"], false);
         assert_eq!(report["last_monitor_check_at"], Value::Null);
         assert!(!String::from_utf8_lossy(&contents).contains("live.sqlite"));
+
+        // Stored snapshots are listed by name only, for browser sessions only.
+        let scheduled = crate::backup::create_snapshot(
+            &state_pool,
+            &database.with_file_name("backups").join("scheduled"),
+        )
+        .await
+        .unwrap();
+        let listed = send(
+            request(Method::GET, "/api/v1/system/backups")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        assert_eq!(listed.headers()[header::CACHE_CONTROL], "no-store");
+        let listing: Value =
+            serde_json::from_slice(&to_bytes(listed.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(listing["truncated"], false);
+        assert_eq!(listing["items"].as_array().unwrap().len(), 1);
+        assert_eq!(listing["items"][0]["kind"], "scheduled");
+        assert_eq!(
+            listing["items"][0]["file_name"],
+            scheduled.file_name().unwrap().to_str().unwrap()
+        );
+        assert!(listing["items"][0]["schema_version"].as_i64().unwrap() > 0);
+        assert!(
+            !listing
+                .to_string()
+                .contains(&work.path().display().to_string())
+        );
+        let bearer = send(
+            Request::builder()
+                .uri("/api/v1/system/backups")
+                .header(header::HOST, "admin.example")
+                .header(header::AUTHORIZATION, "Bearer sc_synthetic_key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(bearer.status(), StatusCode::UNAUTHORIZED);
+        let anonymous = send(
+            Request::builder()
+                .uri("/api/v1/system/backups")
+                .header(header::HOST, "admin.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
 
         assert_eq!(
             send(authorizing("/api/v1/system/restore/authorize"))

@@ -4,6 +4,7 @@ mod admin;
 mod analytics;
 mod auth;
 mod backup;
+mod backup_inventory;
 mod backup_schedule;
 mod confirmation;
 mod destinations;

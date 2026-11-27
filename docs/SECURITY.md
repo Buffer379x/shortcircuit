@@ -4,7 +4,7 @@ The 0.2 implementation adds a CLI-issued setup token, Argon2id passwords, revoca
 
 ## 0.2 deployment boundary
 
-- Set `ADMIN_ORIGIN` to the browser-visible origin. The default is `http://localhost:8081`. Plain HTTP origins are accepted only for loopback. A reverse proxy must preserve the configured Host and port, and only that proxy should connect to the cleartext admin backend.
+- Set `ADMIN_ORIGIN` to the browser-visible origin. The default is `http://localhost:8081`. Plain HTTP origins are accepted only for loopback. A reverse proxy must preserve the configured Host and port, and only that proxy should connect to the cleartext admin backend. A request with any other address gets `404`. Outside `/api/` it carries a static English or German page without scripts that says to open the configured administration address. The page names no address, host, product, or version. Only the first mismatch per process is logged with the expected origin.
 - Use a dedicated admin hostname for cookie isolation. A cookie applies to every port on its host. HTTPS sessions use a host-only `__Host-shortcircuit_session` cookie with `Secure`, `HttpOnly`, `SameSite=Strict` and `Path=/`. Loopback HTTP uses a separate cookie name.
 - Setup, sign-in, recovery, and password changes share a bounded attempt budget of eight requests per peer and 60 per process per minute. The budget uses the TCP peer. Hosts behind one reverse proxy share its peer budget.
 - Browser writes require the configured Origin and `X-CSRF-Token`. Authentication entry points require the configured Origin. The bearer API uses scoped keys without session cookies. Only active browser sessions can manage keys.
@@ -85,14 +85,17 @@ The outbox stores each event under a deterministic key, so detection after a res
 
 Configure `TRUSTED_PROXIES` as a comma-separated list of individual IP addresses or CIDR networks for actual proxy peers. The empty default uses the TCP peer. ShortCircuit uses one bounded `X-Forwarded-For` chain from a trusted peer and walks it right to left to the first untrusted address. Malformed or ambiguous inputs use the direct TCP peer. Forwarded host and scheme headers do not set either listener's trusted origin.
 
-IPv6 clients share one per-peer budget per /64 prefix. Public `429` responses include `Retry-After: 60`. Protected-link password attempts still share one global budget across all links, so a flood of wrong passwords can delay correct ones until the window ends. The variables below use `per-peer,global` counts per minute. A blank variable selects the default. Budget exhaustion returns HTTP 429.
+IPv6 clients share one per-peer budget per /64 prefix. Public `429` responses include `Retry-After: 60`. A protected-link password attempt must fit four budgets at once: the client's and the process-wide budget from `RATE_LIMIT_PUBLIC_PASSWORD`, and the client's budget for that link and the link's ceiling across all clients from `RATE_LIMIT_PUBLIC_PASSWORD_LINK`. The client key is the same address or /64 prefix that `TRUSTED_PROXIES` resolves. The default link ceiling of 30 stays below the process-wide 60, so guessing one link's password leaves attempts for every other link, and a distributed attempt on one link is bounded to 30 per minute. A flood against one link can still delay its correct password until the window ends. Only counted attempts create counter entries, so each counter map holds at most the process-wide count per window and is cleared when the window ends. A refused attempt counts toward no budget and returns before any password lookup or verification. Budgets do not change one-time consumption or visit limits. The variables below use `per-peer,global` counts per minute. A blank variable selects the default. Budget exhaustion returns HTTP 429.
 
 | Variable | Default | Scope |
 |---|---:|---|
 | `RATE_LIMIT_LOGIN` | `8,60` | Account setup, sign-in, and recovery |
 | `RATE_LIMIT_SENSITIVE` | `8,60` | Password changes, key rotation, and browser backup and restore authorization |
 | `RATE_LIMIT_API` | `240,4000` | Admin API, including session status |
-| `RATE_LIMIT_PUBLIC_PASSWORD` | `8,60` | Protected-link confirmation requests |
+| `RATE_LIMIT_PUBLIC_PASSWORD` | `8,60` | Protected-link password attempts per client and per process, across all links |
+| `RATE_LIMIT_PUBLIC_PASSWORD_LINK` | `5,30` | Protected-link password attempts per client and link, and per link across all clients |
 | `RATE_LIMIT_PUBLIC` | Off | Optional combined public listener limit, including lookup misses |
+
+**System**, **Backups** lists stored snapshots and restore rollback copies for browser sessions only (`GET /api/v1/system/backups`). The list is read-only, names files without paths, skips symbolic links and unexpected names, and reads the schema version with a read-only, immutable SQLite connection with `trusted_schema=OFF`. Stored files cannot be downloaded through the API, because a raw rollback copy still contains the session and setup digests that verified snapshots remove. Import problems name the failing row and field but never echo submitted values.
 
 The latest 1,000 administrative audit entries are available in **Audit log**. Account actions, key changes, monitor enrollment, and browser backup and restore events use fixed action identifiers and numeric object IDs. Audit entries exclude credentials, destination URLs, visitor addresses, and request headers.

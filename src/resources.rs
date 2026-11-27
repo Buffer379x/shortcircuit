@@ -1,18 +1,26 @@
-//! On-demand platform readings for authenticated diagnostics.
+//! Platform readings for authenticated diagnostics.
 //!
 //! Every reading reports its own availability. Process figures come from `/proc/self`, container
 //! figures from the cgroup v2 files of the process's own cgroup, and storage from the filesystem
-//! that holds the SQLite data. Nothing here runs in the background.
+//! that holds the SQLite data. Storage and memory are read on request. CPU use needs two counter
+//! readings, so one background sampler reads the counters every `CPU_SAMPLE_INTERVAL` and
+//! diagnostics return the latest sample with its age.
 
 use std::{
     path::Path,
-    time::{Duration, Instant},
+    sync::{Arc, PoisonError, RwLock},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::Serialize;
+use tokio::sync::watch;
 
-/// The interval between the two CPU counter readings of one sample.
-pub(crate) const CPU_WINDOW: Duration = Duration::from_millis(250);
+/// The interval between two CPU samples, which is also the window of each sample after the first.
+pub(crate) const CPU_SAMPLE_INTERVAL: Duration = Duration::from_secs(15);
+/// The window of the first sample after startup.
+const CPU_FIRST_WINDOW: Duration = Duration::from_secs(1);
+/// A sample older than this is reported as unavailable, for example if the sampler stopped.
+const CPU_STALE_AFTER: Duration = Duration::from_secs(60);
 /// Storage is low below this many bytes, or below three times the database size if larger.
 pub(crate) const MIN_FREE_BYTES: u64 = 512 * 1024 * 1024;
 const CGROUP: &str = "/sys/fs/cgroup";
@@ -93,6 +101,98 @@ pub(crate) struct Cpu {
     pub(crate) process_percent: Option<f64>,
     pub(crate) container: Availability,
     pub(crate) container_percent: Option<f64>,
+    /// UTC Unix seconds when the sample window ended. None before the first sample.
+    pub(crate) sampled_at: Option<u64>,
+    /// Seconds since the sample window ended. None before the first sample.
+    pub(crate) age_seconds: Option<u64>,
+}
+
+impl Cpu {
+    fn unavailable() -> Self {
+        Self {
+            window_ms: 0,
+            available_cores: available_cores(),
+            process: Availability::Unavailable,
+            process_percent: None,
+            container: Availability::Unavailable,
+            container_percent: None,
+            sampled_at: None,
+            age_seconds: None,
+        }
+    }
+}
+
+struct Sample {
+    cpu: Cpu,
+    taken: Instant,
+}
+
+/// The latest CPU sample, shared between the background sampler and diagnostics.
+#[derive(Clone, Default)]
+pub(crate) struct CpuSampler(Arc<RwLock<Option<Sample>>>);
+
+impl CpuSampler {
+    /// The latest sample with its age, or an unavailable reading before the first sample and
+    /// after `CPU_STALE_AFTER` without a new one.
+    pub(crate) fn latest(&self) -> Cpu {
+        let latest = self.0.read().unwrap_or_else(PoisonError::into_inner);
+        match latest.as_ref() {
+            Some(sample) if sample.taken.elapsed() <= CPU_STALE_AFTER => Cpu {
+                age_seconds: Some(sample.taken.elapsed().as_secs()),
+                ..sample.cpu.clone()
+            },
+            _ => Cpu::unavailable(),
+        }
+    }
+
+    /// Samples until `stop` is set: one small counter read per interval and nothing else.
+    pub(crate) async fn run(self, stop: watch::Receiver<bool>) {
+        self.run_with(CPU_FIRST_WINDOW, CPU_SAMPLE_INTERVAL, stop)
+            .await;
+    }
+
+    async fn run_with(self, first: Duration, interval: Duration, mut stop: watch::Receiver<bool>) {
+        let mut before = read_counters_blocking().await;
+        let mut started = Instant::now();
+        let mut window = first;
+        loop {
+            tokio::select! {
+                biased;
+                _ = stop.wait_for(|stopped| *stopped) => return,
+                () = tokio::time::sleep(window) => {}
+            }
+            let after = read_counters_blocking().await;
+            let taken = Instant::now();
+            let mut cpu = compare(
+                before,
+                after,
+                taken - started,
+                ticks_per_second(),
+                available_cores(),
+            );
+            cpu.sampled_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .map(|elapsed| elapsed.as_secs());
+            *self.0.write().unwrap_or_else(PoisonError::into_inner) = Some(Sample { cpu, taken });
+            before = after;
+            started = taken;
+            window = interval;
+        }
+    }
+}
+
+async fn read_counters_blocking() -> CpuCounters {
+    tokio::task::spawn_blocking(read_counters)
+        .await
+        .unwrap_or(CpuCounters {
+            process_ticks: None,
+            container_usec: None,
+        })
+}
+
+fn available_cores() -> Option<usize> {
+    std::thread::available_parallelism().ok().map(usize::from)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,36 +253,13 @@ fn compare(
         process_percent: process_percent.map(round),
         container: availability(container_percent),
         container_percent: container_percent.map(round),
+        sampled_at: None,
+        age_seconds: None,
     }
 }
 
 fn round(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
-}
-
-/// Samples CPU counters twice, `CPU_WINDOW` apart.
-pub(crate) async fn sample_cpu() -> Cpu {
-    let before = tokio::task::spawn_blocking(read_counters)
-        .await
-        .unwrap_or(CpuCounters {
-            process_ticks: None,
-            container_usec: None,
-        });
-    let started = Instant::now();
-    tokio::time::sleep(CPU_WINDOW).await;
-    let after = tokio::task::spawn_blocking(read_counters)
-        .await
-        .unwrap_or(CpuCounters {
-            process_ticks: None,
-            container_usec: None,
-        });
-    compare(
-        before,
-        after,
-        started.elapsed(),
-        ticks_per_second(),
-        std::thread::available_parallelism().ok().map(usize::from),
-    )
 }
 
 #[cfg(target_os = "linux")]
@@ -349,6 +426,70 @@ mod tests {
             compare(before, reset, Duration::from_secs(1), Some(100), None).process_percent,
             None
         );
+    }
+
+    #[tokio::test]
+    async fn the_sampler_publishes_dated_samples_and_stops_on_request() {
+        let sampler = CpuSampler::default();
+        let before = sampler.latest();
+        assert_eq!(before.process, Availability::Unavailable);
+        assert_eq!(before.container, Availability::Unavailable);
+        assert_eq!((before.sampled_at, before.age_seconds), (None, None));
+        assert_eq!(before.window_ms, 0);
+
+        let (stop, stopped) = watch::channel(false);
+        let task = tokio::spawn(sampler.clone().run_with(
+            Duration::from_millis(20),
+            Duration::from_secs(3600),
+            stopped,
+        ));
+        let started = Instant::now();
+        while sampler.latest().sampled_at.is_none() {
+            assert!(started.elapsed() < Duration::from_secs(5), "no sample");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let sample = sampler.latest();
+        assert!(sample.window_ms >= 20);
+        assert_eq!(sample.age_seconds, Some(0));
+        assert_eq!(
+            sample.process == Availability::Measured,
+            sample.process_percent.is_some()
+        );
+        stop.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("sampler stops between samples")
+            .unwrap();
+    }
+
+    #[test]
+    fn stale_samples_are_reported_as_unavailable() {
+        let sampler = CpuSampler::default();
+        let measured = compare(
+            CpuCounters {
+                process_ticks: Some(0),
+                container_usec: Some(0),
+            },
+            CpuCounters {
+                process_ticks: Some(10),
+                container_usec: Some(100_000),
+            },
+            Duration::from_secs(1),
+            Some(100),
+            Some(2),
+        );
+        let Some(taken) = Instant::now().checked_sub(CPU_STALE_AFTER + Duration::from_secs(1))
+        else {
+            return;
+        };
+        *sampler.0.write().unwrap() = Some(Sample {
+            cpu: measured,
+            taken,
+        });
+        let stale = sampler.latest();
+        assert_eq!(stale.process, Availability::Unavailable);
+        assert_eq!(stale.process_percent, None);
+        assert_eq!(stale.age_seconds, None);
     }
 
     #[test]

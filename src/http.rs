@@ -39,6 +39,8 @@ struct AppState {
 pub struct PublicControls {
     pub proxies: TrustedProxies,
     pub password: RateLimit,
+    /// Protected-link password attempts per link: per client key, and across all clients.
+    pub password_link: RateLimit,
     pub public: Option<RateLimit>,
 }
 
@@ -47,6 +49,7 @@ impl Default for PublicControls {
         Self {
             proxies: TrustedProxies::default(),
             password: RateLimit::PASSWORD_DEFAULT,
+            password_link: RateLimit::PASSWORD_LINK_DEFAULT,
             public: None,
         }
     }
@@ -94,7 +97,10 @@ pub fn public_router_with_controls(
             hosts,
             public_port,
             analytics,
-            attempts: Arc::new(AttemptLimiter::with_limit(controls.password)),
+            attempts: Arc::new(AttemptLimiter::with_scope_limit(
+                controls.password,
+                controls.password_link,
+            )),
             public_limit: controls
                 .public
                 .map(AttemptLimiter::with_limit)
@@ -392,7 +398,7 @@ async fn confirm(
 ) -> Result<Resolution, StatusCode> {
     let password = action.submit(headers, body).await?;
     if action.link.password_required {
-        state.attempts.allow(peer)?;
+        state.attempts.allow_scoped(peer, action.link.id)?;
         let hash = sqlx::query_scalar::<_, String>(
             "SELECT password_hash FROM link_protection
              WHERE link_id = ? AND revision = ? AND password_hash IS NOT NULL",

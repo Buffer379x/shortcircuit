@@ -125,7 +125,7 @@ fn newest_snapshot(directory: &Path) -> Option<u64> {
         .max()
 }
 
-fn backup_timestamp(name: &OsStr) -> Option<u64> {
+pub(crate) fn backup_timestamp(name: &OsStr) -> Option<u64> {
     let name = name.to_str()?.strip_prefix("shortcircuit-")?;
     let (timestamp, nonce) = name.strip_suffix(".sqlite")?.split_once('-')?;
     if timestamp.is_empty()

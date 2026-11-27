@@ -2155,11 +2155,11 @@
             }
           },
           "422": {
-            "description": "The exchange document is invalid or references an inactive host.",
+            "description": "The exchange document is invalid, references an inactive host, or contains a destination the destination policy refuses (destination_not_allowed). row and field locate the first failing item.",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "$ref": "#/components/schemas/RowProblem"
                 }
               }
             }
@@ -2358,11 +2358,11 @@
             }
           },
           "422": {
-            "description": "The exchange document is invalid or references an inactive host.",
+            "description": "The exchange document is invalid, references an inactive host, or contains a destination the destination policy refuses (destination_not_allowed). row and field locate the first failing item.",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "$ref": "#/components/schemas/RowProblem"
                 }
               }
             }
@@ -2575,6 +2575,16 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The CSV file is malformed. row locates the first malformed data record when known.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RowProblem"
                 }
               }
             }
@@ -3549,7 +3559,7 @@
       "post": {
         "operationId": "searchLinkCatalog",
         "summary": "Search, filter, and sort all links",
-        "description": "Read-only, browser-session search. Reuse the response cursor with the same filters and sort. The cursor stores the sort key so paging can continue after the anchor is deleted. Search matches link descriptions and the result includes retained redirect counts. Each item also reports its live state, policy limits, protection kind, rule count, 30-day redirects, a 14-day trend, and its last health check.",
+        "description": "Read-only, browser-session search. API keys are refused with 401 and cannot filter or sort the catalog by traffic. Filter by live state and sort by 30-day visits or the last visit. Reuse the response cursor with the same filters and sort. The cursor stores the sort key so paging can continue after the anchor is deleted. Search matches link descriptions and the result includes retained redirect counts. Each item also reports its live state, policy limits, protection kind, rule count, 30-day redirects, a 14-day trend, and its last health check.",
         "tags": [
           "Links"
         ],
@@ -6347,7 +6357,8 @@
                     "raw_event_count": {
                       "type": "integer",
                       "format": "int64",
-                      "minimum": 0
+                      "minimum": 0,
+                      "description": "Stored analytics detail rows. Counted at most once every 30 seconds, so it can lag recent writes."
                     },
                     "analytics_enabled": {
                       "type": "boolean"
@@ -6432,9 +6443,11 @@
                         "process",
                         "process_percent",
                         "container",
-                        "container_percent"
+                        "container_percent",
+                        "sampled_at",
+                        "age_seconds"
                       ],
-                      "description": "Two counter readings taken window_ms apart during this request. Percentages are of one core and can exceed 100.",
+                      "description": "The latest sample of the background sampler: two counter readings window_ms apart, 1 second for the first sample after startup and 15 seconds after that. Percentages are of one core and can exceed 100. Before the first sample, and when the latest sample is older than 60 seconds, process and container are unavailable, window_ms is 0, and sampled_at and age_seconds are null.",
                       "properties": {
                         "window_ms": {
                           "type": "integer",
@@ -6474,6 +6487,23 @@
                           ],
                           "minimum": 0,
                           "description": "usage_usec of the process's cgroup v2 cpu.stat. Unavailable outside cgroup v2."
+                        },
+                        "sampled_at": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "format": "int64",
+                          "minimum": 0,
+                          "description": "UTC Unix seconds when the sample window ended."
+                        },
+                        "age_seconds": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "description": "Seconds since the sample window ended."
                         }
                       }
                     },
@@ -6551,7 +6581,47 @@
             }
           }
         },
-        "description": "Resource readings are taken on demand and add a sampling delay of about 250 ms."
+        "description": "Storage and memory are read on request. CPU use comes from a background sampler that reads the counters every 15 seconds, so the request does not wait for a sample. raw_event_count is reused for up to 30 seconds."
+      }
+    },
+    "/api/v1/system/backups": {
+      "get": {
+        "operationId": "listStoredBackups",
+        "summary": "List stored snapshots and rollback copies",
+        "description": "Read-only and browser-session only. Lists regular files with the expected snapshot or rollback names; symbolic links and other files are skipped. Stored files cannot be downloaded through the API; GET /api/v1/system/backup always streams a new verified snapshot.",
+        "tags": [
+          "System"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoredBackupList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/system/backup": {
@@ -9682,7 +9752,8 @@
           },
           "key": {
             "type": "string",
-            "maxLength": 4096
+            "maxLength": 4096,
+            "description": "Copy from next_cursor. For traffic sorts it is a decimal integer."
           },
           "sort": {
             "$ref": "#/components/schemas/CatalogSearchSort"
@@ -9709,6 +9780,17 @@
           },
           "enabled": {
             "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "scheduled",
+              "expired",
+              "disabled",
+              "exhausted"
+            ],
+            "description": "Only links whose live state, as reported in the item state, has this value."
           },
           "sort": {
             "$ref": "#/components/schemas/CatalogSearchSort"
@@ -10062,9 +10144,14 @@
           "target_asc",
           "target_desc",
           "enabled_first",
-          "disabled_first"
+          "disabled_first",
+          "visits_desc",
+          "visits_asc",
+          "last_visit_desc",
+          "last_visit_asc"
         ],
-        "default": "newest"
+        "default": "newest",
+        "description": "Traffic sorts order by visits_30d or by the last recorded redirect, ties by ID in the same direction. Links without the value come last in both directions."
       },
       "CatalogSimulationInput": {
         "type": "object",
@@ -10669,6 +10756,14 @@
           "slug": {
             "type": "string"
           },
+          "title": {
+            "type": "string",
+            "description": "The link title, empty when none is set."
+          },
+          "target": {
+            "type": "string",
+            "description": "The link destination."
+          },
           "priority": {
             "type": "boolean"
           },
@@ -10744,6 +10839,8 @@
           "id",
           "host",
           "slug",
+          "title",
+          "target",
           "priority",
           "status",
           "last_checked",
@@ -11486,6 +11583,117 @@
           "monitor"
         ],
         "description": "One catalog link with the fields of a search item. A bearer key without the analytics scope receives no recorded_redirects, last_redirect_date, last_redirect_at, visits_30d, or trend."
+      },
+      "RowProblem": {
+        "type": "object",
+        "description": "A problem with the location of the first failing item of a multi-row request. row and field are additive extensions; submitted values are never echoed.",
+        "properties": {
+          "status": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "row": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based position of the first failing item: the index in items for JSON, or the data row after the header for CSV. Absent for problems with the whole document."
+          },
+          "field": {
+            "enum": [
+              "version",
+              "host",
+              "slug",
+              "target",
+              "title",
+              "description",
+              "tags",
+              "enabled",
+              "analytics_enabled"
+            ],
+            "description": "The exchange field that failed in row, when known. Absent for malformed CSV records and whole-document problems. Mapped CSV files report the exchange field, not the column name."
+          }
+        },
+        "required": [
+          "status",
+          "title",
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "StoredBackup": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "file_name",
+          "size_bytes",
+          "created_at",
+          "schema_version"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "manual",
+              "scheduled",
+              "pre_upgrade",
+              "rollback"
+            ],
+            "description": "manual: backup command in /data/backups. scheduled: /data/backups/scheduled. pre_upgrade: /data/backups/pre-upgrade. rollback: the previous database kept by a restore next to the live database."
+          },
+          "file_name": {
+            "type": "string",
+            "description": "File name only. Paths are never returned."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0,
+            "description": "UTC Unix seconds from the snapshot name, or the file modification time for rollback copies."
+          },
+          "schema_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 1,
+            "description": "Schema recorded in the file, or null when it cannot be read within 2 seconds."
+          }
+        }
+      },
+      "StoredBackupList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "truncated"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/StoredBackup"
+            },
+            "description": "Newest first."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when more files exist than were scanned (1,000 entries per location) or listed (100)."
+          }
+        }
       }
     }
   }

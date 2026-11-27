@@ -74,6 +74,6 @@ Settings marked as added after preview.2, and the monitor, notification, title l
 - **Trust the proxy.** Behind Nginx Proxy Manager, add the variable `TRUSTED_PROXIES` with the proxy container address or its bridge network, for example `172.18.0.0/16`. Without it, every client shares the proxy's rate-limit budget for sign-in and protected links.
 - **Changed ports.** If you publish other host ports, set **Admin origin** and **WebUI** to the same address, and set the domain origin on **Domains**, so copied and QR short URLs use the published port.
 
-- **Admin page shows "not found".** The browser address must match **Admin origin** exactly, including `localhost` versus `127.0.0.1` and the port. The log records the first mismatched request with the expected origin.
+- **Admin page says the administration isn't available at this address.** The browser address must match **Admin origin** exactly, including `localhost` versus `127.0.0.1` and the port. The log records the first mismatched request with the expected origin.
 
 Since 0.7.0-preview.1 the template enables daily scheduled backups and offers the **Trusted proxies** field. It keeps the Docker volume by default, because a new appdata directory is owned by `nobody:users` and the container runs as UID 10001.

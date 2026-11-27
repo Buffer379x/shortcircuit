@@ -168,6 +168,8 @@ async fn serve() -> Result<(), AppError> {
     let public_controls = PublicControls {
         proxies: proxies.clone(),
         password: rate_limit("RATE_LIMIT_PUBLIC_PASSWORD")?.unwrap_or(RateLimit::PASSWORD_DEFAULT),
+        password_link: rate_limit("RATE_LIMIT_PUBLIC_PASSWORD_LINK")?
+            .unwrap_or(RateLimit::PASSWORD_LINK_DEFAULT),
         public: rate_limit("RATE_LIMIT_PUBLIC")?,
     };
     let public_addr = bind_address("PUBLIC_BIND", "127.0.0.1:8080")?;
@@ -225,6 +227,7 @@ async fn serve() -> Result<(), AppError> {
 
     let (analytics, mut writer) = Analytics::start(pool.clone()).await?;
     let (stop, receiver) = watch::channel(false);
+    let sampler = tokio::spawn(operations.sample_resources(receiver.clone()));
     let monitoring = monitor.enabled().then(|| {
         let monitor = monitor.clone();
         let pool = pool.clone();
@@ -305,7 +308,7 @@ async fn serve() -> Result<(), AppError> {
             tracing::warn!("analytics flush deadline reached");
         }
     }
-    for task in [monitoring, title_job, notification_job]
+    for task in [monitoring, title_job, notification_job, Some(sampler)]
         .into_iter()
         .flatten()
     {

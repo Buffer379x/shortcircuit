@@ -186,13 +186,16 @@ pub fn admin_router_with(
             state.clone(),
             access::api_limit,
         ))
-        .route_layer(middleware::from_fn_with_state(state, access::admin_host));
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            access::admin_host,
+        ));
 
     Router::new()
         .route("/healthz", get(|| async { StatusCode::OK }))
         .route("/readyz", get(move || readiness(pool)))
         .merge(application)
-        .fallback(|| async { StatusCode::NOT_FOUND })
+        .fallback(move |request: axum::extract::Request| access::unrouted(state.clone(), request))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(middleware::from_fn(assets::security_headers))
         .layer(middleware::from_fn(response_headers))
@@ -413,6 +416,12 @@ struct ErrorBody {
     status: u16,
     title: &'static str,
     code: &'static str,
+    /// The 1-based item or data row that failed, for multi-row requests such as imports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    row: Option<usize>,
+    /// The exchange field that failed in `row`, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    field: Option<&'static str>,
 }
 
 struct Problem(StatusCode, &'static str);
@@ -444,14 +453,56 @@ impl From<AuthError> for Problem {
     }
 }
 
+/// A problem located at one row of a multi-row request. It adds `row` and, when known, `field`
+/// to the problem document and never echoes submitted values.
+struct RowProblem {
+    problem: Problem,
+    row: Option<usize>,
+    field: Option<&'static str>,
+}
+
+impl RowProblem {
+    fn at(problem: Problem, row: usize, field: Option<&'static str>) -> Self {
+        Self {
+            problem,
+            row: Some(row),
+            field,
+        }
+    }
+}
+
+impl From<Problem> for RowProblem {
+    fn from(problem: Problem) -> Self {
+        Self {
+            problem,
+            row: None,
+            field: None,
+        }
+    }
+}
+
+impl IntoResponse for RowProblem {
+    fn into_response(self) -> Response {
+        self.problem.respond(self.row, self.field)
+    }
+}
+
 impl IntoResponse for Problem {
     fn into_response(self) -> Response {
+        self.respond(None, None)
+    }
+}
+
+impl Problem {
+    fn respond(self, row: Option<usize>, field: Option<&'static str>) -> Response {
         let mut response = (
             self.0,
             Json(ErrorBody {
                 status: self.0.as_u16(),
                 title: self.0.canonical_reason().unwrap_or("Request failed"),
                 code: self.1,
+                row,
+                field: row.and(field),
             }),
         )
             .into_response();

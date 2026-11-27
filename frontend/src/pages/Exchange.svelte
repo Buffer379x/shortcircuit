@@ -69,6 +69,8 @@
   let reading = $state(false);
   let submitting = $state<'preview' | 'apply' | null>(null);
   let importError = $state<keyof Messages | null>(null);
+  // Where the server found the first invalid item, shown next to the import error.
+  let importLocation = $state<string | null>(null);
   let dragging = $state(false);
   let errorBox = $state<HTMLDivElement>();
   let importHeading = $state<HTMLHeadingElement>();
@@ -161,8 +163,18 @@
     importHeading?.focus();
   }
 
-  async function showError(message: keyof Messages) {
+  function failedRow(error: unknown): string | null {
+    if (!(error instanceof ApiError) || error.row === null) return null;
+    const row = num(error.row);
+    const where = source === 'csv' ? tr('admImportRowCsv', { row }) : tr('admImportRowJson', { row });
+    const label: keyof Messages | null = error.field === 'version' ? 'admImportFieldVersion'
+      : error.field !== null && Object.hasOwn(fieldLabels, error.field) ? fieldLabels[error.field as CsvField] : null;
+    return label ? tr('admImportRowField', { location: where, field: tr(label) }) : where;
+  }
+
+  async function showError(message: keyof Messages, cause: unknown = null) {
     importError = message;
+    importLocation = failedRow(cause);
     await tick();
     errorBox?.focus();
   }
@@ -204,6 +216,7 @@
     source = isCsv ? 'csv' : 'json';
     reading = true;
     let failure: keyof Messages | null = null;
+    let cause: unknown = null;
     try {
       if (isCsv) {
         const csv = new Blob([file], { type: 'text/csv' });
@@ -224,13 +237,14 @@
         else importFile = data;
       }
     } catch (error) {
+      cause = error;
       if (!isCsv) failure = 'exchangeInvalidJson';
       else if (error instanceof ApiError && error.code === 'invalid_exchange') failure = 'exchangeInvalidCsv';
       else failure = problemMessage(error);
     } finally {
       reading = false;
     }
-    if (failure) return showError(failure);
+    if (failure) return showError(failure, cause);
     if (!importFile) return;
     if (csvColumns !== null) await goStep(1);
     else await submitImport(true);
@@ -286,18 +300,20 @@
     importError = null;
     report = null;
     let failure: keyof Messages | null = null;
+    let cause: unknown = null;
     try {
       report = importFile instanceof Blob
         ? await app.api<ImportReport>(path + '.csv?' + csvQuery(preview), 'POST', importFile)
         : await app.api<ImportReport>(path, 'POST', { version: importFile.version, preview, items: importFile.items });
     } catch (error) {
+      cause = error;
       if (!preview && error instanceof ApiError && error.status === 409) failure = 'exchangeApplyConflict';
       else if (csvColumns !== null && error instanceof ApiError && error.code === 'invalid_exchange') failure = 'exchangeCsvInvalidRows';
       else failure = problemMessage(error);
     } finally {
       submitting = null;
     }
-    if (failure) return showError(failure);
+    if (failure) return showError(failure, cause);
     if (report?.applied) {
       toast(tr('exchangeApplied'), { body: tr('admImportSummary', { created: counts.create, unchanged: counts.unchanged }) });
       await goStep(3);
@@ -329,7 +345,7 @@
       <div class="panel-body body">
         <h3 class="visually-hidden" tabindex="-1" bind:this={importHeading}>{tr(STEPS[step])}</h3>
         {#if importError}
-          <div class="notice" data-tone="error" role="alert" tabindex="-1" bind:this={errorBox}><Icon name="circle-alert" /><div><p>{locale.t[importError]}</p></div></div>
+          <div class="notice" data-tone="error" role="alert" tabindex="-1" bind:this={errorBox}><Icon name="circle-alert" /><div><p>{locale.t[importError]}</p>{#if importLocation}<p class="error-row" id="ex-import-row">{importLocation}</p>{/if}</div></div>
         {/if}
 
         {#if step === 0}
@@ -487,6 +503,9 @@
 </div>
 
 <style>
+  .error-row {
+    font-weight: var(--weight-medium);
+  }
   .panel-foot > .spacer {
     flex: 1;
   }

@@ -11,7 +11,7 @@ use axum::http::{HeaderMap, header};
 use serde::{Deserialize, Serialize};
 use sqlx::{Executor, QueryBuilder, Sqlite, SqlitePool};
 use tokio::{
-    sync::{Mutex, mpsc},
+    sync::{Mutex, mpsc, watch},
     task::JoinHandle,
     time::{self, Instant, MissedTickBehavior},
 };
@@ -26,6 +26,8 @@ const BATCH_WINDOW: Duration = Duration::from_millis(25);
 const RETENTION_INTERVAL: Duration = Duration::from_secs(3600);
 const PRUNE_BATCH_SIZE: u64 = 512;
 const MAX_PRUNE_BATCHES: usize = 64;
+/// Pause between retention chunks, so the writer can take the write lock in between.
+const PRUNE_PAUSE: Duration = Duration::from_millis(10);
 const MAX_HEADER_BYTES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, sqlx::FromRow)]
@@ -180,7 +182,17 @@ impl Analytics {
             warned_at: AtomicU64::new(0),
         });
         let (queue, receiver) = mpsc::channel(QUEUE_CAPACITY);
-        let worker = tokio::spawn(run_writer(pool.clone(), Arc::clone(&shared), receiver));
+        // Retention runs in its own task, so a long cleanup never holds up event ingestion. The
+        // returned handle covers both: the writer drains the queue, then stops retention.
+        let (stop_retention, retention_stopped) = watch::channel(false);
+        let retention = AbortOnDrop(tokio::spawn(run_retention(pool.clone(), retention_stopped)));
+        let writer = run_writer(pool.clone(), Arc::clone(&shared), receiver);
+        let worker = tokio::spawn(async move {
+            let mut retention = retention;
+            writer.await;
+            stop_retention.send_replace(true);
+            let _ = (&mut retention.0).await;
+        });
         Ok((
             Self {
                 pool,
@@ -458,22 +470,9 @@ fn preview_hint(headers: &HeaderMap) -> bool {
 }
 
 async fn run_writer(pool: SqlitePool, shared: Arc<Shared>, mut receiver: mpsc::Receiver<Event>) {
-    let mut retention = time::interval(RETENTION_INTERVAL);
-    retention.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut batch = Vec::with_capacity(BATCH_SIZE);
     loop {
-        let received = tokio::select! {
-            received = receiver.recv_many(&mut batch, BATCH_SIZE) => received,
-            _ = retention.tick() => {
-                if prune(&pool).await.is_err() {
-                    tracing::warn!("analytics retention failed");
-                }
-                if history::prune(&pool).await.is_err() {
-                    tracing::warn!("link history retention failed");
-                }
-                continue;
-            }
-        };
+        let received = receiver.recv_many(&mut batch, BATCH_SIZE).await;
         if received == 0 {
             break;
         }
@@ -574,7 +573,42 @@ async fn write_batch(
     transaction.commit().await
 }
 
-async fn prune(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+/// Aborts the task when the owner is dropped, for example when shutdown aborts the writer.
+struct AbortOnDrop(JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Applies analytics and link history retention at startup and then hourly until `stop` is set.
+async fn run_retention(pool: SqlitePool, mut stop: watch::Receiver<bool>) {
+    let mut timer = time::interval(RETENTION_INTERVAL);
+    timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            biased;
+            _ = stop.wait_for(|stopped| *stopped) => return,
+            _ = timer.tick() => {}
+        }
+        let stopped = || *stop.borrow();
+        if prune(&pool, &stopped).await.is_err() {
+            tracing::warn!("analytics retention failed");
+        }
+        if stopped() {
+            return;
+        }
+        if history::prune(&pool).await.is_err() {
+            tracing::warn!("link history retention failed");
+        }
+    }
+}
+
+/// Deletes expired detail rows and daily totals in short single-statement transactions of at
+/// most `PRUNE_BATCH_SIZE` rows each, pausing between chunks, and at most `MAX_PRUNE_BATCHES`
+/// chunks per run. A larger backlog continues in the next run.
+async fn prune(pool: &SqlitePool, stopped: impl Fn() -> bool) -> Result<(), sqlx::Error> {
     for _ in 0..MAX_PRUNE_BATCHES {
         let expired_details = sqlx::query(
             "DELETE FROM analytics_events WHERE id IN (
@@ -605,10 +639,10 @@ async fn prune(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?
         .rows_affected();
-        if expired_details < PRUNE_BATCH_SIZE && expired_rollups < PRUNE_BATCH_SIZE {
+        if (expired_details < PRUNE_BATCH_SIZE && expired_rollups < PRUNE_BATCH_SIZE) || stopped() {
             break;
         }
-        tokio::task::yield_now().await;
+        time::sleep(PRUNE_PAUSE).await;
     }
     Ok(())
 }
@@ -797,7 +831,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        prune(&pool).await.unwrap();
+        prune(&pool, || false).await.unwrap();
 
         let details: i64 = sqlx::query_scalar("SELECT count(*) FROM analytics_events")
             .fetch_one(&pool)
@@ -809,6 +843,101 @@ mod tests {
             .unwrap();
         assert_eq!(details, 0);
         assert_eq!(totals, [2]);
+    }
+
+    async fn seed_expired_events(pool: &SqlitePool, count: i64) {
+        sqlx::query("UPDATE analytics_settings SET detail_days = 1 WHERE id = 1")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+             INSERT INTO analytics_events (occurred_at, host, kind, visit_class, source)
+             SELECT unixepoch() - 3 * 86400, 'go.example', 'missing', 'unknown', 'unknown' FROM n",
+        )
+        .bind(count)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn expired_events(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM analytics_events WHERE occurred_at < unixepoch() - 86400",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn fresh_events(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM analytics_events WHERE occurred_at >= unixepoch() - 3600",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn retention_is_bounded_per_run_and_stops_between_chunks() {
+        let (_directory, pool) = database().await;
+        let per_run = MAX_PRUNE_BATCHES as i64 * PRUNE_BATCH_SIZE as i64;
+        seed_expired_events(&pool, per_run + 100).await;
+        // One run deletes at most MAX_PRUNE_BATCHES chunks; the rest waits for the next run.
+        prune(&pool, || false).await.unwrap();
+        assert_eq!(expired_events(&pool).await, 100);
+
+        seed_expired_events(&pool, 2000).await;
+        let checks = std::sync::atomic::AtomicUsize::new(0);
+        // The stop request is checked after each chunk.
+        prune(&pool, || checks.fetch_add(1, Ordering::Relaxed) >= 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            expired_events(&pool).await,
+            2100 - 2 * PRUNE_BATCH_SIZE as i64
+        );
+    }
+
+    #[tokio::test]
+    async fn the_writer_keeps_ingesting_while_retention_runs() {
+        let (_directory, pool) = database().await;
+        let backlog = 40 * PRUNE_BATCH_SIZE as i64;
+        seed_expired_events(&pool, backlog).await;
+        let (analytics, worker) = Analytics::start(pool.clone()).await.unwrap();
+        // Wait until the startup retention run has begun deleting.
+        let started = Instant::now();
+        while expired_events(&pool).await == backlog {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "retention did not start"
+            );
+            time::sleep(Duration::from_millis(1)).await;
+        }
+        analytics.record(HOST, None, Kind::Missing, &request_headers());
+        while fresh_events(&pool).await == 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "event was not written"
+            );
+            time::sleep(Duration::from_millis(1)).await;
+        }
+        // The event was written while expired rows remained, so ingestion did not wait for the run.
+        assert!(expired_events(&pool).await > 0);
+        while expired_events(&pool).await > 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "retention did not finish"
+            );
+            time::sleep(Duration::from_millis(5)).await;
+        }
+        drop(analytics);
+        time::timeout(Duration::from_secs(5), worker)
+            .await
+            .expect("writer and retention stop together")
+            .unwrap();
+        assert_eq!(fresh_events(&pool).await, 1);
     }
 
     #[tokio::test]

@@ -173,6 +173,13 @@ impl RateLimit {
         per_peer: 8,
         global: 60,
     };
+    /// Protected-link passwords per link: attempts per client key and across all clients. The
+    /// ceiling stays below the process-wide password budget, so guessing one link's password
+    /// leaves attempts for every other link.
+    pub const PASSWORD_LINK_DEFAULT: Self = Self {
+        per_peer: 5,
+        global: 30,
+    };
     pub const SENSITIVE_DEFAULT: Self = Self::PASSWORD_DEFAULT;
     pub const ADMIN_DEFAULT: Self = Self {
         per_peer: 240,
@@ -197,28 +204,57 @@ impl RateLimit {
 
 pub(crate) struct AttemptLimiter {
     limit: RateLimit,
+    /// An optional budget per object, such as a protected link.
+    scoped: Option<RateLimit>,
     window: Mutex<Attempts>,
 }
 
+/// Counters of one fixed window. Only counted attempts create entries, and every counted
+/// attempt also counts toward `total`, so each map holds at most `limit.global` entries until
+/// the window resets and clears them.
 struct Attempts {
     since: Instant,
     per_peer: HashMap<IpAddr, u32>,
     total: u32,
+    per_scope: HashMap<i64, u32>,
+    per_scope_peer: HashMap<(i64, IpAddr), u32>,
 }
 
 impl AttemptLimiter {
     pub(crate) fn with_limit(limit: RateLimit) -> Self {
         Self {
             limit,
+            scoped: None,
             window: Mutex::new(Attempts {
                 since: Instant::now(),
                 per_peer: HashMap::new(),
                 total: 0,
+                per_scope: HashMap::new(),
+                per_scope_peer: HashMap::new(),
             }),
         }
     }
 
+    /// Adds a budget per scope: `per_peer` attempts per client key and scope, and `global`
+    /// attempts per scope across all clients.
+    pub(crate) fn with_scope_limit(limit: RateLimit, scoped: RateLimit) -> Self {
+        Self {
+            scoped: Some(scoped),
+            ..Self::with_limit(limit)
+        }
+    }
+
     pub(crate) fn allow(&self, peer: IpAddr) -> Result<(), StatusCode> {
+        self.check(peer, None)
+    }
+
+    /// Counts one attempt against the client, process, and scope budgets. A denied attempt
+    /// counts toward none of them.
+    pub(crate) fn allow_scoped(&self, peer: IpAddr, scope: i64) -> Result<(), StatusCode> {
+        self.check(peer, Some(scope))
+    }
+
+    fn check(&self, peer: IpAddr, scope: Option<i64>) -> Result<(), StatusCode> {
         let mut window = self
             .window
             .lock()
@@ -227,16 +263,29 @@ impl AttemptLimiter {
             window.since = Instant::now();
             window.per_peer.clear();
             window.total = 0;
+            window.per_scope.clear();
+            window.per_scope_peer.clear();
         }
-        if window.total >= self.limit.global {
+        let key = budget_key(peer);
+        let used = |count: Option<&u32>| count.copied().unwrap_or(0);
+        if window.total >= self.limit.global
+            || used(window.per_peer.get(&key)) >= self.limit.per_peer
+        {
             return Err(StatusCode::TOO_MANY_REQUESTS);
         }
-        let count = window.per_peer.entry(budget_key(peer)).or_default();
-        if *count >= self.limit.per_peer {
+        let scope = scope.zip(self.scoped);
+        if let Some((scope, limit)) = scope
+            && (used(window.per_scope.get(&scope)) >= limit.global
+                || used(window.per_scope_peer.get(&(scope, key))) >= limit.per_peer)
+        {
             return Err(StatusCode::TOO_MANY_REQUESTS);
         }
-        *count += 1;
+        *window.per_peer.entry(key).or_default() += 1;
         window.total += 1;
+        if let Some((scope, _)) = scope {
+            *window.per_scope.entry(scope).or_default() += 1;
+            *window.per_scope_peer.entry((scope, key)).or_default() += 1;
+        }
         Ok(())
     }
 }
@@ -322,5 +371,68 @@ mod tests {
         assert_eq!(limiter.allow(second), Ok(()));
         assert_eq!(limiter.allow(third), Err(StatusCode::TOO_MANY_REQUESTS));
         assert_eq!(limiter.window.lock().unwrap().per_peer.len(), 2);
+    }
+
+    #[test]
+    fn scoped_budgets_bound_one_link_per_client_and_across_clients() {
+        let limiter = AttemptLimiter::with_scope_limit(
+            RateLimit::new(8, 60).unwrap(),
+            RateLimit::new(2, 3).unwrap(),
+        );
+        let first: IpAddr = "192.0.2.1".parse().unwrap();
+        let second: IpAddr = "2001:db8:1:2::1".parse().unwrap();
+        let neighbor: IpAddr = "2001:db8:1:2::2".parse().unwrap();
+        let third: IpAddr = "192.0.2.3".parse().unwrap();
+        assert_eq!(limiter.allow_scoped(first, 1), Ok(()));
+        assert_eq!(limiter.allow_scoped(first, 1), Ok(()));
+        // The client exhausted its budget for link 1, but not for link 2.
+        assert_eq!(
+            limiter.allow_scoped(first, 1),
+            Err(StatusCode::TOO_MANY_REQUESTS)
+        );
+        assert_eq!(limiter.allow_scoped(first, 2), Ok(()));
+        // A second client reaches the link's ceiling, which then stops everyone else.
+        assert_eq!(limiter.allow_scoped(second, 1), Ok(()));
+        assert_eq!(
+            limiter.allow_scoped(third, 1),
+            Err(StatusCode::TOO_MANY_REQUESTS)
+        );
+        assert_eq!(limiter.allow_scoped(third, 2), Ok(()));
+        // A /64 neighbor shares the client's budget for a link.
+        assert_eq!(limiter.allow_scoped(second, 3), Ok(()));
+        assert_eq!(limiter.allow_scoped(neighbor, 3), Ok(()));
+        assert_eq!(
+            limiter.allow_scoped(second, 3),
+            Err(StatusCode::TOO_MANY_REQUESTS)
+        );
+        // Denied attempts count toward no budget.
+        let window = limiter.window.lock().unwrap();
+        assert_eq!(window.total, 7);
+        assert_eq!(window.per_scope.get(&1), Some(&3));
+        assert_eq!(window.per_scope.get(&2), Some(&2));
+        assert_eq!(window.per_scope.get(&3), Some(&2));
+        assert_eq!(window.per_peer.get(&third), Some(&1));
+    }
+
+    #[test]
+    fn scoped_maps_stay_within_the_process_budget() {
+        let limiter = AttemptLimiter::with_scope_limit(
+            RateLimit::new(1, 50).unwrap(),
+            RateLimit::new(1, 1).unwrap(),
+        );
+        for index in 0..500_i64 {
+            let peer = IpAddr::V4(Ipv4Addr::from(0xC000_0200_u32 + index as u32));
+            let _ = limiter.allow_scoped(peer, index);
+        }
+        let window = limiter.window.lock().unwrap();
+        assert_eq!(window.total, 50);
+        assert!(window.per_peer.len() <= 50);
+        assert!(window.per_scope.len() <= 50);
+        assert!(window.per_scope_peer.len() <= 50);
+        drop(window);
+        // Without a scope limit, scoped calls apply only the client and process budgets.
+        let plain = AttemptLimiter::with_limit(RateLimit::new(1, 2).unwrap());
+        assert_eq!(plain.allow_scoped("192.0.2.9".parse().unwrap(), 7), Ok(()));
+        assert!(plain.window.lock().unwrap().per_scope.is_empty());
     }
 }
