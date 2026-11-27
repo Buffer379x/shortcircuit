@@ -13,7 +13,11 @@ fn main() -> io::Result<()> {
     for (source, file) in [
         ("index.html", "admin.html"),
         ("assets/admin.js", "admin.js"),
+        ("assets/admin.js.gz", "admin.js.gz"),
+        ("assets/admin.js.br", "admin.js.br"),
         ("assets/admin.css", "admin.css"),
+        ("assets/admin.css.gz", "admin.css.gz"),
+        ("assets/admin.css.br", "admin.css.br"),
         // Local Geist fonts (SIL Open Font License), named by frontend/vite.config.ts.
         ("assets/geist-latin-wght-normal.woff2", "geist-latin.woff2"),
         (
