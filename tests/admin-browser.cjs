@@ -29,6 +29,25 @@ function watch(page, errors) {
   });
 }
 
+// The admin API allows 240 requests per minute per client by default (RATE_LIMIT_API). The test
+// works much faster than a person, so a token bucket paces the browser's API requests instead of
+// raising the limit: a burst of 30, then 3 per second, keeps any minute at 210 or fewer and leaves
+// room for the direct `page.request` calls. A paced request waits a fraction of a second.
+const apiPace = { tokens: 30, capacity: 30, perSecond: 3, at: Date.now() };
+async function paceApi(context) {
+  await context.route(url => url.origin === admin && url.pathname.startsWith('/api/'), async route => {
+    for (;;) {
+      const now = Date.now();
+      apiPace.tokens = Math.min(apiPace.capacity, apiPace.tokens + (now - apiPace.at) / 1000 * apiPace.perSecond);
+      apiPace.at = now;
+      if (apiPace.tokens >= 1) break;
+      await new Promise(resolve => setTimeout(resolve, (1 - apiPace.tokens) / apiPace.perSecond * 1000 + 5));
+    }
+    apiPace.tokens -= 1;
+    await route.continue();
+  });
+}
+
 async function noHorizontalScroll(page) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
 }
@@ -40,6 +59,7 @@ async function verify() {
   const browser = await chromium.launch();
   try {
     const context = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+    await paceApi(context);
     const page = await context.newPage();
     await page.addInitScript(() => {
       const request = window.fetch.bind(window);
@@ -1179,6 +1199,7 @@ async function auditRoutes(browser, storageState, axeSource, { linkId }) {
   for (const theme of ['dark', 'light']) {
     const errors = [];
     const context = await browser.newContext({ storageState, viewport: { width: 1360, height: 900 }, reducedMotion: 'reduce' });
+    await paceApi(context);
     await context.addInitScript(value => localStorage.setItem('shortcircuit-theme', value), theme);
     try {
       const page = await context.newPage();
@@ -1226,6 +1247,7 @@ async function auditRoutes(browser, storageState, axeSource, { linkId }) {
 
       // Signed out: the sign-in page. Public: the not-found page.
       const anonymous = await browser.newContext({ viewport: { width: 1360, height: 900 }, reducedMotion: 'reduce' });
+      await paceApi(anonymous);
       await anonymous.addInitScript(value => localStorage.setItem('shortcircuit-theme', value), theme);
       try {
         const signIn = await anonymous.newPage();

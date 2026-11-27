@@ -31,7 +31,11 @@
   $effect(() => {
     if (open && !el.open) {
       el.showModal();
+      // Move to the first field once the content renders, unless focus has moved since opening:
+      // a fast click or keystroke into another field must keep its focus and its input.
+      const initial = document.activeElement;
       requestAnimationFrame(() => {
+        if (!el.open || document.activeElement !== initial) return;
         const first = el.querySelector<HTMLElement>('[autofocus], .dialog-body input:not([type=hidden]), .dialog-body select, .dialog-body textarea, .dialog-foot .btn');
         first?.focus();
       });

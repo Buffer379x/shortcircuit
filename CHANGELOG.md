@@ -4,6 +4,7 @@
 
 ## 0.8.0-preview.3
 
+- Dialogs no longer take focus back to their first field after it has moved. Typing right after a dialog opens, for example into a tag's description, could land in the name field and rename the tag.
 - The image applies Debian security updates at build time on a refreshed bookworm-slim base, which fixes the newly published `libpam` finding (CVE-2025-6020).
 - API v1, additive: monitoring list items include the link `title` and `target`. Health no longer requests each link separately, which kept it within the admin request budget.
 - Links: filter the list by live status (active, scheduled, expired, disabled, limit reached) and sort it by 30-day visits or last visit from the column headers. API v1, additive: `POST /api/v1/links/search` accepts `state` and the sorts `visits_desc`, `visits_asc`, `last_visit_desc`, and `last_visit_asc`; links without a value come last. [API](docs/API.md#catalog-search)
