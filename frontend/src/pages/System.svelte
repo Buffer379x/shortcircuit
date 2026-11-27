@@ -782,6 +782,7 @@
         <span class="field-label" id="sys-file-label">{tr('systemFile')}</span>
         <input
           id="sys-file"
+          aria-hidden="true"
           class="visually-hidden"
           type="file"
           tabindex="-1"
@@ -790,7 +791,7 @@
           onchange={(event) => (selected = event.currentTarget.files?.[0] ?? null)}
           disabled={!!busy}
         />
-        <button type="button" class="drop" disabled={!!busy} aria-labelledby="sys-file-label sys-file-name" aria-describedby={tooLarge ? 'sys-file-size sys-file-error' : 'sys-file-size'} data-invalid={tooLarge || undefined} onclick={() => fileInput?.click()}>
+        <button type="button" class="drop" disabled={!!busy} aria-labelledby="sys-file-label sys-file-name sys-file-size" aria-describedby={tooLarge ? 'sys-file-error' : undefined} data-invalid={tooLarge || undefined} onclick={() => fileInput?.click()}>
           <Icon name="upload" />
           <span id="sys-file-name">{selected ? selected.name : tr('admChooseBackup')}</span>
           <small id="sys-file-size">{selected ? bytes(selected.size) + ' · ' : ''}{tr('systemMaxSize')} {diagnostics ? bytes(diagnostics.max_snapshot_bytes) : tr('systemUnknown')}</small>

@@ -340,6 +340,7 @@
           </div>
           <input
             id="ex-file"
+            aria-hidden="true"
             class="visually-hidden"
             type="file"
             tabindex="-1"

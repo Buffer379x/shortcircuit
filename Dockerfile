@@ -18,7 +18,9 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml build.rs ./
 COPY src/ ./src/
 COPY migrations/ ./migrations/
 COPY docs/openapi.json ./docs/openapi.json
-COPY assets/branding/favicon.svg assets/branding/favicon.png ./assets/branding/
+COPY assets/branding/favicon.svg assets/branding/favicon.png assets/branding/apple-touch-icon-180.png \
+     assets/branding/pwa-192.png assets/branding/pwa-512.png assets/branding/pwa-maskable-512.png \
+     assets/branding/manifest.webmanifest ./assets/branding/
 COPY --from=frontend /web/dist ./frontend/dist
 # cargo-auditable embeds the locked dependency list, so image scanners and SBOMs see the crates.
 RUN cargo install cargo-auditable --version 0.7.8 --locked
