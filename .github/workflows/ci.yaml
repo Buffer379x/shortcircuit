@@ -110,7 +110,7 @@ jobs:
       - name: Upgrade a disposable volume from the installed preview
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: |
-          previous=ghcr.io/buffer379x/shortcircuit:0.8.0-preview.2@sha256:5cd9a76e40e1b9743240d4f274c8ac707979c6adf8b760556e5f3688dc426a6a
+          previous=ghcr.io/buffer379x/shortcircuit:0.8.0-preview.3@sha256:5e023edc6245ef520b1e42bab8de6b275a53343a2ca0d30f77622b7caa58395d
           candidate=$(docker compose config --images)
           docker pull "$previous"
           docker image inspect "$previous" --format '{{range .RepoDigests}}{{println .}}{{end}}'

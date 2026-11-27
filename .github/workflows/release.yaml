@@ -29,9 +29,9 @@ jobs:
       packages: write
     env:
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
-      VERSION: 0.8.0-preview.3
-      # The published 0.8.0-preview.2 image that current installations run.
-      PREVIOUS_IMAGE: ghcr.io/buffer379x/shortcircuit@sha256:5cd9a76e40e1b9743240d4f274c8ac707979c6adf8b760556e5f3688dc426a6a
+      VERSION: 0.9.0-preview.1
+      # The published 0.8.0-preview.3 image that current installations run.
+      PREVIOUS_IMAGE: ghcr.io/buffer379x/shortcircuit@sha256:5e023edc6245ef520b1e42bab8de6b275a53343a2ca0d30f77622b7caa58395d
     outputs:
       version: ${{ steps.version.outputs.version }}
       image: ${{ steps.publish.outputs.image }}
@@ -90,7 +90,7 @@ jobs:
           docker exec shortcircuit-template shortcircuit setup-token >/dev/null
           curl --fail --silent --show-error http://localhost:8081/favicon.png --output "$RUNNER_TEMP/favicon.png"
           cmp "$RUNNER_TEMP/favicon.png" assets/branding/favicon.png
-      - name: Upgrade a disposable volume from 0.8.0-preview.2
+      - name: Upgrade a disposable volume from 0.8.0-preview.3
         if: steps.version.outputs.image != ''
         env:
           IMAGE: ${{ steps.version.outputs.image }}
