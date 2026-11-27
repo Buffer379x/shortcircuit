@@ -1,0 +1,235 @@
+/*
+ * Polar Signal design tokens. The single source for color, type, spacing, size, radius,
+ * elevation, motion, and layering. Components use semantic tokens only; raw hex values
+ * appear in this file and nowhere else.
+ */
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../fonts/geist-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../fonts/geist-latin-ext-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+20A0-20AB, U+20AD-20C0,
+    U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../fonts/geist-mono-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+20AC, U+2122, U+2212, U+FEFF, U+FFFD;
+}
+
+:root {
+  /* Typography */
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --text-2xs: 11px;  /* chart axes, counters */
+  --text-xs: 12px;   --leading-xs: 16px;
+  --text-sm: 13px;   --leading-sm: 18px;
+  --text-md: 14px;   --leading-md: 20px;
+  --text-lg: 16px;   --leading-lg: 24px;
+  --text-xl: 20px;   --leading-xl: 28px;
+  --text-2xl: 24px;  --leading-2xl: 32px;
+  --text-3xl: 30px;  --leading-3xl: 36px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --tracking-tight: -0.011em;
+  --tracking-display: -0.022em;
+
+  /* Spacing on a 4 px grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Control sizes */
+  --control-sm: 28px;
+  --control-md: 32px;
+  --control-lg: 40px;
+  --icon-sm: 14px;
+  --icon-md: 16px;
+  --icon-lg: 20px;
+  --icon-stroke: 1.75;
+
+  /* Radius by role */
+  --radius-2xs: 2px; /* swatches, legend keys, bars */
+  --radius-xs: 4px;  /* chips, checkboxes, keyboard hints */
+  --radius-sm: 6px;  /* buttons, inputs, menu items */
+  --radius-md: 8px;  /* menus, popovers, toasts, tooltips */
+  --radius-lg: 12px; /* panels, dialogs, drawers */
+  --radius-full: 999px;
+
+  /* Layout */
+  --sidebar-width: 236px;
+  --sidebar-collapsed: 60px;
+  --topbar-height: 56px;
+  --content-max: 1480px;
+  --gutter: var(--space-8);
+
+  /* Layers */
+  --z-sticky: 10;
+  --z-nav: 20;
+  --z-dropdown: 40;
+  --z-drawer: 50;
+  --z-dialog: 60;
+  --z-toast: 70;
+  --z-tooltip: 80;
+
+  /* QR codes stay dark on white in both themes, so they scan reliably. */
+  --qr-fg: #101115;
+  --qr-bg: #ffffff;
+  --qr-brand: #b52b7c;
+  --qr-navy: #1f3a6e;
+  --qr-forest: #1d5b45;
+
+  /* Fixed brand backgrounds for showing both logo variants side by side. */
+  --brand-bg-dark: #101115;
+  --brand-bg-light: #f5f5f8;
+
+  /* Motion */
+  --duration-fast: 120ms;
+  --duration: 180ms;
+  --duration-slow: 260ms;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* Breakpoints (media queries cannot read custom properties):
+ *   sm 640px   phones end
+ *   md 900px   sidebar becomes a drawer below this width
+ *   lg 1200px  two-column dashboards start
+ *   xl 1600px  wide desktop
+ */
+
+@media (pointer: coarse) {
+  :root {
+    --control-sm: 36px;
+    --control-md: 44px;
+    --control-lg: 48px;
+  }
+}
+
+/* Dark is the primary identity. */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #101115;
+  --bg-sidebar: #13151a;
+  --surface: #1c1e24;
+  --surface-raised: #242731;
+  --surface-hover: #292d36;
+  --surface-sunken: #16181d;
+  --border: #333640;
+  --border-subtle: #272a32;
+  --border-control: #727788;
+
+  --text: #f6f6fa;
+  --text-secondary: #c3c5cf;
+  --text-muted: #969aa9;
+  --text-disabled: #686c7b;
+
+  --accent: #ff79c6;
+  --accent-hover: #ff94d2;
+  --accent-active: #e963af;
+  --accent-soft: #302333;
+  --accent-soft-border: #5a3450;
+  --on-accent: #101115;
+  --focus: #ff79c6;
+
+  --success: #43d19e;
+  --success-soft: #16302a;
+  --warning: #f3bb63;
+  --warning-soft: #352a19;
+  --error: #ff6b61;
+  --error-soft: #3a1e1f;
+  --error-hover: #ff857c;
+  --on-error: #101115;
+  --info: #85a9f5;
+  --info-soft: #1d2740;
+  --neutral-soft: #262932;
+
+  --chart-1: #ff79c6;
+  --chart-2: #b49cff;
+  --chart-3: #7ccbf0;
+  --chart-4: #5fddb4;
+  --chart-5: #f0b65e;
+  --chart-6: #8c92a4;
+  --chart-grid: #272a32;
+  --chart-axis: #969aa9;
+  --chart-previous: #686c7b;
+
+  --shadow-popover: 0 0 0 1px var(--border), 0 10px 28px rgb(0 0 0 / 0.42);
+  --shadow-dialog: 0 0 0 1px var(--border), 0 24px 64px rgb(0 0 0 / 0.55);
+  --scrim: rgb(6 7 10 / 0.66);
+  --selection: rgb(255 121 198 / 0.28);
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f5f5f8;
+  --bg-sidebar: #eeeef3;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-hover: #f0eff5;
+  --surface-sunken: #f8f8fb;
+  --border: #dadbe3;
+  --border-subtle: #e7e7ee;
+  --border-control: #858998;
+
+  --text: #20222a;
+  --text-secondary: #484c59;
+  --text-muted: #666a79;
+  --text-disabled: #9a9daa;
+
+  --accent: #b52b7c;
+  --accent-hover: #9f226b;
+  --accent-active: #8a1d5d;
+  --accent-soft: #fbeaf4;
+  --accent-soft-border: #efc3dd;
+  --on-accent: #ffffff;
+  --focus: #b52b7c;
+
+  --success: #157254;
+  --success-soft: #e3f4ed;
+  --warning: #95610f;
+  --warning-soft: #fbf0dc;
+  --error: #c2372b;
+  --error-soft: #fbe7e5;
+  --error-hover: #a82e23;
+  --on-error: #ffffff;
+  --info: #365fc7;
+  --info-soft: #e7edfb;
+  --neutral-soft: #ededf2;
+
+  --chart-1: #c2338a;
+  --chart-2: #7257d9;
+  --chart-3: #2683b5;
+  --chart-4: #1f8a69;
+  --chart-5: #b06e00;
+  --chart-6: #767b8b;
+  --chart-grid: #e7e7ee;
+  --chart-axis: #666a79;
+  --chart-previous: #a6a9b6;
+
+  --shadow-popover: 0 0 0 1px var(--border), 0 8px 24px rgb(32 34 42 / 0.12);
+  --shadow-dialog: 0 0 0 1px var(--border), 0 24px 64px rgb(32 34 42 / 0.2);
+  --scrim: rgb(32 34 42 / 0.38);
+  --selection: rgb(181 43 124 / 0.18);
+}

@@ -138,11 +138,37 @@ export interface LinkOrganization {
   archived: boolean;
 }
 
+export type LinkState = 'active' | 'scheduled' | 'expired' | 'disabled' | 'exhausted';
+export type MonitorStatus = 'not_checked' | 'healthy' | 'redirected' | 'warning' | 'unreachable' | 'broken' | 'unknown';
+
+/** Health check state of a link, or null when the link is not monitored. */
+export interface LinkMonitorSummary {
+  status: MonitorStatus;
+  priority: boolean;
+  last_checked: number | null;
+  http_status: number | null;
+  elapsed_ms: number | null;
+  failure: string | null;
+}
+
 export interface CatalogLink extends Link, LinkOrganization {
   selection_key: string;
   recorded_redirects: number;
   last_redirect_date: string | null;
   last_redirect_at: number | null;
+  /** Live redirect state from the policy, protection, and visit counter (API v1, additive). */
+  state: LinkState;
+  starts_at: number | null;
+  expires_at: number | null;
+  max_visits: number | null;
+  visits_used: number;
+  protection: 'password' | 'one_time' | null;
+  rule_count: number;
+  /** Redirects in the last 30 UTC days including today, or null when analytics is off for the link. */
+  visits_30d: number | null;
+  /** Redirects per UTC day for the last 14 days, oldest first. */
+  trend: number[];
+  monitor: LinkMonitorSummary | null;
 }
 
 export interface BulkLinkResult {
