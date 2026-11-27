@@ -106,6 +106,7 @@ export interface LinkHistory {
 export const linkSorts = [
   'newest', 'oldest', 'title_asc', 'title_desc', 'slug_asc', 'slug_desc',
   'host_asc', 'host_desc', 'target_asc', 'target_desc', 'enabled_first', 'disabled_first',
+  'visits_desc', 'visits_asc', 'last_visit_desc', 'last_visit_asc',
 ] as const;
 export type LinkSort = typeof linkSorts[number];
 export type LinkView = 'unarchived' | 'favorites' | 'archived';
@@ -124,6 +125,7 @@ export interface LinkSearch {
   tag_match?: TagMatch;
   view: LinkView;
   enabled?: boolean;
+  state?: LinkState;
   sort: LinkSort;
   after?: LinkCursor;
 }
@@ -235,7 +237,8 @@ export interface Key {
 }
 
 export class ApiError extends Error {
-  constructor(readonly status: number, readonly code: string) {
+  // `row` and `field` locate the first failing item of a multi-row request such as an import.
+  constructor(readonly status: number, readonly code: string, readonly row: number | null = null, readonly field: string | null = null) {
     super(code);
   }
 }
@@ -264,7 +267,9 @@ export function createApi(csrf: () => string | undefined, request = fetch): Api 
     if (!response.ok) {
       const problem = await response.json().catch(() => null);
       const code = typeof problem?.code === 'string' ? problem.code : '';
-      throw new ApiError(response.status, code);
+      const row = Number.isSafeInteger(problem?.row) && problem.row > 0 ? problem.row as number : null;
+      const field = typeof problem?.field === 'string' && /^[a-z_]{1,32}$/.test(problem.field) ? problem.field : null;
+      throw new ApiError(response.status, code, row, row === null ? null : field);
     }
     if (response.status === 204) return undefined as T;
     return responseFormat === 'json' ? response.json() : response as T;

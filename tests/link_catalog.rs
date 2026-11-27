@@ -479,3 +479,312 @@ async fn overview_attention_is_capped_at_eight_links() {
         .collect();
     assert_eq!(ids, [12, 11, 10, 9, 8, 7, 6, 5]);
 }
+
+impl Harness {
+    async fn search_page(&self, body: Value) -> Response {
+        send(
+            &self.admin,
+            "POST",
+            "/api/v1/links/search",
+            &self.browser(),
+            Some(body),
+        )
+        .await
+    }
+
+    /// Follows every cursor of one search and returns all items in order.
+    async fn search_all(&self, body: Value) -> Vec<Value> {
+        let mut items = Vec::new();
+        let mut after = Value::Null;
+        for _ in 0..20 {
+            let mut request = body.clone();
+            if !after.is_null() {
+                request["after"] = after;
+            }
+            let response = self.search_page(request).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let page = json_body(response).await;
+            let batch = page["items"].as_array().unwrap();
+            assert!(batch.len() <= 100);
+            items.extend(batch.iter().cloned());
+            after = page["next_cursor"].clone();
+            if after.is_null() {
+                return items;
+            }
+        }
+        panic!("search did not finish");
+    }
+}
+
+fn slugs(items: &[Value]) -> Vec<&str> {
+    items
+        .iter()
+        .map(|item| item["slug"].as_str().unwrap())
+        .collect()
+}
+
+fn ids(items: &[Value]) -> Vec<i64> {
+    items
+        .iter()
+        .map(|item| item["id"].as_i64().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn search_filters_by_the_reported_live_state() {
+    let app = Harness::start().await;
+    app.seed(CATALOG).await;
+    for (state, expected) in [
+        ("active", vec!["plain", "limited", "untracked", "stored"]),
+        ("scheduled", vec!["later"]),
+        ("expired", vec!["ended"]),
+        ("disabled", vec!["paused"]),
+        ("exhausted", vec!["once"]),
+    ] {
+        let items = app
+            .search_all(json!({"state": state, "sort": "oldest"}))
+            .await;
+        assert_eq!(slugs(&items), expected, "{state}");
+        assert!(items.iter().all(|item| item["state"] == state), "{state}");
+    }
+    // The state applies together with the other conditions.
+    let unarchived = app
+        .search_all(
+            json!({"state": "active", "view": "unarchived", "host": "go.example",
+                           "query": "i", "sort": "oldest"}),
+        )
+        .await;
+    assert_eq!(slugs(&unarchived), ["plain", "limited"]);
+    let none = app
+        .search_all(json!({"state": "disabled", "enabled": true}))
+        .await;
+    assert!(none.is_empty());
+    // A disabled domain makes its links disabled.
+    app.seed(
+        "INSERT INTO domains (host, origin, enabled) VALUES ('s.example', 'https://s.example', 0)",
+    )
+    .await;
+    let disabled = app
+        .search_all(json!({"state": "disabled", "sort": "oldest"}))
+        .await;
+    assert_eq!(slugs(&disabled), ["later", "paused"]);
+
+    for state in ["archived", "Active", "", "enabled"] {
+        let response = app.search_page(json!({"state": state})).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{state}"
+        );
+        assert_eq!(json_body(response).await["code"], "invalid_request");
+    }
+}
+
+/// 230 tracked and untracked links with tied 30-day counts, daily-only and detailed last
+/// visits, traffic outside the window, and links without any traffic.
+const TRAFFIC: &str = "
+    WITH RECURSIVE counter(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM counter WHERE n < 230)
+    INSERT INTO links (id, host, slug, target, analytics_enabled)
+    SELECT n, 'go.example', printf('t-%03d', n), 'https://example.test/' || n, n % 10 != 0
+    FROM counter;
+    INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, total)
+    SELECT unixepoch() / 86400 - id % 3, 'go.example', id, 'redirect', 'human', id % 5
+    FROM links WHERE id % 7 != 0 AND id % 5 != 0;
+    INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, total)
+    SELECT unixepoch() / 86400 - id % 3, 'go.example', id, 'redirect', 'bot', 1
+    FROM links WHERE id % 4 = 0 AND id % 7 != 0 AND id % 5 != 0;
+    INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, total)
+    SELECT unixepoch() / 86400 - 40, 'go.example', id, 'redirect', 'human', 50
+    FROM links WHERE id % 7 = 0 AND id % 2 = 0;
+    INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, total)
+    SELECT unixepoch() / 86400, 'go.example', id, 'blocked', 'human', 90
+    FROM links WHERE id % 7 = 0;
+    INSERT INTO analytics_events (occurred_at, link_id, host, kind, visit_class, source)
+    SELECT (unixepoch() / 86400 - id % 3) * 86400 + id * 60, id, 'go.example', 'redirect', 'human', 'direct'
+    FROM links WHERE id % 2 = 0 AND id % 7 != 0 AND id % 5 != 0;
+    INSERT INTO analytics_events (occurred_at, link_id, host, kind, visit_class, source)
+    SELECT (unixepoch() / 86400 - id % 3) * 86400 + 86000, id, 'go.example', 'blocked', 'human', 'direct'
+    FROM links WHERE id % 2 = 0;";
+
+/// The last-visit sort value, as the item reports it.
+fn last_visit(item: &Value) -> Option<i64> {
+    item["last_redirect_at"].as_i64().or_else(|| {
+        item["last_redirect_date"].as_str().map(|date| {
+            let parts: Vec<i64> = date.split('-').map(|part| part.parse().unwrap()).collect();
+            days_from_civil(parts[0], parts[1], parts[2]) * DAY
+        })
+    })
+}
+
+/// Days since 1970-01-01 for a proleptic Gregorian date.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// Checks that `items` is every seeded link once, ordered by `value` in the given direction
+/// with ties broken by ID in the same direction, and with links lacking the value last.
+fn assert_traffic_order(items: &[Value], value: fn(&Value) -> Option<i64>, descending: bool) {
+    let mut seen = ids(items);
+    seen.sort_unstable();
+    assert_eq!(seen, (1..=230).collect::<Vec<_>>());
+    let keys: Vec<(bool, i64, i64)> = items
+        .iter()
+        .map(|item| {
+            let id = item["id"].as_i64().unwrap();
+            match value(item) {
+                Some(value) if descending => (false, -value, -id),
+                Some(value) => (false, value, id),
+                None if descending => (true, 0, -id),
+                None => (true, 0, id),
+            }
+        })
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort_unstable();
+    assert_eq!(keys, sorted);
+}
+
+#[tokio::test]
+async fn traffic_sorts_page_stably_with_missing_values_last() {
+    let app = Harness::start().await;
+    app.seed(TRAFFIC).await;
+    let visits = |item: &Value| item["visits_30d"].as_i64();
+
+    let descending = app.search_all(json!({"sort": "visits_desc"})).await;
+    assert_traffic_order(&descending, visits, true);
+    // Untracked links report no count and come last, also when they have recorded visits.
+    assert_eq!(descending.last().unwrap()["id"], 10);
+    assert_eq!(descending[0]["visits_30d"], 5);
+    assert!(descending.iter().any(|item| item["visits_30d"] == 0));
+    let ascending = app.search_all(json!({"sort": "visits_asc"})).await;
+    assert_traffic_order(&ascending, visits, false);
+    assert_eq!(ascending[0]["visits_30d"], 0);
+    assert_eq!(ascending.last().unwrap()["id"], 230);
+
+    let latest = app.search_all(json!({"sort": "last_visit_desc"})).await;
+    assert_traffic_order(&latest, last_visit, true);
+    // Days without detail order by the start of their day.
+    assert!(
+        latest.iter().any(
+            |item| item["last_redirect_at"].is_null() && item["last_redirect_date"].is_string()
+        )
+    );
+    assert!(latest.last().unwrap()["last_redirect_date"].is_null());
+    let earliest = app.search_all(json!({"sort": "last_visit_asc"})).await;
+    assert_traffic_order(&earliest, last_visit, false);
+    // A link whose only redirects lie outside the 30-day window still has a last visit.
+    let old = earliest.iter().position(|item| item["id"] == 14).unwrap();
+    assert_eq!(old, 0);
+
+    // Filters and text search narrow a traffic sort without changing its order.
+    let filtered = app
+        .search_all(json!({"sort": "visits_desc", "query": "t-1", "state": "active"}))
+        .await;
+    let expected: Vec<_> = descending
+        .iter()
+        .filter(|item| item["slug"].as_str().unwrap().starts_with("t-1"))
+        .cloned()
+        .collect();
+    assert_eq!(ids(&filtered), ids(&expected));
+
+    // With analytics off for the installation, every count is missing and IDs decide.
+    app.seed("UPDATE analytics_settings SET enabled = 0").await;
+    let off = app.search_all(json!({"sort": "visits_asc"})).await;
+    assert_eq!(ids(&off), (1..=230).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn traffic_sort_cursors_continue_after_changes_and_reject_bad_keys() {
+    let app = Harness::start().await;
+    app.seed(TRAFFIC).await;
+    let first = json_body(app.search_page(json!({"sort": "visits_desc"})).await).await;
+    let cursor = first["next_cursor"].clone();
+    assert_eq!(cursor["sort"], "visits_desc");
+    assert!(cursor["key"].as_str().unwrap().parse::<i64>().is_ok());
+    let anchor = first["items"][99]["id"].as_i64().unwrap();
+
+    // Deleting the anchor does not break the next page or repeat earlier items.
+    sqlx::query("DELETE FROM links WHERE id = ?")
+        .bind(anchor)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let second = json_body(
+        app.search_page(json!({"sort": "visits_desc", "after": cursor}))
+            .await,
+    )
+    .await;
+    let earlier: Vec<_> = ids(first["items"].as_array().unwrap());
+    let next = ids(second["items"].as_array().unwrap());
+    assert_eq!(next.len(), 100);
+    assert!(next.iter().all(|id| !earlier.contains(id)));
+
+    for (sort, key) in [
+        ("visits_desc", json!("many")),
+        ("visits_asc", json!("")),
+        ("last_visit_desc", json!("1.5")),
+        ("last_visit_asc", json!("99999999999999999999")),
+    ] {
+        let response = app
+            .search_page(json!({"sort": sort, "after": {"id": 5, "key": key, "sort": sort}}))
+            .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{sort}"
+        );
+        assert_eq!(json_body(response).await["code"], "invalid_link_cursor");
+    }
+    let mismatched = app
+        .search_page(
+            json!({"sort": "visits_asc", "after": {"id": 5, "key": "3", "sort": "visits_desc"}}),
+        )
+        .await;
+    assert_eq!(mismatched.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(json_body(mismatched).await["code"], "invalid_link_cursor");
+    let unknown = app.search_page(json!({"sort": "visits"})).await;
+    assert_eq!(unknown.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn api_keys_cannot_sort_or_filter_the_catalog_by_traffic() {
+    let app = Harness::start().await;
+    app.seed(TRAFFIC).await;
+    let reader = app.key(&["read"], None).await;
+    let reporting = app.key(&["read", "write", "analytics"], None).await;
+    for key in [&reader, &reporting] {
+        for body in [
+            json!({"sort": "visits_desc"}),
+            json!({"sort": "last_visit_asc", "state": "active"}),
+            json!({}),
+        ] {
+            let response = send(
+                &app.admin,
+                "POST",
+                "/api/v1/links/search",
+                &[("authorization", key.as_str()), ("origin", ORIGIN)],
+                Some(body),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(json_body(response).await["code"], "authentication_required");
+        }
+    }
+    // A key alongside a valid session does not widen or replace the session.
+    let mut headers = app.browser().to_vec();
+    headers.push(("authorization", reporting.as_str()));
+    let response = send(
+        &app.admin,
+        "POST",
+        "/api/v1/links/search",
+        &headers,
+        Some(json!({"sort": "visits_desc"})),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}

@@ -3,7 +3,7 @@
   // and cursor pagination. Rows become cards in narrow containers. The Tags tab shares the page.
   import { onDestroy, tick, untrack } from 'svelte';
   import { linkSorts } from '../api';
-  import type { BulkLinkResult, CatalogLink, Link, LinkCursor, LinkOrganization, LinkSearch, LinkSearchPage, LinkSort, LinkView, TagMatch } from '../api';
+  import type { BulkLinkResult, CatalogLink, Link, LinkCursor, LinkOrganization, LinkSearch, LinkSearchPage, LinkSort, LinkState, LinkView, TagMatch } from '../api';
   import { downloadFile, problemMessage } from '../format';
   import type { Messages } from '../i18n';
   import PageHeader from '../lib/ui/PageHeader.svelte';
@@ -41,7 +41,12 @@
     newest: 'sortNewest', oldest: 'sortOldest', title_asc: 'sortTitleAscending', title_desc: 'sortTitleDescending',
     slug_asc: 'sortSlugAscending', slug_desc: 'sortSlugDescending', host_asc: 'sortHostAscending', host_desc: 'sortHostDescending',
     target_asc: 'sortTargetAscending', target_desc: 'sortTargetDescending', enabled_first: 'sortEnabledFirst', disabled_first: 'sortDisabledFirst',
+    visits_desc: 'lnkSortVisitsDesc', visits_asc: 'lnkSortVisitsAsc', last_visit_desc: 'lnkSortLastVisitDesc', last_visit_asc: 'lnkSortLastVisitAsc',
   } as const satisfies Record<LinkSort, keyof Messages>;
+  // The live states the server filters by, in the order of the status filter.
+  const STATES: [LinkState, keyof Messages][] = [
+    ['active', 'stateActive'], ['scheduled', 'stateScheduled'], ['expired', 'stateExpired'], ['disabled', 'stateDisabled'], ['exhausted', 'stateExhausted'],
+  ];
   const MAX_SELECTION = 50;
   const MAX_TAG_FILTERS = 20;
 
@@ -66,7 +71,7 @@
   const paramView = p.get('view') as View;
   let view = $state<View>(VIEWS.some(([v]) => v === paramView) ? paramView : 'all');
   let q = $state(p.get('q') ?? '');
-  let status = $state(['enabled', 'disabled'].includes(p.get('status') ?? '') ? p.get('status')! : '');
+  let status = $state<LinkState | ''>(STATES.find(([s]) => s === p.get('status'))?.[0] ?? '');
   let host = $state(p.get('host') ?? '');
   let tagFilter = $state<string[]>(p.get('tags')?.split(',').filter(Boolean).slice(0, MAX_TAG_FILTERS) ?? []);
   let tagMatch = $state<TagMatch>(p.get('match') === 'any' ? 'any' : 'all');
@@ -141,7 +146,7 @@
       host: host || undefined,
       tags: tagFilter.length ? [...tagFilter] : undefined,
       tag_match: tagFilter.length > 1 ? tagMatch : undefined,
-      enabled: status ? status === 'enabled' : undefined,
+      state: status || undefined,
       view: API_VIEW[view as Exclude<View, 'attention'>],
       sort,
     };
@@ -228,7 +233,7 @@
       if (signal.aborted) return;
       const text = q.trim().toLowerCase();
       const list = found.filter((l): l is CatalogLink => l != null).filter((l) =>
-        (!host || l.host === host) && (!status || l.enabled === (status === 'enabled'))
+        (!host || l.host === host) && (!status || l.state === status)
         && (!tagFilter.length || (tagMatch === 'all' ? tagFilter.every((t) => l.tags.includes(t)) : tagFilter.some((t) => l.tags.includes(t))))
         && (!text || [l.title, l.description, l.slug, l.host, l.target, `${l.host}/${l.slug}`, ...l.tags].some((v) => (v ?? '').toLowerCase().includes(text))));
       remember(list);
@@ -283,8 +288,9 @@
     if (tagFilter.includes(name)) tagFilter = tagFilter.filter((t) => t !== name);
     else if (tagFilter.length < MAX_TAG_FILTERS) tagFilter = [...tagFilter, name];
   }
-  function sortBy(asc: LinkSort, desc: LinkSort) {
-    sort = sort === asc ? desc : asc;
+  // A header applies its first sort, then toggles between both directions.
+  function sortBy(first: LinkSort, second: LinkSort) {
+    sort = sort === first ? second : first;
   }
   const ariaSort = (asc: LinkSort, desc: LinkSort) => (sort === asc ? 'ascending' : sort === desc ? 'descending' : undefined);
   const tagLabel = $derived(tagFilter.length ? tr('lnkTagsFiltered', { tags: tagFilter.join(', ') }) : tr('tags'));
@@ -595,8 +601,7 @@
         </button>
         <select class="select filter-control" data-size="sm" aria-label={tr('statusFilter')} bind:value={status} data-set={status || undefined}>
           <option value="">{tr('lnkAnyStatus')}</option>
-          <option value="enabled">{tr('enabled')}</option>
-          <option value="disabled">{tr('disabled')}</option>
+          {#each STATES as [value, label] (value)}<option {value}>{tr(label)}</option>{/each}
         </select>
         <select class="select filter-control" data-size="sm" aria-label={tr('domainFilter')} bind:value={host} data-set={host || undefined}>
           <option value="">{tr('lnkAllDomains')}</option>
@@ -684,11 +689,11 @@
                 <th aria-sort={ariaSort('title_asc', 'title_desc')}><button class="th-sort" onclick={() => sortBy('title_asc', 'title_desc')}>{tr('lnkColLink')}<Icon name="arrow-up-down" /></button></th>
                 {#if show('dest')}<th class="c-dest" aria-sort={ariaSort('target_asc', 'target_desc')}><button class="th-sort" onclick={() => sortBy('target_asc', 'target_desc')}>{tr('lnkColDestination')}<Icon name="arrow-up-down" /></button></th>{/if}
                 {#if show('tags')}<th class="c-tags">{tr('tags')}</th>{/if}
-                {#if show('visits')}<th class="r c-visits">{tr('lnkColVisits')}</th>{/if}
+                {#if show('visits')}<th class="r c-visits" aria-sort={ariaSort('visits_asc', 'visits_desc')}><button class="th-sort" onclick={() => sortBy('visits_desc', 'visits_asc')}>{tr('lnkColVisits')}<Icon name="arrow-up-down" /></button></th>{/if}
                 {#if show('trend')}<th class="c-trend"><span class="visually-hidden">{tr('lnkColTrend')}</span></th>{/if}
                 {#if show('status')}<th class="c-status">{tr('status')}</th>{/if}
                 {#if show('health')}<th class="c-health">{tr('navHealth')}</th>{/if}
-                {#if show('last')}<th class="r c-last">{tr('lnkColLast')}</th>{/if}
+                {#if show('last')}<th class="r c-last" aria-sort={ariaSort('last_visit_asc', 'last_visit_desc')}><button class="th-sort" onclick={() => sortBy('last_visit_desc', 'last_visit_asc')}>{tr('lnkColLast')}<Icon name="arrow-up-down" /></button></th>{/if}
                 <th class="c-actions"><span class="visually-hidden">{tr('lnkActions')}</span></th>
               </tr>
             </thead>
