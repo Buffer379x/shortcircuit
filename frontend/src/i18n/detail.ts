@@ -174,6 +174,19 @@ export const en = {
   detQrDownload: 'Download',
   detQrNoLinks: 'No links yet',
   detQrNoLinksHint: 'Create a short link to design its QR code.',
+  // Link detail: preview image
+  pvTitle: 'Preview',
+  pvHint: 'The image the destination page offers for sharing',
+  pvRefresh: 'Refresh preview',
+  pvQueued: 'Preview refresh queued',
+  pvSource: 'Source',
+  pvFetched: 'Fetched',
+  pvKind: 'Type',
+  pvKindImage: 'Page image',
+  pvKindIcon: 'Page icon',
+  pvNone: 'No preview image. The destination page offers none, or it has not been fetched yet.',
+  pvPending: 'Fetching the preview image…',
+  pvProtected: 'Protected links get no preview image.',
 };
 
 export const de: Record<keyof typeof en, string> = {
@@ -344,4 +357,17 @@ export const de: Record<keyof typeof en, string> = {
   detQrDownload: 'Herunterladen',
   detQrNoLinks: 'Noch keine Links',
   detQrNoLinksHint: 'Erstelle einen Kurzlink, um seinen QR-Code zu gestalten.',
+  // Linkdetails: Vorschaubild
+  pvTitle: 'Vorschau',
+  pvHint: 'Das Bild, das die Zielseite zum Teilen anbietet',
+  pvRefresh: 'Vorschau aktualisieren',
+  pvQueued: 'Vorschau wird neu abgerufen',
+  pvSource: 'Quelle',
+  pvFetched: 'Abgerufen',
+  pvKind: 'Art',
+  pvKindImage: 'Seitenbild',
+  pvKindIcon: 'Seitensymbol',
+  pvNone: 'Kein Vorschaubild. Die Zielseite bietet keines an, oder es wurde noch nicht abgerufen.',
+  pvPending: 'Vorschaubild wird abgerufen …',
+  pvProtected: 'Geschützte Links erhalten kein Vorschaubild.',
 };

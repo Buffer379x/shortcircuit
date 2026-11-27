@@ -1239,6 +1239,85 @@ async function verify() {
       assert.deepEqual(pagesAudit, ['public_pages_reset', 'public_pages_update']);
     }
 
+    // ---------- Preview images (0.9.0, preview agent) ----------
+    // Off by default and unavailable until title lookup is on. Lists and details show nothing
+    // extra while off. Once on, rows gain a fixed-size thumbnail (a placeholder here: the
+    // container cannot reach the synthetic destinations) without breaking the table layout, and
+    // the detail page offers a preview card with Refresh.
+    {
+      await page.goto(admin + '/#/links');
+      await linkTable.locator('tbody tr').first().waitFor();
+      assert.equal(await linkTable.locator('.thumb').count(), 0);
+      const rowHeight = async () => (await linkTable.locator('tbody tr').first().boundingBox()).height;
+      await page.setViewportSize({ width: 1440, height: 900 });
+      const heightWithout = await rowHeight();
+      await page.goto(admin + '/#/links/' + backupId);
+      await heading('Backup check').waitFor();
+      assert.equal(await page.getByRole('region', { name: 'Preview', exact: true }).count(), 0);
+
+      await page.goto(admin + '/#/settings?section=operations');
+      const titlesPanel = page.getByRole('region', { name: 'Title lookup', exact: true });
+      const titleSwitch = titlesPanel.getByRole('checkbox', { name: 'Allow title lookup', exact: true });
+      const previewSwitch = titlesPanel.getByRole('checkbox', { name: 'Fetch preview images', exact: true });
+      await previewSwitch.waitFor();
+      assert.equal(await previewSwitch.isChecked(), false);
+      assert.equal(await previewSwitch.isDisabled(), true);
+      await titlesPanel.getByText('Requires title lookup. Turn on title lookup first.', { exact: true }).waitFor();
+      await titleSwitch.check();
+      await toast('Title lookup on').waitFor();
+      await page.waitForFunction(() => !document.querySelector('#ops-previews-switch')?.disabled);
+      const patchedPreviews = page.waitForResponse(response =>
+        response.url().endsWith('/api/v1/settings/operations') && response.request().method() === 'PATCH');
+      await previewSwitch.check();
+      const enabledPreviews = await (await patchedPreviews).json();
+      assert.deepEqual(enabledPreviews.preview_images_enabled, { value: true, source: 'saved', container: null });
+      assert.equal(enabledPreviews.preview_images_active, true);
+      await toast('Preview images on').waitFor();
+
+      await page.goto(admin + '/#/links');
+      await linkTable.locator('tbody tr .thumb').first().waitFor();
+      assert.ok(Math.abs(await rowHeight() - heightWithout) <= 4, 'thumbnails keep the row height');
+      const thumb = linkTable.locator('tbody tr').first().locator('.thumb');
+      assert.deepEqual(await thumb.evaluate(node => [node.offsetWidth, node.offsetHeight]), [48, 27]);
+      for (const [width, height] of [[1440, 900], [1024, 768], [768, 1024], [390, 844], [320, 568]]) {
+        await page.setViewportSize({ width, height });
+        await noHorizontalScroll(page);
+        // In cards the thumbnail stays inside the row.
+        const [card, image] = await Promise.all([linkTable.locator('tbody tr').first().boundingBox(), thumb.boundingBox()]);
+        assert.ok(image.x >= card.x && image.x + image.width <= card.x + card.width + 1, `thumbnail inside the row at ${width}px`);
+      }
+      await page.setViewportSize({ width: 1360, height: 900 });
+
+      await page.goto(admin + '/#/links/' + backupId);
+      await heading('Backup check').waitFor();
+      const previewCard = page.getByRole('region', { name: 'Preview', exact: true });
+      await previewCard.getByText(startsWith('No preview image.')).waitFor();
+      assert.equal(await previewCard.locator('img').count(), 0);
+      assert.equal((await page.request.get(admin + `/api/v1/links/${backupId}/preview`)).status(), 404);
+      const refreshed = page.waitForResponse(response =>
+        response.url().endsWith(`/api/v1/links/${backupId}/preview/refresh`) && response.request().method() === 'POST');
+      await previewCard.getByRole('button', { name: 'Refresh preview', exact: true }).click();
+      assert.equal((await refreshed).status(), 202);
+      await toast('Preview refresh queued').waitFor();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await noHorizontalScroll(page);
+      await page.setViewportSize({ width: 1360, height: 900 });
+
+      // Back to the defaults, so no further outgoing requests start.
+      await page.goto(admin + '/#/settings?section=operations');
+      for (const name of ['Fetch preview images', 'Allow title lookup']) {
+        const setting = titlesPanel.locator('.setting').filter({ has: page.getByRole('checkbox', { name, exact: true }) });
+        await setting.getByRole('button', { name: 'Reset to default', exact: true }).click();
+        await toast('Reset to the container value or default').first().waitFor();
+        await setting.getByRole('button', { name: 'Reset to default', exact: true }).waitFor({ state: 'detached' });
+      }
+      assert.equal(await previewSwitch.isChecked(), false);
+      assert.equal(await titleSwitch.isChecked(), false);
+      await page.goto(admin + '/#/links');
+      await linkTable.locator('tbody tr').first().waitFor();
+      assert.equal(await linkTable.locator('.thumb').count(), 0);
+    }
+
     // ---------- Browser backup, staged restore, and the audit log ----------
     await navigate('System');
     await heading('System').waitFor();

@@ -49,7 +49,7 @@ class UnraidTemplate(unittest.TestCase):
         # Operational settings are set in Settings > Operations, not in the template. The built-in
         # backup default matches what the template used to set: daily, keeping seven.
         for name in (
-            "BACKUP_INTERVAL_HOURS", "BACKUP_KEEP", "MONITOR_ENABLED", "TITLE_LOOKUP_ENABLED",
+            "BACKUP_INTERVAL_HOURS", "BACKUP_KEEP", "MONITOR_ENABLED", "TITLE_LOOKUP_ENABLED", "PREVIEW_IMAGES_ENABLED",
             "NOTIFICATION_WEBHOOK_URL", "NOTIFICATION_WEBHOOK_URL_FILE", "NOTIFICATION_EVENTS",
         ):
             self.assertNotIn(name, variables)

@@ -73,6 +73,7 @@ pub(super) fn routes(pool: SqlitePool, app: AppState) -> Router {
             post(restore_history),
         )
         .route("/api/v1/links/{id}/qr", get(link_qr))
+        .route("/api/v1/links/{id}/preview", get(read_preview))
         .with_state(LinkState { pool, app })
 }
 
@@ -320,6 +321,44 @@ async fn read_link(
         .map_err(|_| Problem::unavailable())?
         .map(Json)
         .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))
+}
+
+/// The stored preview thumbnail. Browser sessions and keys with the read scope may fetch it,
+/// within the key's host. It is served from the admin origin, so the interface's
+/// `img-src 'self'` policy applies, and it may be cached privately.
+async fn read_preview(
+    State(state): State<LinkState>,
+    Extension(access): Extension<LinkAccess>,
+    id: Result<Path<i64>, PathRejection>,
+) -> Result<axum::response::Response, Problem> {
+    use axum::response::IntoResponse;
+    let id = resource_id(id)?;
+    let hosts = access.allowed_hosts(&state, false).await?;
+    let (mime, bytes) = crate::previews::image(&state.pool, &hosts, id)
+        .await
+        .map_err(|_| Problem::unavailable())?
+        .ok_or(Problem(StatusCode::NOT_FOUND, "not_found"))?;
+    // The stored type is constrained to image/jpeg by the schema; refuse anything else.
+    if mime != "image/jpeg" {
+        return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
+    }
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/jpeg"),
+            (header::CACHE_CONTROL, "private, max-age=3600"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (
+                header::HeaderName::from_static("cross-origin-resource-policy"),
+                "same-origin",
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                "inline; filename=\"preview.jpg\"",
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]

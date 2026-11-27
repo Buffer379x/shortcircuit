@@ -603,6 +603,7 @@
               <dt>{tr('opsInterval')}</dt><dd>{hourCount(ops.monitor_interval_hours.value)}{from(ops.monitor_interval_hours)}</dd>
               <dt>{tr('opsPriority')}</dt><dd>{hourCount(ops.monitor_priority_hours.value)}{from(ops.monitor_priority_hours)}</dd>
               <dt>{tr('opsTitles')}</dt><dd>{ops.title_lookup_enabled.value ? tr('enabled') : tr('disabled')}{from(ops.title_lookup_enabled)}</dd>
+              {#if ops.preview_images_enabled}<dt>{tr('pvSwitch')}</dt><dd>{ops.preview_images_active ? tr('enabled') : ops.preview_images_enabled.value ? tr('pvPaused') : tr('disabled')}{from(ops.preview_images_enabled)}</dd>{/if}
               <dt>{tr('opsNotifications')}</dt><dd>{ops.notifications_active ? tr('enabled') : tr('disabled')}{from(ops.notification_webhook)}</dd>
             {/if}
             <dt>{tr('systemLastMonitorCheck')}</dt><dd>{dateTime(d.last_monitor_check_at)}</dd>

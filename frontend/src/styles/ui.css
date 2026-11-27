@@ -2016,6 +2016,42 @@ button.tag:hover {
   }
 }
 
+/* Link preview thumbnail: the destination page's own preview image or icon, re-encoded by the
+   server. A fixed 16:9 frame, so rows and cards never move when the image loads. Images cover
+   the frame; icons stay whole and centered. Without an image it shows a quiet placeholder. */
+.thumb {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  width: 48px;
+  height: 27px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.thumb[data-kind='icon'] img {
+  width: auto;
+  height: 70%;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+.thumb[data-size='card'] {
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm);
+}
+
 /* Preview frame: a sandboxed frame that shows a page the server rendered, such as a public
    page draft. The page inside keeps its own colors, so the frame only adds the border. */
 .preview-frame {

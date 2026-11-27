@@ -8660,6 +8660,197 @@
           }
         }
       }
+    },
+    "/api/v1/links/{id}/preview": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Numeric link ID.",
+          "schema": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getLinkPreview",
+        "summary": "Read a link's preview thumbnail",
+        "description": "Returns the stored re-encoded JPEG thumbnail of the image the destination page offers (og:image, twitter:image, or its icon). Served from the admin origin with Cache-Control: private, max-age=3600, X-Content-Type-Options: nosniff, Cross-Origin-Resource-Policy: same-origin, and the admin Content Security Policy. Bearer API keys require the read scope and honor any configured host restriction.",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The thumbnail.",
+            "headers": {
+              "Cache-Control": {
+                "description": "private, max-age=3600",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "nosniff",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "maxLength": 49152
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session or a valid, unexpired API key is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key lacks the read scope.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The link has no stored preview, or the link ID is invalid, absent, or outside the caller's visible hosts.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/links/{id}/preview/refresh": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Numeric link ID.",
+          "schema": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      ],
+      "post": {
+        "operationId": "refreshLinkPreview",
+        "summary": "Queue a new preview fetch for one link",
+        "description": "Clears the stored preview and queues a new fetch from the destination page through the title lookup worker. Requires preview images and title lookup to be on. Starts outgoing requests, so API keys are refused.",
+        "tags": [
+          "Title lookup"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The fetch is pending."
+          },
+          "401": {
+            "description": "A browser session is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The link does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "preview_images_disabled, title_lookup_required, or preview_protected.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -11103,6 +11294,9 @@
               "failure"
             ],
             "additionalProperties": false
+          },
+          "preview": {
+            "$ref": "#/components/schemas/LinkPreviewSummary"
           }
         },
         "required": [
@@ -11131,7 +11325,8 @@
           "rule_count",
           "visits_30d",
           "trend",
-          "monitor"
+          "monitor",
+          "preview"
         ]
       },
       "CatalogSearchPage": {
@@ -12587,6 +12782,9 @@
               "failure"
             ],
             "additionalProperties": false
+          },
+          "preview": {
+            "$ref": "#/components/schemas/LinkPreviewSummary"
           }
         },
         "required": [
@@ -12610,7 +12808,8 @@
           "visits_used",
           "protection",
           "rule_count",
-          "monitor"
+          "monitor",
+          "preview"
         ],
         "description": "One catalog link with the fields of a search item. A bearer key without the analytics scope receives no recorded_redirects, last_redirect_date, last_redirect_at, visits_30d, or trend."
       },
@@ -12885,6 +13084,8 @@
           "monitor_interval_hours",
           "monitor_priority_hours",
           "title_lookup_enabled",
+          "preview_images_enabled",
+          "preview_images_active",
           "backup_interval_hours",
           "backup_keep",
           "notification_webhook",
@@ -13023,6 +13224,40 @@
                 "description": "The container value a reset returns to, or null when none is set."
               }
             }
+          },
+          "preview_images_enabled": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "source",
+              "container"
+            ],
+            "description": "Preview images. PREVIEW_IMAGES_ENABLED, default false. Effective only while title lookup is on too.",
+            "properties": {
+              "value": {
+                "type": "boolean"
+              },
+              "source": {
+                "enum": [
+                  "saved",
+                  "container",
+                  "default"
+                ],
+                "description": "saved: set in Settings > Operations. container: from the container variable. default: built in."
+              },
+              "container": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "description": "The container value a reset returns to, or null when none is set."
+              }
+            }
+          },
+          "preview_images_active": {
+            "type": "boolean",
+            "description": "Whether preview images are fetched: preview_images_enabled and title_lookup_enabled are both true."
           },
           "backup_interval_hours": {
             "type": "object",
@@ -13313,6 +13548,10 @@
           "title_lookup_enabled": {
             "type": "boolean"
           },
+          "preview_images_enabled": {
+            "type": "boolean",
+            "description": "Turning it on while title lookup stays off returns 422 title_lookup_required."
+          },
           "backup_interval_hours": {
             "type": "integer",
             "minimum": 0,
@@ -13375,6 +13614,7 @@
                 "monitor_interval_hours",
                 "monitor_priority_hours",
                 "title_lookup_enabled",
+                "preview_images_enabled",
                 "backup_interval_hours",
                 "backup_keep",
                 "notification_webhook_url",
@@ -13725,6 +13965,54 @@
         "required": [
           "items"
         ]
+      },
+      "LinkPreviewSummary": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": false,
+        "description": "The stored preview image of the link, or null when there is none, also while a fetch is pending. The image itself is GET /api/v1/links/{id}/preview.",
+        "required": [
+          "kind",
+          "width",
+          "height",
+          "fetched_at",
+          "origin"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "image",
+              "icon"
+            ],
+            "description": "image: the page's og:image or twitter:image. icon: the page icon."
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 480,
+            "description": "Thumbnail width in pixels."
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 270,
+            "description": "Thumbnail height in pixels."
+          },
+          "fetched_at": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Unix seconds when the thumbnail was fetched. Changes with every new thumbnail."
+          },
+          "origin": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "Scheme, host, and port of the image URL, never its path or query."
+          }
+        }
       }
     }
   },

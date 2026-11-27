@@ -259,6 +259,19 @@ struct Details {
     protection: Option<String>,
     rule_count: i64,
     monitor: Option<MonitorSummary>,
+    /// The stored preview image, or null when there is none. The image itself is served by
+    /// `GET /api/v1/links/{id}/preview`.
+    preview: Option<PreviewSummary>,
+}
+
+#[derive(Serialize)]
+struct PreviewSummary {
+    kind: String,
+    width: i64,
+    height: i64,
+    fetched_at: i64,
+    /// Scheme, host, and port of the image URL.
+    origin: String,
 }
 
 #[derive(Serialize)]
@@ -324,6 +337,11 @@ struct DetailsRow {
     monitor_http_status: Option<i64>,
     monitor_elapsed_ms: Option<i64>,
     monitor_failure: Option<String>,
+    preview_kind: Option<String>,
+    preview_width: Option<i64>,
+    preview_height: Option<i64>,
+    preview_fetched_at: Option<i64>,
+    preview_origin: Option<String>,
 }
 
 macro_rules! search_select {
@@ -367,10 +385,13 @@ const DETAILS: &str = concat!(
          AND COALESCE((SELECT enabled FROM analytics_settings WHERE id = 1), 0) = 1 AS tracked,
        m.status AS monitor_status, m.priority AS monitor_priority,
        m.last_checked AS monitor_last_checked, m.http_status AS monitor_http_status,
-       m.elapsed_ms AS monitor_elapsed_ms, m.failure AS monitor_failure
+       m.elapsed_ms AS monitor_elapsed_ms, m.failure AS monitor_failure,
+       pv.kind AS preview_kind, pv.width AS preview_width, pv.height AS preview_height,
+       pv.fetched_at AS preview_fetched_at, pv.source_origin AS preview_origin
      FROM links l",
     crate::store::link_state_joins!(),
     " LEFT JOIN link_monitor m ON m.link_id = l.id
+     LEFT JOIN link_previews pv ON pv.link_id = l.id AND pv.status = 'ready'
      WHERE l.id IN (SELECT value FROM json_each(?3))"
 );
 
@@ -637,6 +658,24 @@ impl From<DetailsRow> for Details {
             elapsed_ms: row.monitor_elapsed_ms,
             failure: row.monitor_failure,
         });
+        let preview = match (
+            row.preview_kind,
+            row.preview_width,
+            row.preview_height,
+            row.preview_fetched_at,
+            row.preview_origin,
+        ) {
+            (Some(kind), Some(width), Some(height), Some(fetched_at), Some(origin)) => {
+                Some(PreviewSummary {
+                    kind,
+                    width,
+                    height,
+                    fetched_at,
+                    origin,
+                })
+            }
+            _ => None,
+        };
         Self {
             state: row.state,
             starts_at: row.starts_at,
@@ -646,6 +685,7 @@ impl From<DetailsRow> for Details {
             protection: row.protection,
             rule_count: row.rule_count,
             monitor,
+            preview,
         }
     }
 }
