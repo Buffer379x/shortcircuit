@@ -467,10 +467,31 @@ impl Webhook {
     pub(crate) fn uses_connector(&self) -> bool {
         self.connector.is_some()
     }
+
+    /// Whether a webhook without a connector names a literal address that delivery would refuse.
+    /// Names are resolved and checked when each delivery connects.
+    pub(crate) fn targets_private_literal(&self) -> bool {
+        self.connector.is_none()
+            && match self.url.host() {
+                Some(Host::Ipv4(ip)) => !public_ipv4(ip),
+                Some(Host::Ipv6(ip)) => !public_ipv6(ip),
+                Some(Host::Domain(name)) => {
+                    let name = name.trim_end_matches('.');
+                    !name.contains('.') || name.ends_with(".localhost") || name.ends_with(".local")
+                }
+                None => true,
+            }
+    }
+}
+
+/// Whether a value can be sent as an `Authorization` header.
+pub(crate) fn valid_authorization(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 4096 && HeaderValue::from_str(value).is_ok()
 }
 
 /// One explicitly trusted internal HTTPS origin and the address ranges it may resolve to.
 /// The connector applies only to webhook delivery. Probes and title lookups never use it.
+#[derive(Clone)]
 pub(crate) struct Connector {
     host: String,
     port: u16,

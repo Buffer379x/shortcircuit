@@ -2,7 +2,7 @@
   // Public domains (origin, root and missing-slug fallbacks, crawler setting, enable state) and the
   // destination policy with its impact preview. The tab lives in the URL.
   import { onMount, tick } from 'svelte';
-  import type { Domain, DestinationPolicy, DestinationPolicyReport, DestinationRule } from '../api';
+  import type { Domain, DomainDeletion, DomainDeletionPreview, DestinationPolicy, DestinationPolicyReport, DestinationRule } from '../api';
   import { problemMessage } from '../format';
   import type { Messages } from '../i18n';
   import Icon from '../lib/Icon.svelte';
@@ -140,6 +140,125 @@
 
   function described(field: DomainField, hint?: string) {
     return [errorFor(field) ? `dm-${field}-error` : '', hint ?? ''].filter(Boolean).join(' ') || undefined;
+  }
+
+  // ---------- Delete a domain ----------
+  // The preview reports the link count, the move targets, and, for a chosen target, the slug
+  // conflicts. The delete sends the previewed count, so a change in between returns 409.
+  type LinkChoice = 'move' | 'delete';
+  let removing = $state<Domain | null>(null);
+  let removal = $state.raw<DomainDeletionPreview | null>(null);
+  let removalLoading = $state(false);
+  let removalBusy = $state(false);
+  let removalError = $state<keyof Messages | null>(null);
+  let removalErrorBox = $state<HTMLDivElement>();
+  let linkChoice = $state<LinkChoice>('move');
+  let moveTarget = $state('');
+  let conflicts = $state.raw<DomainDeletionPreview['move'] | null>(null);
+  let conflictsLoading = $state(false);
+  let typedHost = $state('');
+  let previewRequest = 0;
+
+  const removalLinks = $derived(removal?.links ?? 0);
+  const keysBlock = $derived(!!removal && removal.api_keys > 0 && !removal.environment);
+  const canRemove = $derived.by(() => {
+    if (!removal || removalLoading || removalBusy || keysBlock) return false;
+    if (!removalLinks) return true;
+    if (linkChoice === 'delete') return typedHost.trim().toLowerCase() === removal.host;
+    return !!moveTarget && !conflictsLoading && conflicts?.target === moveTarget && conflicts.conflicts === 0;
+  });
+
+  function startRemoval(item: Domain) {
+    removing = item;
+    removal = null;
+    removalError = null;
+    linkChoice = 'move';
+    moveTarget = '';
+    conflicts = null;
+    typedHost = '';
+    void loadRemoval();
+  }
+
+  async function loadRemoval(target?: string) {
+    if (!removing) return;
+    const request = ++previewRequest;
+    const params = new URLSearchParams({ host: removing.host });
+    if (target) params.set('target', target);
+    if (target) conflictsLoading = true;
+    else removalLoading = true;
+    try {
+      const result = await app.api<DomainDeletionPreview>(`/catalog/domains/deletion?${params}`);
+      if (request !== previewRequest) return;
+      removal = result;
+      conflicts = result.move ?? null;
+      if (!result.targets.length) linkChoice = 'delete';
+    } catch (error) {
+      if (request !== previewRequest) return;
+      removalError = problemMessage(error);
+    } finally {
+      if (request === previewRequest) {
+        removalLoading = false;
+        conflictsLoading = false;
+      }
+    }
+  }
+
+  function chooseTarget() {
+    conflicts = null;
+    removalError = null;
+    if (moveTarget) void loadRemoval(moveTarget);
+  }
+
+  function nCount(n: number, one: keyof Messages, many: keyof Messages, values: Record<string, string> = {}) {
+    return n === 1 ? tr(one, values) : tr(many, { ...values, count: num(n) });
+  }
+
+  async function confirmRemoval(event: SubmitEvent) {
+    event.preventDefault();
+    if (!removing || !removal || !canRemove) return;
+    const host = removal.host;
+    const links = removalLinks ? linkChoice : 'none';
+    removalBusy = true;
+    removalError = null;
+    let failed: keyof Messages | null = null;
+    try {
+      const result = await app.api<DomainDeletion>('/catalog/domains', 'DELETE', {
+        host,
+        links,
+        expected_links: removalLinks,
+        ...(links === 'move' ? { target: moveTarget } : {}),
+        ...(links === 'delete' ? { confirm: typedHost.trim() } : {}),
+      });
+      const summary = result.links === 'move'
+        ? nCount(result.moved, 'domDeletedMovedOne', 'domDeletedMoved', { host, target: result.target ?? '' })
+        : result.links === 'delete'
+          ? nCount(result.deleted, 'domDeletedLinksOne', 'domDeletedLinks', { host })
+          : host;
+      toast(tr('domDeleted'), { body: result.environment ? `${summary}. ${tr('domDeletedServed', { host })}` : summary });
+      removing = null;
+      // An environment host stays in the list with default settings.
+      if (result.environment) await load();
+      else domains = domains.filter((item) => item.host !== host);
+      onchange?.();
+      await tick();
+      document.querySelector<HTMLElement>('main h1')?.focus();
+    } catch (error) {
+      failed = problemMessage(error);
+    } finally {
+      removalBusy = false;
+    }
+    if (!failed) return;
+    removalError = failed;
+    // A changed count or new conflicts: show the current state next to the error.
+    if (failed === 'domChanged' || failed === 'domMoveConflict' || failed === 'domHasKeys' || failed === 'domInvalidTarget') {
+      const keep = removalError;
+      if (failed === 'domInvalidTarget') moveTarget = '';
+      await loadRemoval(linkChoice === 'move' && moveTarget ? moveTarget : undefined);
+      removalError = keep;
+      typedHost = '';
+    }
+    await tick();
+    removalErrorBox?.focus();
   }
 
   // ---------- Destination policy ----------
@@ -335,6 +454,7 @@
                           {#snippet children(close)}
                             <button class="menu-item" role="menuitem" onclick={() => { close(); edit(item); }}><Icon name="pencil" />{tr('editDomain')}</button>
                             <a class="menu-item" role="menuitem" href={href('links', '', { host: item.host })} onclick={close}><Icon name="link" />{tr('admShowLinks')}</a>
+                            <button class="menu-item" role="menuitem" data-tone="danger" onclick={() => { close(); startRemoval(item); }}><Icon name="trash-2" />{tr('domDeleteDomain')}</button>
                           {/snippet}
                         </Menu>
                       </div>
@@ -511,6 +631,88 @@
   {/snippet}
 </Dialog>
 
+<Dialog open={removing !== null} onclose={() => (removing = null)} title={tr('domDeleteNamed', { host: removing?.host ?? '' })} width={520} busy={removalBusy}>
+  <form id="dm-delete" class="form" onsubmit={confirmRemoval} novalidate aria-busy={removalBusy || removalLoading}>
+    {#if removalLoading && !removal}
+      <p class="muted" role="status">{tr('domChecking')}</p>
+    {:else if removal}
+      {@const host = removal.host}
+      {#if removal.environment}
+        <div class="notice" data-tone="neutral"><Icon name="info" /><div><b>{tr('domEnvironmentTitle')}</b><p>{tr('domEnvironmentText')}</p></div></div>
+      {/if}
+      {#if keysBlock}
+        <div class="notice" data-tone="warning">
+          <Icon name="key-round" />
+          <div><p>{nCount(removal.api_keys, 'domOneKey', 'domKeys')}</p><p><a href={href('keys')}>{tr('domOpenKeys')}</a></p></div>
+        </div>
+      {/if}
+      {#if !removalLinks}
+        <p class="secondary confirm-text">{tr('domNoLinks')}</p>
+      {:else}
+        <p class="secondary confirm-text">{nCount(removalLinks, 'domOneLink', 'domLinks')}</p>
+        <fieldset class="fieldset">
+          <legend>{tr('domChoice')}</legend>
+          <div class="choice-grid" role="radiogroup" aria-label={tr('domChoice')}>
+            <label class="choice"><input class="radio" type="radio" name="dm-links" value="move" bind:group={linkChoice} disabled={removalBusy || !removal.targets.length} /><span><b>{tr('domMove')}</b><small>{tr('domMoveHint')}</small></span></label>
+            <label class="choice"><input class="radio" type="radio" name="dm-links" value="delete" bind:group={linkChoice} disabled={removalBusy} /><span><b>{tr('domDeleteLinks')}</b><small>{tr('domDeleteLinksHint')}</small></span></label>
+          </div>
+        </fieldset>
+        {#if linkChoice === 'move'}
+          {#if !removal.targets.length}
+            <p class="field-hint">{tr('domNoTargets')}</p>
+          {:else}
+            <div class="field">
+              <label class="field-label" for="dm-target">{tr('domTarget')}</label>
+              <select id="dm-target" class="select mono" value={moveTarget} onchange={(event) => { moveTarget = event.currentTarget.value; chooseTarget(); }} disabled={removalBusy} aria-describedby="dm-target-hint dm-conflicts">
+                <option value="" disabled>{tr('domChooseTarget')}</option>
+                {#each removal.targets as target (target)}<option value={target}>{target}</option>{/each}
+              </select>
+              <p class="field-hint" id="dm-target-hint">{tr('domTargetHint')}</p>
+            </div>
+            <div id="dm-conflicts" role="status">
+              {#if moveTarget && conflictsLoading}
+                <p class="muted confirm-text">{tr('domCheckingConflicts', { host: moveTarget })}</p>
+              {:else if conflicts && conflicts.target === moveTarget && conflicts.conflicts === 0}
+                <p class="secondary confirm-text"><Icon name="circle-check" />{tr('domNoConflicts', { host: conflicts.target })}</p>
+              {:else if conflicts && conflicts.target === moveTarget}
+                <div class="notice" data-tone="error">
+                  <Icon name="circle-alert" />
+                  <div>
+                    <p>{nCount(conflicts.conflicts, 'domOneConflict', 'domConflicts', { host: conflicts.target })}</p>
+                    <ul class="slug-list">
+                      {#each conflicts.conflicting_slugs as slug (slug)}<li class="mono">{slug}</li>{/each}
+                    </ul>
+                    {#if conflicts.conflicts > conflicts.conflicting_slugs.length}<p>{tr('domMoreConflicts', { count: num(conflicts.conflicts - conflicts.conflicting_slugs.length) })}</p>{/if}
+                  </div>
+                  <button class="btn" type="button" data-size="sm" disabled={removalBusy} onclick={chooseTarget}>{tr('domCheckAgain')}</button>
+                </div>
+              {/if}
+            </div>
+            <div class="notice" data-tone="warning"><Icon name="triangle-alert" /><div><p>{tr('domMoveWarning', { host })}</p></div></div>
+          {/if}
+        {:else}
+          <div class="notice" data-tone="warning">
+            <Icon name="triangle-alert" />
+            <div><p>{tr('domExportFirst')}</p><p><a href={href('exchange')}>{tr('domOpenExport')}</a></p></div>
+          </div>
+          <div class="field">
+            <label class="field-label" for="dm-confirm">{tr('domTypeToConfirm', { host })}</label>
+            <input id="dm-confirm" class="input mono" bind:value={typedHost} disabled={removalBusy} autocomplete="off" autocapitalize="none" spellcheck="false" />
+          </div>
+        {/if}
+      {/if}
+    {/if}
+    {#if removalError}<div class="notice" data-tone="error" role="alert" tabindex="-1" bind:this={removalErrorBox}><Icon name="circle-alert" /><div><p>{locale.t[removalError]}</p></div></div>{/if}
+  </form>
+  {#snippet footer()}
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-variant="ghost" disabled={removalBusy} onclick={() => (removing = null)}>{tr('cancel')}</button>
+    <button class="btn" type="submit" form="dm-delete" data-variant="danger" disabled={!canRemove} aria-busy={removalBusy}>
+      {#if removalBusy}<span class="spinner" aria-hidden="true"></span>{/if}<Icon name="trash-2" /><span>{tr('domDeleteDomain')}</span>
+    </button>
+  {/snippet}
+</Dialog>
+
 <style>
   .panel-foot > .spacer {
     flex: 1;
@@ -531,6 +733,26 @@
   .form {
     display: grid;
     gap: var(--space-5);
+  }
+  .confirm-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--text-sm);
+  }
+  .confirm-text :global(svg) {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    color: var(--success);
+  }
+  .slug-list {
+    max-height: min(30dvh, 12rem);
+    overflow: auto;
+    margin-top: var(--space-2);
+    padding-left: var(--space-5);
+    list-style: disc;
+    overflow-wrap: anywhere;
   }
   .enforce {
     flex: none;

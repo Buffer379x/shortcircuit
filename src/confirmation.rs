@@ -12,7 +12,11 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-use crate::{auth::lowercase_hex, redirect::Challenge};
+use crate::{
+    auth::lowercase_hex,
+    public_pages::{Compiled, Lang, Look, Page, Part, Slot, Templates},
+    redirect::Challenge as Link,
+};
 
 const VALID_SECONDS: u64 = 5 * 60;
 const MAX_FORM_BYTES: usize = 4096;
@@ -23,7 +27,7 @@ type LinkMac = Hmac<Sha256>;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Action<'a> {
-    pub(crate) link: Challenge,
+    pub(crate) link: Link,
     pub(crate) origin: &'a str,
     pub(crate) path_and_query: &'a str,
 }
@@ -114,71 +118,181 @@ impl Action<'_> {
         Ok(password.unwrap_or_default().into_owned())
     }
 
-    pub(crate) fn page(self, language: Option<&str>, wrong_password: bool) -> Response {
+    /// The password or confirmation page. `pages` selects an administrator-defined page; the
+    /// form, its signed challenge, and its limits stay under server control in every mode.
+    pub(crate) fn page(
+        self,
+        language: Option<&str>,
+        wrong_password: bool,
+        pages: Option<&Templates>,
+    ) -> Response {
         let Ok(token) = self.issue() else {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         };
         let copy = Strings::for_language(language);
-        let action = escape(&format!("{}{}", self.origin, self.path_and_query));
-        let host = self
-            .origin
-            .split_once("://")
-            .map_or(self.origin, |(_, host)| host);
-        let path = self
-            .path_and_query
-            .split_once('?')
-            .map_or(self.path_and_query, |(path, _)| path);
-        let short_url = escape(&format!("{host}{path}"));
-        let (title, content, button) = if self.link.password_required {
-            let (invalid, feedback) = if wrong_password {
-                (
-                    " aria-invalid=\"true\" aria-describedby=\"password-error\"",
-                    format!(
-                        "<p class=\"error\" id=\"password-error\" role=\"alert\">{ALERT}{}</p>",
-                        copy.password_error
-                    ),
-                )
+        let page = if self.link.password_required {
+            Page::Password
+        } else {
+            Page::Once
+        };
+        let template = pages.and_then(|pages| pages.get(page, copy.language()));
+        challenge(
+            &Challenge {
+                copy,
+                origin: self.origin,
+                path_and_query: self.path_and_query,
+                token: &token,
+                password_required: self.link.password_required,
+                wrong_password,
+            },
+            template,
+            Frame::Deny,
+        )
+        .response()
+    }
+}
+
+/// The inputs of a password or confirmation page.
+pub(crate) struct Challenge<'a> {
+    pub(crate) copy: &'static Strings,
+    pub(crate) origin: &'a str,
+    pub(crate) path_and_query: &'a str,
+    pub(crate) token: &'a str,
+    pub(crate) password_required: bool,
+    pub(crate) wrong_password: bool,
+}
+
+/// Renders a password or confirmation page.
+pub(crate) fn challenge(
+    input: &Challenge<'_>,
+    template: Option<&Compiled>,
+    frame: Frame,
+) -> Rendered {
+    let copy = input.copy;
+    let action = escape(&format!("{}{}", input.origin, input.path_and_query));
+    let host = input
+        .origin
+        .split_once("://")
+        .map_or(input.origin, |(_, host)| host);
+    let path = input
+        .path_and_query
+        .split_once('?')
+        .map_or(input.path_and_query, |(path, _)| path);
+    let token = escape(input.token);
+    let status = if input.wrong_password {
+        StatusCode::FORBIDDEN
+    } else {
+        StatusCode::OK
+    };
+    let (invalid, error) = if input.password_required && input.wrong_password {
+        (
+            " aria-invalid=\"true\" aria-describedby=\"password-error\"",
+            copy.password_error,
+        )
+    } else {
+        ("", "")
+    };
+    let hidden = format!(
+        "<form method=\"post\" action=\"{action}\"><input type=\"hidden\" name=\"challenge\" value=\"{token}\">"
+    );
+    let field = |alert: &str| {
+        let feedback = if error.is_empty() {
+            String::new()
+        } else {
+            format!("<p class=\"error\" id=\"password-error\" role=\"alert\">{alert}{error}</p>")
+        };
+        format!(
+            "<div class=\"field\"><label for=\"password\">{}</label>\
+             <input id=\"password\" type=\"password\" name=\"password\" autocomplete=\"current-password\" required autofocus{invalid}>\
+             {feedback}</div>",
+            copy.password_label
+        )
+    };
+    let (builtin_title, builtin_button) = if input.password_required {
+        (copy.password_title, copy.password_button)
+    } else {
+        (copy.once_title, copy.once_button)
+    };
+    let body = match template.map(|template| &template.look) {
+        Some(Look::Custom {
+            title,
+            styles,
+            body,
+        }) => {
+            let fields = if input.password_required {
+                field("")
             } else {
-                ("", String::new())
+                String::new()
             };
-            let (before, after) = copy.password_text;
-            (
-                copy.password_title,
-                format!(
-                    "<p class=\"muted\">{before}<span class=\"mono\">{short_url}</span>{after}</p>\
-                     <form method=\"post\" action=\"{action}\"><input type=\"hidden\" name=\"challenge\" value=\"{token}\">\
-                     <div class=\"field\"><label for=\"password\">{}</label>\
-                     <input id=\"password\" type=\"password\" name=\"password\" autocomplete=\"current-password\" required autofocus{invalid}>\
-                     {feedback}</div>",
-                    copy.password_label
-                ),
-                copy.password_button,
+            let form = format!(
+                "{hidden}{fields}<button class=\"btn primary\" type=\"submit\">{builtin_button}</button></form>"
+            );
+            custom_document(
+                copy,
+                builtin_title,
+                title.as_deref(),
+                styles,
+                body,
+                &Values {
+                    host: &escape(
+                        &url::Url::parse(input.origin)
+                            .ok()
+                            .and_then(|url| url.host_str().map(str::to_owned))
+                            .unwrap_or_default(),
+                    ),
+                    root_link: "",
+                    form: &form,
+                },
             )
-        } else {
-            (
-                copy.once_title,
+        }
+        look => {
+            let overrides = match look {
+                Some(Look::Structured {
+                    title,
+                    message,
+                    button,
+                    style,
+                    logo,
+                }) => Some((title, message, button, style, logo)),
+                _ => None,
+            };
+            let title = overrides
+                .and_then(|o| o.0.as_deref())
+                .unwrap_or(builtin_title);
+            let message = overrides.and_then(|o| o.1.as_deref());
+            let button = overrides
+                .and_then(|o| o.2.as_deref())
+                .unwrap_or(builtin_button);
+            let style = overrides.and_then(|o| o.3.as_deref());
+            let logo = overrides.and_then(|o| o.4.as_deref());
+            let short_url = escape(&format!("{host}{path}"));
+            let content = if input.password_required {
+                let intro = message.map_or_else(
+                    || {
+                        let (before, after) = copy.password_text;
+                        format!("<p class=\"muted\">{before}<span class=\"mono\">{short_url}</span>{after}</p>")
+                    },
+                    |message| format!("<p class=\"muted\">{message}</p>"),
+                );
+                format!("{intro}{hidden}{}", field(ALERT))
+            } else {
                 format!(
-                    "<p class=\"muted\">{}</p><form method=\"post\" action=\"{action}\">\
-                     <input type=\"hidden\" name=\"challenge\" value=\"{token}\">",
-                    copy.once_text
-                ),
-                copy.once_button,
-            )
-        };
-        let status = if wrong_password {
-            StatusCode::FORBIDDEN
-        } else {
-            StatusCode::OK
-        };
-        let content = format!(
-            "<h1>{title}</h1>{content}<button class=\"btn primary\" type=\"submit\">{button}</button></form>"
-        );
-        let mut response = html(status, copy, title, &content, true);
-        response.headers_mut().insert(
-            header::REFERRER_POLICY,
-            HeaderValue::from_static("strict-origin"),
-        );
-        response
+                    "<p class=\"muted\">{}</p>{hidden}",
+                    message.unwrap_or(copy.once_text)
+                )
+            };
+            let content = format!(
+                "<h1>{title}</h1>{content}<button class=\"btn primary\" type=\"submit\">{button}</button></form>"
+            );
+            document(copy, title, &content, true, style, logo)
+        }
+    };
+    Rendered {
+        status,
+        body,
+        policy: policy(template, frame),
+        frame,
+        strict_referrer: true,
     }
 }
 
@@ -200,7 +314,7 @@ pub(crate) struct Home {
     pub(crate) label: String,
 }
 
-/// Renders a notice for GET and POST. HEAD keeps the bare status without a body.
+/// Renders a built-in notice for GET and POST. HEAD keeps the bare status without a body.
 pub(crate) fn notice(
     method: &Method,
     status: StatusCode,
@@ -210,28 +324,233 @@ pub(crate) fn notice(
     if method == Method::HEAD {
         return status.into_response();
     }
+    render_notice(
+        status,
+        notice,
+        Strings::for_language(language),
+        None,
+        None,
+        Frame::Deny,
+    )
+    .response()
+}
+
+/// Renders a public notice with the administrator-defined page for its kind and language.
+pub(crate) fn public_notice(
+    method: &Method,
+    status: StatusCode,
+    notice: Notice,
+    language: Option<&str>,
+    host: Option<&str>,
+    pages: &Templates,
+) -> Response {
+    if method == Method::HEAD {
+        return status.into_response();
+    }
     let copy = Strings::for_language(language);
+    let page = match notice {
+        Notice::Missing { .. } => Some(Page::Missing),
+        Notice::UnknownHost => Some(Page::UnknownHost),
+        Notice::AdminAddress => None,
+    };
+    let template = page.and_then(|page| pages.get(page, copy.language()));
+    render_notice(status, notice, copy, host, template, Frame::Deny).response()
+}
+
+pub(crate) fn render_notice(
+    status: StatusCode,
+    notice: Notice,
+    copy: &'static Strings,
+    host: Option<&str>,
+    template: Option<&Compiled>,
+    frame: Frame,
+) -> Rendered {
     let code = status.as_u16();
     let (title, text, home, footer) = match notice {
         Notice::Missing { home } => (copy.missing_title, copy.missing_text, home, true),
         Notice::UnknownHost => (copy.unknown_title, copy.unknown_text, None, true),
         Notice::AdminAddress => (copy.admin_title, copy.admin_text, None, false),
     };
-    let link = home.map_or_else(String::new, |home| {
-        format!(
-            "<a class=\"btn\" href=\"{}\">{}{}</a>",
-            escape(&home.href),
-            copy.home,
-            escape(&home.label)
+    let link = |label: Option<&str>| {
+        home.as_ref().map_or_else(String::new, |home| {
+            let label = label.map_or_else(
+                || format!("{}{}", copy.home, escape(&home.label)),
+                str::to_owned,
+            );
+            format!(
+                "<a class=\"btn\" href=\"{}\">{label}</a>",
+                escape(&home.href)
+            )
+        })
+    };
+    let body = match template.map(|template| &template.look) {
+        None => {
+            let content = format!(
+                "<p class=\"code\">{code}</p><h1>{title}</h1><p class=\"muted\">{text}</p>{}",
+                link(None)
+            );
+            document(copy, title, &content, footer, None, None)
+        }
+        Some(Look::Structured {
+            title: custom_title,
+            message,
+            button,
+            style,
+            logo,
+        }) => {
+            let title = custom_title.as_deref().unwrap_or(title);
+            let text = message.as_deref().unwrap_or(text);
+            let content = format!(
+                "<p class=\"code\">{code}</p><h1>{title}</h1><p class=\"muted\">{text}</p>{}",
+                link(button.as_deref())
+            );
+            document(
+                copy,
+                title,
+                &content,
+                footer,
+                style.as_deref(),
+                logo.as_deref(),
+            )
+        }
+        Some(Look::Custom {
+            title: custom_title,
+            styles,
+            body,
+        }) => custom_document(
+            copy,
+            title,
+            custom_title.as_deref(),
+            styles,
+            body,
+            &Values {
+                host: &host.map(escape).unwrap_or_default(),
+                root_link: &link(None),
+                form: "",
+            },
+        ),
+    };
+    Rendered {
+        status,
+        body,
+        policy: policy(template, frame),
+        frame,
+        strict_referrer: false,
+    }
+}
+
+/// Whether a page may be framed. Public pages never are. The admin preview allows its own origin.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Frame {
+    Deny,
+    SameOrigin,
+}
+
+/// A page before it becomes a response.
+#[derive(Clone)]
+pub(crate) struct Rendered {
+    pub(crate) status: StatusCode,
+    pub(crate) body: String,
+    policy: HeaderValue,
+    frame: Frame,
+    strict_referrer: bool,
+}
+
+impl Rendered {
+    pub(crate) fn response(self) -> Response {
+        let frame_options = match self.frame {
+            Frame::Deny => HeaderValue::from_static("DENY"),
+            Frame::SameOrigin => HeaderValue::from_static("SAMEORIGIN"),
+        };
+        let mut response = (
+            self.status,
+            [
+                (header::CONTENT_SECURITY_POLICY, self.policy),
+                (header::X_FRAME_OPTIONS, frame_options),
+            ],
+            Html(self.body),
         )
-    });
-    let content =
-        format!("<p class=\"code\">{code}</p><h1>{title}</h1><p class=\"muted\">{text}</p>{link}");
-    html(status, copy, title, &content, footer)
+            .into_response();
+        if self.strict_referrer {
+            response.headers_mut().insert(
+                header::REFERRER_POLICY,
+                HeaderValue::from_static("strict-origin"),
+            );
+        }
+        response
+    }
+}
+
+fn policy(template: Option<&Compiled>, frame: Frame) -> HeaderValue {
+    let ancestors = match frame {
+        Frame::Deny => "'none'",
+        Frame::SameOrigin => "'self'",
+    };
+    match (template, frame) {
+        (Some(template), _) => template.policy(ancestors),
+        (None, Frame::Deny) => content_security_policy(),
+        (None, Frame::SameOrigin) => {
+            let policy = content_security_policy();
+            let policy = policy.to_str().expect("the policy is visible ASCII");
+            HeaderValue::from_str(
+                &policy.replace("frame-ancestors 'none'", "frame-ancestors 'self'"),
+            )
+            .expect("the policy is visible ASCII")
+        }
+    }
+}
+
+/// Escaped placeholder values for custom markup. The request path and slug are never offered.
+struct Values<'a> {
+    host: &'a str,
+    root_link: &'a str,
+    form: &'a str,
+}
+
+fn fill(output: &mut String, parts: &[Part], lang: &str, values: &Values<'_>) {
+    for part in parts {
+        match part {
+            Part::Markup(text) => output.push_str(text),
+            Part::Slot(Slot::Host) => output.push_str(values.host),
+            Part::Slot(Slot::Lang) => output.push_str(lang),
+            Part::Slot(Slot::RootLink) => output.push_str(values.root_link),
+            Part::Slot(Slot::Form) => output.push_str(values.form),
+        }
+    }
+}
+
+fn custom_document(
+    copy: &Strings,
+    fallback_title: &str,
+    title: Option<&[Part]>,
+    styles: &[String],
+    body: &[Part],
+    values: &Values<'_>,
+) -> String {
+    let lang = copy.lang;
+    let mut output = format!(
+        "<!doctype html><html lang=\"{lang}\"><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+         <meta name=\"robots\" content=\"noindex,nofollow\"><title>"
+    );
+    match title {
+        Some(title) => fill(&mut output, title, lang, values),
+        None => output.push_str(fallback_title),
+    }
+    output.push_str("</title>");
+    for style in styles {
+        output.push_str("<style>");
+        output.push_str(style);
+        output.push_str("</style>");
+    }
+    output.push_str("</head><body>");
+    fill(&mut output, body, lang, values);
+    output.push_str("</body></html>");
+    output
 }
 
 /// Visitor-facing strings. English is the default; a first preferred language of `de` selects German.
-struct Strings {
+pub(crate) struct Strings {
     lang: &'static str,
     password_title: &'static str,
     password_text: (&'static str, &'static str),
@@ -292,11 +611,48 @@ const GERMAN: Strings = Strings {
 };
 
 impl Strings {
-    fn for_language(language: Option<&str>) -> &'static Self {
+    pub(crate) fn for_language(language: Option<&str>) -> &'static Self {
         let german = language
             .and_then(|value| value.split(['-', ',', ';']).next())
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("de"));
         if german { &GERMAN } else { &ENGLISH }
+    }
+
+    pub(crate) fn of(language: Lang) -> &'static Self {
+        match language {
+            Lang::En => &ENGLISH,
+            Lang::De => &GERMAN,
+        }
+    }
+
+    pub(crate) fn language(&self) -> Lang {
+        if self.lang == GERMAN.lang {
+            Lang::De
+        } else {
+            Lang::En
+        }
+    }
+
+    /// The built-in title, message, and button label of a page, for the editor's placeholders.
+    pub(crate) fn defaults(&self, page: Page) -> (&'static str, String, Option<String>) {
+        match page {
+            Page::Missing => (
+                self.missing_title,
+                self.missing_text.to_owned(),
+                Some(format!("{}…", self.home)),
+            ),
+            Page::UnknownHost => (self.unknown_title, self.unknown_text.to_owned(), None),
+            Page::Password => (
+                self.password_title,
+                format!("{}…{}", self.password_text.0, self.password_text.1),
+                Some(self.password_button.to_owned()),
+            ),
+            Page::Once => (
+                self.once_title,
+                self.once_text.to_owned(),
+                Some(self.once_button.to_owned()),
+            ),
+        }
     }
 }
 
@@ -312,7 +668,7 @@ const ALERT: &str = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=
 /// The only stylesheet of the public pages. The CSP allows exactly this text by its hash, so it
 /// must stay static. The colors follow the Polar Signal tokens. Geist is not served publicly, and
 /// named system fonts come before `system-ui`, which some Linux setups map to a CJK face.
-const STYLE: &str = ":root{color-scheme:dark;--bg:#101115;--surface:#1c1e24;--raised:#242731;\
+pub(crate) const STYLE: &str = ":root{color-scheme:dark;--bg:#101115;--surface:#1c1e24;--raised:#242731;\
 --hover:#292d36;--sunken:#16181d;--border:#333640;--subtle:#272a32;--control:#727788;--text:#f6f6fa;\
 --secondary:#c3c5cf;--muted:#969aa9;--accent:#ff79c6;--accent-hover:#ff94d2;--accent-active:#e963af;\
 --accent-soft:#302333;--on-accent:#101115;--error:#ff6b61;--error-soft:#3a1e1f;--h:32px;--h-lg:40px}\
@@ -372,31 +728,37 @@ fn content_security_policy() -> HeaderValue {
         .clone()
 }
 
-fn html(status: StatusCode, copy: &Strings, title: &str, content: &str, footer: bool) -> Response {
+/// The built-in layout. Structured pages add a second hashed style element and may replace the
+/// mark with an inline raster logo.
+fn document(
+    copy: &Strings,
+    title: &str,
+    content: &str,
+    footer: bool,
+    style: Option<&str>,
+    logo: Option<&str>,
+) -> String {
     let lang = copy.lang;
     let footer = if footer {
         format!("<p class=\"foot\">{}</p>", copy.footer)
     } else {
         String::new()
     };
-    (
-        status,
-        [
-            (header::CONTENT_SECURITY_POLICY, content_security_policy()),
-            (header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")),
-        ],
-        Html(format!(
-            "<!doctype html><html lang=\"{lang}\"><head><meta charset=\"utf-8\">\
-             <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-             <meta name=\"robots\" content=\"noindex,nofollow\"><title>{title}</title>\
-             <style>{STYLE}</style></head><body><main><section class=\"card\">{MARK}{content}</section>\
-             {footer}</main></body></html>"
-        )),
+    let extra = style.map_or_else(String::new, |style| format!("<style>{style}</style>"));
+    let mark = logo.map_or_else(
+        || MARK.to_owned(),
+        |logo| format!("<img class=\"logo\" src=\"{logo}\" alt=\"\">"),
+    );
+    format!(
+        "<!doctype html><html lang=\"{lang}\"><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+         <meta name=\"robots\" content=\"noindex,nofollow\"><title>{title}</title>\
+         <style>{STYLE}</style>{extra}</head><body><main><section class=\"card\">{mark}{content}</section>\
+         {footer}</main></body></html>"
     )
-        .into_response()
 }
 
-fn escape(value: &str) -> String {
+pub(crate) fn escape(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
         match character {
@@ -411,7 +773,7 @@ fn escape(value: &str) -> String {
     escaped
 }
 
-fn base64(bytes: &[u8]) -> String {
+pub(crate) fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -469,7 +831,7 @@ mod tests {
     #[tokio::test]
     async fn pages_escape_every_interpolated_value() {
         let action = Action {
-            link: Challenge {
+            link: Link {
                 id: 1,
                 revision: 1,
                 password_required: true,
@@ -477,7 +839,7 @@ mod tests {
             origin: "https://go.example\"><i>",
             path_and_query: "/a'<b>?q=&<c>",
         };
-        let page = body(action.page(Some("en"), true)).await;
+        let page = body(action.page(Some("en"), true, None)).await;
         assert!(page.contains(
             "action=\"https://go.example&quot;&gt;&lt;i&gt;/a&#39;&lt;b&gt;?q=&amp;&lt;c&gt;\""
         ));

@@ -1,6 +1,5 @@
 import type { Messages } from '../i18n';
 import type { IconName } from './icons';
-import { tr } from './locale.svelte';
 
 export interface NavItem { page: string; label: keyof Messages; icon: IconName }
 export const NAV: { label?: keyof Messages; items: NavItem[] }[] = [
@@ -29,9 +28,3 @@ export const NAV: { label?: keyof Messages; items: NavItem[] }[] = [
     ],
   },
 ];
-
-export function pageTitle(page: string) {
-  if (page === 'tags') return tr('navTags');
-  const item = NAV.flatMap((g) => g.items).find((i) => i.page === page);
-  return item ? tr(item.label) : 'ShortCircuit';
-}

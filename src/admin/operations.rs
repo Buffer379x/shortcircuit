@@ -30,7 +30,10 @@ use tokio::{
 use crate::{
     auth::AuthError,
     backup::{BackupStatus, MAX_SNAPSHOT_BYTES, StagedSnapshot, backup_health, verified_snapshot},
-    restore::{PendingUpload, RestoreStatus, cancel_pending_restore, restore_status},
+    restore::{
+        PendingUpload, RestoreStatus, SchemaRefusal, cancel_pending_restore, restore_status,
+    },
+    runtime_settings::{RuntimeSettings, View},
 };
 
 use super::{
@@ -49,15 +52,15 @@ const SNAPSHOT_MEDIA_TYPE: &str = "application/octet-stream";
 #[derive(Clone)]
 pub struct Operations {
     shared: Arc<OperationsState>,
-    monitoring_enabled: bool,
+    /// The effective operational settings that diagnostics report.
+    settings: Option<RuntimeSettings>,
 }
 
 struct OperationsState {
     database: PathBuf,
-    scheduled_backups: bool,
     started_at: Option<u64>,
     started: Instant,
-    grants: Mutex<[Option<Grant>; 2]>,
+    grants: Mutex<[Option<Grant>; 3]>,
     transfer: Arc<Semaphore>,
     cpu: crate::resources::CpuSampler,
     /// The last raw event count and when it was taken. The async lock allows one count at a time.
@@ -72,34 +75,36 @@ struct Grant {
 }
 
 #[derive(Clone, Copy)]
-enum Action {
+pub(super) enum Action {
     Backup,
     Restore,
+    /// A change of the notification target or its authorization in Settings > Operations.
+    Settings,
 }
 
 impl Operations {
-    pub fn new(database: PathBuf, scheduled_backups: bool) -> Self {
+    pub fn new(database: PathBuf) -> Self {
         Self {
             shared: Arc::new(OperationsState {
                 database,
-                scheduled_backups,
                 started_at: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .ok()
                     .map(|duration| duration.as_secs()),
                 started: Instant::now(),
-                grants: Mutex::new([None, None]),
+                grants: Mutex::new([None, None, None]),
                 transfer: Arc::new(Semaphore::new(1)),
                 cpu: crate::resources::CpuSampler::default(),
                 raw_events: tokio::sync::Mutex::new(None),
                 listing: tokio::sync::Mutex::new(()),
             }),
-            monitoring_enabled: false,
+            settings: None,
         }
     }
 
-    pub fn with_monitoring(mut self, enabled: bool) -> Self {
-        self.monitoring_enabled = enabled;
+    /// Reports the effective operational settings in diagnostics.
+    pub fn with_settings(mut self, settings: RuntimeSettings) -> Self {
+        self.settings = Some(settings);
         self
     }
 
@@ -149,7 +154,7 @@ impl Operations {
         }
     }
 
-    fn grant(&self, action: Action, token: &str) -> Result<(), Problem> {
+    pub(super) fn grant(&self, action: Action, token: &str) -> Result<(), Problem> {
         let mut grants = self
             .shared
             .grants
@@ -162,7 +167,7 @@ impl Operations {
         Ok(())
     }
 
-    fn consume(&self, action: Action, token: &str) -> Result<(), Problem> {
+    pub(super) fn consume(&self, action: Action, token: &str) -> Result<(), Problem> {
         let mut grants = self
             .shared
             .grants
@@ -218,6 +223,10 @@ struct Diagnostics {
     last_verified_backup_at: Option<u64>,
     monitoring_enabled: bool,
     last_monitor_check_at: Option<i64>,
+    /// Effective operational settings with their sources. Secrets report only whether they
+    /// are set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operations_settings: Option<View>,
     system_operation_in_progress: bool,
     restore_status: RestoreStatus,
     max_snapshot_bytes: u64,
@@ -276,6 +285,7 @@ async fn diagnostics(
     });
     let (backup, restore_status, process_rss_bytes, storage, container_memory) =
         readings.await.map_err(|_| Problem::unavailable())?;
+    let settings = operations.settings.as_ref().map(RuntimeSettings::current);
     Ok(Json(Diagnostics {
         version: env!("CARGO_PKG_VERSION"),
         build_revision: crate::build_revision(),
@@ -288,11 +298,16 @@ async fn diagnostics(
         link_count: metrics.link_count,
         raw_event_count,
         analytics_enabled: metrics.analytics_enabled,
-        scheduled_backups: operations.shared.scheduled_backups,
+        scheduled_backups: settings
+            .as_ref()
+            .is_some_and(|settings| settings.backup_interval_hours.value > 0),
         last_backup_status: backup.status,
         last_verified_backup_at: backup.verified_at,
-        monitoring_enabled: operations.monitoring_enabled,
+        monitoring_enabled: settings
+            .as_ref()
+            .is_some_and(|settings| settings.monitor_enabled.value),
         last_monitor_check_at: metrics.last_monitor_check_at,
+        operations_settings: operations.settings.as_ref().map(RuntimeSettings::view),
         system_operation_in_progress: operations.shared.transfer.available_permits() == 0,
         restore_status,
         max_snapshot_bytes: MAX_SNAPSHOT_BYTES,
@@ -345,7 +360,7 @@ fn parse_rss(status: &str) -> Option<u64> {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Reauthentication {
+pub(super) struct Reauthentication {
     password: String,
 }
 
@@ -381,7 +396,7 @@ async fn authorize_restore(
     .await
 }
 
-async fn authorize(
+pub(super) async fn authorize(
     state: AppState,
     operations: Operations,
     token: BrowserToken,
@@ -391,6 +406,7 @@ async fn authorize(
     let audit_action = match action {
         Action::Backup => AuditAction::BackupAuthorize,
         Action::Restore => AuditAction::RestoreAuthorize,
+        Action::Settings => AuditAction::OperationsSettingsAuthorize,
     };
     match state.auth.reauthenticate(&token.0, &input.password).await {
         Ok(()) => {
@@ -523,6 +539,10 @@ async fn download_chunk(mut transfer: Download) -> io::Result<Option<(Bytes, Dow
 #[derive(Serialize)]
 struct StagedRestore {
     schema_version: i64,
+    /// The schema after the restart that applies the restore.
+    target_schema_version: i64,
+    /// Whether that restart upgrades the snapshot from `schema_version`.
+    upgrade_required: bool,
     created_at: i64,
 }
 
@@ -545,13 +565,15 @@ async fn upload(
     };
     let validated = match pending.validate().await {
         Ok(validated) => validated,
-        Err(_) => {
+        Err(error) => {
             audit(&state, AuditAction::RestoreValidate, AuditOutcome::Rejected).await;
-            return Err(Problem::invalid("invalid_snapshot"));
+            return Err(snapshot_problem(error.as_ref()));
         }
     };
     let report = StagedRestore {
         schema_version: validated.schema_version,
+        target_schema_version: validated.target_schema_version,
+        upgrade_required: validated.schema_version < validated.target_schema_version,
         created_at: validated.created_at,
     };
     audit(&state, AuditAction::RestoreValidate, AuditOutcome::Success).await;
@@ -655,6 +677,16 @@ async fn cancel(
     Ok(StatusCode::NO_CONTENT)
 }
 
+fn snapshot_problem(error: &(dyn std::error::Error + Send + Sync + 'static)) -> Problem {
+    Problem::invalid(match error.downcast_ref::<SchemaRefusal>() {
+        Some(SchemaRefusal::Newer { .. }) => "snapshot_schema_newer",
+        Some(SchemaRefusal::Older { .. }) => "snapshot_schema_unsupported",
+        Some(SchemaRefusal::Mismatch) => "snapshot_migrations_mismatch",
+        Some(SchemaRefusal::UpgradeFailed { .. }) => "snapshot_upgrade_failed",
+        None => "invalid_snapshot",
+    })
+}
+
 fn stage_problem(error: io::Error) -> Problem {
     if error.kind() == io::ErrorKind::AlreadyExists {
         Problem(StatusCode::CONFLICT, "restore_already_pending")
@@ -696,7 +728,7 @@ mod tests {
 
     #[test]
     fn authorization_is_one_use_and_bound_to_the_browser_session_and_action() {
-        let operations = Operations::new(PathBuf::from("unused.sqlite"), false);
+        let operations = Operations::new(PathBuf::from("unused.sqlite"));
         assert!(
             operations
                 .grant(Action::Backup, "synthetic-session-a")
@@ -726,7 +758,7 @@ mod tests {
 
     #[test]
     fn expired_grants_cannot_be_consumed() {
-        let operations = Operations::new(PathBuf::from("unused.sqlite"), false);
+        let operations = Operations::new(PathBuf::from("unused.sqlite"));
         operations.shared.grants.lock().unwrap()[Action::Backup as usize] = Some(Grant {
             session: Sha256::digest("synthetic-session").into(),
             expires_at: Instant::now(),
@@ -743,7 +775,7 @@ mod tests {
         let work = tempfile::tempdir().unwrap();
         let database = work.path().join("live.sqlite");
         let pool = open_database(&database).await.unwrap();
-        let operations = Operations::new(database, false);
+        let operations = Operations::new(database);
         assert_eq!(operations.raw_event_count(&pool).await.unwrap(), 0);
         sqlx::query(
             "INSERT INTO analytics_events (occurred_at, host, kind, visit_class, source)
@@ -792,7 +824,7 @@ mod tests {
             PublicHosts::parse("go.example").unwrap(),
             AdminConfig::new("https://admin.example", 8080).unwrap(),
             super::super::AdminServices {
-                operations: Some(Operations::new(database.clone(), false)),
+                operations: Some(Operations::new(database.clone())),
                 ..Default::default()
             },
         );
@@ -882,6 +914,11 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(uploaded.status(), StatusCode::CREATED);
+        let staged: Value =
+            serde_json::from_slice(&to_bytes(uploaded.into_body(), 4096).await.unwrap()).unwrap();
+        let current = staged["schema_version"].as_i64().unwrap();
+        assert_eq!(staged["target_schema_version"], current);
+        assert_eq!(staged["upgrade_required"], false);
         assert_eq!(restore_status(&database), RestoreStatus::PendingRestart);
         let diagnostics = send(
             request(Method::GET, "/api/v1/system")
@@ -996,6 +1033,85 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(discarded.status(), StatusCode::NO_CONTENT);
+        assert_eq!(restore_status(&database), RestoreStatus::None);
+
+        // An older supported snapshot is staged and reports the upgrade on restart.
+        let older_source = work.path().join("older").join("source.sqlite");
+        let older = crate::store::open_database_at_version(&older_source, 11).await;
+        let older_snapshot =
+            crate::backup::create_snapshot(&older, &work.path().join("older").join("backups"))
+                .await
+                .unwrap();
+        older.close().await;
+        let upload = |snapshot: Vec<u8>| {
+            request(Method::POST, restore_path)
+                .header(header::CONTENT_TYPE, SNAPSHOT_MEDIA_TYPE)
+                .body(Body::from(snapshot))
+                .unwrap()
+        };
+        assert_eq!(
+            send(authorizing("/api/v1/system/restore/authorize"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let staged_older = send(upload(std::fs::read(&older_snapshot).unwrap()))
+            .await
+            .unwrap();
+        assert_eq!(staged_older.status(), StatusCode::CREATED);
+        let staged: Value =
+            serde_json::from_slice(&to_bytes(staged_older.into_body(), 4096).await.unwrap())
+                .unwrap();
+        assert_eq!(staged["schema_version"], 11);
+        assert_eq!(staged["target_schema_version"], current);
+        assert_eq!(staged["upgrade_required"], true);
+        assert_eq!(restore_status(&database), RestoreStatus::PendingRestart);
+        assert_eq!(
+            send(authorizing("/api/v1/system/restore/authorize"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let discarded = send(
+            request(Method::DELETE, restore_path)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(discarded.status(), StatusCode::NO_CONTENT);
+
+        // A snapshot from a later schema is refused with its own problem code.
+        let mut newer = <sqlx::SqliteConnection as sqlx::Connection>::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new().filename(&scheduled),
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+             VALUES (?, 'future', 1, zeroblob(48), 0)",
+        )
+        .bind(current + 1)
+        .execute(&mut newer)
+        .await
+        .unwrap();
+        sqlx::Connection::close(newer).await.unwrap();
+        assert_eq!(
+            send(authorizing("/api/v1/system/restore/authorize"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let refused = send(upload(std::fs::read(&scheduled).unwrap()))
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let problem: Value =
+            serde_json::from_slice(&to_bytes(refused.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(problem["code"], "snapshot_schema_newer");
         assert_eq!(restore_status(&database), RestoreStatus::None);
     }
 }

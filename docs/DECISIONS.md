@@ -16,6 +16,7 @@ Architecture and design are approved for implementation. Existing links are recr
 | D12 | Open | Design | The proposed direction uses a circuit with a lightning bolt, dark and light palettes, and compact navigation. Review against the graphics in the separate ShortCircuit chat is pending. |
 | D13 | Open | Availability | Measure load and agree on acceptable downtime. The initial design uses one instance and requires a maintenance window for some operations. |
 | D15 | Open | Extended scope | Prioritize password-encrypted backups, TOTP, roles, Link Pages, and additional connectors against actual needs. |
+| D17 | Decided | Operational settings | Health checks, title lookup, the backup schedule, and notifications are set in Settings › Operations. A value saved there wins; otherwise the container variable applies, otherwise the built-in default. Reset deletes the saved value. Connector, hosts, proxies, rate limits, listeners, and the log level stay environment-only. Verified snapshots drop the saved webhook, its header, and the health check and title lookup switches. |
 
 ## Technical risks and follow-up
 

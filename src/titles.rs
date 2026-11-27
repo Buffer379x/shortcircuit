@@ -19,6 +19,7 @@ use crate::{
     history::{Action, Actor},
     input::link_title,
     outbound::{Failure, Fetcher},
+    runtime_settings::RuntimeSettings,
     store::{self, LinkUpdate},
 };
 
@@ -34,7 +35,8 @@ const IDLE_WAIT: Duration = Duration::from_secs(300);
 pub struct TitleLookup(Arc<Service>);
 
 struct Service {
-    enabled: bool,
+    /// Whether lookups are allowed, read on every use.
+    settings: RuntimeSettings,
     fetcher: Fetcher,
     changed: Notify,
 }
@@ -76,16 +78,17 @@ struct Pending {
 }
 
 impl TitleLookup {
-    pub fn new(enabled: bool) -> Self {
+    pub fn new(settings: &RuntimeSettings) -> Self {
         Self(Arc::new(Service {
-            enabled,
+            settings: settings.clone(),
             fetcher: Fetcher::new(),
             changed: Notify::new(),
         }))
     }
 
+    /// Whether title lookup is on. Settings > Operations can change it at any time.
     pub fn enabled(&self) -> bool {
-        self.0.enabled
+        self.0.settings.current().title_lookup_enabled.value
     }
 
     /// Queues a lookup for one link with an empty title and no access protection.
@@ -188,13 +191,21 @@ impl TitleLookup {
         Ok((pending, items))
     }
 
+    /// Runs lookups until shutdown. While title lookup is off, pending lookups wait and no
+    /// request is sent; a lookup that already started finishes and is applied only if the link
+    /// is unchanged.
     pub async fn run(&self, pool: SqlitePool, mut stop: watch::Receiver<bool>) {
-        if !self.enabled() {
-            return;
-        }
+        let mut settings = self.0.settings.subscribe();
         loop {
             if *stop.borrow() {
                 return;
+            }
+            if !self.enabled() {
+                tokio::select! {
+                    _ = stop.changed() => return,
+                    Ok(()) = settings.changed() => {}
+                }
+                continue;
             }
             let processed = tokio::select! {
                 result = self.run_once(&pool) => result.unwrap_or_else(|_| {
@@ -207,6 +218,7 @@ impl TitleLookup {
             tokio::select! {
                 _ = stop.changed() => return,
                 _ = self.0.changed.notified(), if !processed => {}
+                Ok(()) = settings.changed() => {}
                 _ = time::sleep(wait) => {}
             }
         }
@@ -214,6 +226,9 @@ impl TitleLookup {
 
     /// Processes the oldest pending lookup. Returns whether a lookup was processed.
     pub(crate) async fn run_once(&self, pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+        if !self.enabled() {
+            return Ok(false);
+        }
         sqlx::query(
             "UPDATE link_title_lookups SET status = 'failed', failure = 'expired',
                  completed_at = unixepoch()
@@ -378,7 +393,7 @@ mod tests {
     #[tokio::test]
     async fn disabled_lookups_queue_nothing_and_eligibility_preserves_written_titles() {
         let (_directory, pool) = database().await;
-        let disabled = TitleLookup::new(false);
+        let disabled = TitleLookup::new(&RuntimeSettings::detached(|_| None).unwrap());
         assert_eq!(
             disabled.request(&pool, 1, "Operator").await,
             Err(RequestError::Disabled)
@@ -389,7 +404,12 @@ mod tests {
         );
         assert_eq!(revision(&pool, 1).await, None);
 
-        let lookup = TitleLookup::new(true);
+        let lookup = TitleLookup::new(
+            &RuntimeSettings::detached(|name| {
+                (name == "TITLE_LOOKUP_ENABLED").then(|| "true".to_owned())
+            })
+            .unwrap(),
+        );
         assert_eq!(
             lookup.request(&pool, 2, "Operator").await,
             Err(RequestError::TitlePresent)
@@ -416,7 +436,12 @@ mod tests {
     #[tokio::test]
     async fn results_apply_only_to_the_unchanged_link_and_record_history() {
         let (_directory, pool) = database().await;
-        let lookup = TitleLookup::new(true);
+        let lookup = TitleLookup::new(
+            &RuntimeSettings::detached(|name| {
+                (name == "TITLE_LOOKUP_ENABLED").then(|| "true".to_owned())
+            })
+            .unwrap(),
+        );
         lookup.request(&pool, 1, "Operator").await.unwrap();
         let first = revision(&pool, 1).await.unwrap();
         finish(
@@ -506,7 +531,12 @@ mod tests {
     #[tokio::test]
     async fn protection_added_after_queueing_cancels_the_lookup_before_any_fetch() {
         let (_directory, pool) = database().await;
-        let lookup = TitleLookup::new(true);
+        let lookup = TitleLookup::new(
+            &RuntimeSettings::detached(|name| {
+                (name == "TITLE_LOOKUP_ENABLED").then(|| "true".to_owned())
+            })
+            .unwrap(),
+        );
         lookup.request(&pool, 1, "Operator").await.unwrap();
         sqlx::query("INSERT INTO link_protection (link_id, one_time) VALUES (1, 1)")
             .execute(&pool)
@@ -532,7 +562,12 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let lookup = TitleLookup::new(true);
+        let lookup = TitleLookup::new(
+            &RuntimeSettings::detached(|name| {
+                (name == "TITLE_LOOKUP_ENABLED").then(|| "true".to_owned())
+            })
+            .unwrap(),
+        );
         lookup.request(&pool, 1, "Operator").await.unwrap();
         assert!(lookup.run_once(&pool).await.unwrap());
         let row: (String, Option<String>) =

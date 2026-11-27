@@ -410,7 +410,7 @@
       {#if monitor}
         <footer class="health-sum">
           {#if !monitor.enabled}
-            <p>{tr('overviewMonitorOff')}</p>
+            <p>{tr('overviewMonitorOff')} {tr('opsOffInSettings')} <a href={href('settings', undefined, { section: 'operations' })}>{tr('opsOpenSettings')}</a>.</p>
           {:else if monitor.total === 0}
             <p>{tr('monitorEmpty')}</p>
           {:else}

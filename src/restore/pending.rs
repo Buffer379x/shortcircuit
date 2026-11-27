@@ -82,16 +82,37 @@ impl PendingUpload {
     }
 
     pub(crate) async fn validate(self) -> Result<ValidatedUpload, RestoreError> {
+        self.validate_with(crate::store::migrator()).await
+    }
+
+    async fn validate_with(self, migrator: &Migrator) -> Result<ValidatedUpload, RestoreError> {
         let mut incoming = open_regular(self.path())?;
         let metadata = incoming.metadata()?;
         check_snapshot_header(&mut incoming, &metadata)?;
-        let (schema, migrations) =
-            canonical_schema(&self.stage.directory.join("canonical.sqlite")).await?;
-        let (schema_version, created_at) =
-            validate_snapshot(self.path(), &schema, &migrations).await?;
+        drop(incoming);
+        let mut schemas = Schemas::new(&self.stage.directory, migrator).await?;
+        let (schema_version, created_at) = validate_snapshot(self.path(), &mut schemas).await?;
+        let target_schema_version = schemas.current_version();
+        if schema_version < target_schema_version {
+            // Prove the upgrade on a private copy. The upload itself stays at its own schema
+            // until startup activates it, which repeats the upgrade on its staged copy.
+            let source = self.path().to_owned();
+            let trial = self.stage.directory.join("upgrade-trial.sqlite");
+            let copy = trial.clone();
+            tokio::task::spawn_blocking(move || {
+                let mut source = open_regular(&source)?;
+                let metadata = source.metadata()?;
+                copy_private(&mut source, &metadata, &copy)
+            })
+            .await??;
+            let upgraded = upgrade_snapshot(&trial, schema_version, &schemas).await;
+            let _ = fs::remove_file(&trial);
+            upgraded?;
+        }
         Ok(ValidatedUpload {
             pending: self,
             schema_version,
+            target_schema_version,
             created_at,
         })
     }
@@ -99,7 +120,10 @@ impl PendingUpload {
 
 pub(crate) struct ValidatedUpload {
     pending: PendingUpload,
+    /// Schema of the uploaded snapshot.
     pub(crate) schema_version: i64,
+    /// Schema the snapshot will have after the restart that applies it.
+    pub(crate) target_schema_version: i64,
     pub(crate) created_at: i64,
 }
 
@@ -178,20 +202,26 @@ pub async fn apply_pending_restore(database: &Path) -> io::Result<(File, Option<
 
     drop(shared);
     let outcome = match data_lock(database, true) {
-        Ok(exclusive) => match apply_offline(database, Arc::new(exclusive)).await {
-            Ok(outcome) => outcome,
-            Err(_) => {
-                tracing::warn!("could not finish pending browser restore");
-                Some(false)
+        Ok(exclusive) => {
+            match apply_offline(database, Arc::new(exclusive), crate::store::migrator()).await {
+                Ok(outcome) => outcome,
+                Err(_) => {
+                    tracing::warn!("could not finish pending browser restore");
+                    Some(false)
+                }
             }
-        },
+        }
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => None,
         Err(error) => return Err(error),
     };
     Ok((data_lock(database, false)?, outcome))
 }
 
-async fn apply_offline(database: &Path, lock: Arc<File>) -> io::Result<Option<bool>> {
+async fn apply_offline(
+    database: &Path,
+    lock: Arc<File>,
+    migrator: &Migrator,
+) -> io::Result<Option<bool>> {
     let paths = RestorePaths::new(database)?;
     if regular_metadata(&paths.applying)?.is_some() {
         paths.finish(b"interrupted\n")?;
@@ -207,13 +237,23 @@ async fn apply_offline(database: &Path, lock: Arc<File>) -> io::Result<Option<bo
     directory.sync_all()?;
     // Keep the exclusive lock through result publication as well as activation.
     let (applied, reporter): (bool, &[u8]) =
-        match restore_snapshot_locked(database, &paths.applying, Arc::clone(&lock)).await {
-            Ok(_) => {
-                tracing::info!("pending browser restore applied");
+        match restore_with(database, &paths.applying, Arc::clone(&lock), migrator).await {
+            Ok(outcome) => {
+                tracing::info!(
+                    schema = outcome.schema_version,
+                    upgraded_to = outcome.upgraded_to,
+                    "pending browser restore applied"
+                );
                 (true, b"applied\n")
             }
-            Err(_) => {
-                tracing::warn!("pending browser restore failed");
+            Err(error) => {
+                // Schema refusals carry no paths or data, so they can be logged.
+                match error.downcast_ref::<SchemaRefusal>() {
+                    Some(refusal) => {
+                        tracing::warn!(reason = %refusal, "pending browser restore failed");
+                    }
+                    None => tracing::warn!("pending browser restore failed"),
+                }
                 (false, b"failed\n")
             }
         };
@@ -294,6 +334,88 @@ mod tests {
                 .contains(".rollback-")
         });
         assert_eq!(rollbacks.count(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_older_upload_is_staged_unchanged_and_upgraded_on_restart() {
+        let work = tempfile::tempdir().unwrap();
+        let live = work.path().join("data").join("live.sqlite");
+        database(&live, "original").await.close().await;
+        let snapshot = super::super::tests::snapshot_at(work.path(), 11, "candidate").await;
+        let pending = PendingUpload::reserve(&live).unwrap();
+        fs::copy(&snapshot, pending.path()).unwrap();
+        let validated = pending.validate().await.unwrap();
+        let current = super::super::tests::current_version();
+        assert_eq!(
+            (validated.schema_version, validated.target_schema_version),
+            (11, current)
+        );
+        validated.publish().unwrap();
+        // Validation proves the upgrade on a copy; the staged file keeps its own schema.
+        let paths = RestorePaths::new(&live).unwrap();
+        assert_eq!(
+            fs::read(&paths.pending).unwrap(),
+            fs::read(&snapshot).unwrap()
+        );
+
+        let (shared, outcome) = apply_pending_restore(&live).await.unwrap();
+        assert_eq!(outcome, Some(true));
+        drop(shared);
+        assert_eq!(restore_status(&live), RestoreStatus::Applied);
+        let pool = crate::open_database(&live).await.unwrap();
+        let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        assert_eq!(version, current);
+        assert_eq!(slug(&live).await, "candidate");
+        assert!(!live.with_file_name("backups").exists());
+    }
+
+    #[tokio::test]
+    async fn a_failing_upgrade_is_refused_at_upload_and_fails_safe_on_restart() {
+        let work = tempfile::tempdir().unwrap();
+        let live = work.path().join("data").join("live.sqlite");
+        database(&live, "original").await.close().await;
+        let original = fs::read(&live).unwrap();
+        let snapshot = super::super::tests::snapshot_at(
+            work.path(),
+            super::super::tests::current_version(),
+            "candidate",
+        )
+        .await;
+        let migrator = super::super::tests::failing_upgrade();
+
+        let pending = PendingUpload::reserve(&live).unwrap();
+        fs::copy(&snapshot, pending.path()).unwrap();
+        let error = pending.validate_with(&migrator).await.err().unwrap();
+        assert!(matches!(
+            error.downcast_ref::<SchemaRefusal>(),
+            Some(SchemaRefusal::UpgradeFailed { .. })
+        ));
+        assert_eq!(restore_status(&live), RestoreStatus::None);
+
+        // A snapshot staged by a release that could upgrade it still fails safe at startup.
+        let pending = PendingUpload::reserve(&live).unwrap();
+        fs::copy(&snapshot, pending.path()).unwrap();
+        pending.validate().await.unwrap().publish().unwrap();
+        let lock = Arc::new(data_lock(&live, true).unwrap());
+        assert_eq!(
+            apply_offline(&live, lock, &migrator).await.unwrap(),
+            Some(false)
+        );
+        assert_eq!(restore_status(&live), RestoreStatus::Failed);
+        assert_eq!(fs::read(&live).unwrap(), original);
+        let leftovers = fs::read_dir(live.parent().unwrap())
+            .unwrap()
+            .filter(|entry| {
+                let name = entry.as_ref().unwrap().file_name();
+                let name = name.to_string_lossy();
+                name.contains(".rollback-") || name.starts_with(".restore-")
+            });
+        assert_eq!(leftovers.count(), 0);
+        assert_eq!(slug(&live).await, "original");
     }
 
     #[tokio::test]

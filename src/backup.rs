@@ -162,6 +162,9 @@ async fn annotate_snapshot(
     )
     .execute(&mut *transaction)
     .await?;
+    // Snapshots leave the host. They keep no webhook secrets and no switch that would start
+    // outgoing requests in the installation that restores them.
+    crate::runtime_settings::scrub_snapshot(&mut transaction).await?;
     sqlx::query(
         "INSERT INTO shortcircuit_backup_metadata
              (id, format_version, schema_version, created_at)

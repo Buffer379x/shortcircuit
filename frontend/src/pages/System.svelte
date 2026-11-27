@@ -3,6 +3,7 @@
   // Every figure comes from the API; the tab and the audit filter live in the URL.
   import { onMount, tick } from 'svelte';
   import { ApiError } from '../api';
+  import type { OperationsSettings, SettingSource } from '../api';
   import { problemMessage } from '../format';
   import type { Messages } from '../i18n';
   import Icon from '../lib/Icon.svelte';
@@ -15,7 +16,7 @@
   import { app } from '../lib/app.svelte';
   import { num } from '../lib/fmt';
   import { locale, tr } from '../lib/locale.svelte';
-  import { route, setParams } from '../lib/router.svelte';
+  import { href, route, setParams } from '../lib/router.svelte';
   import type { StateView } from '../lib/status';
   import { toast } from '../lib/toast.svelte';
   import { tip } from '../lib/tooltip';
@@ -53,6 +54,10 @@
     operation_authorization_required: 'systemAuthorizationRequired',
     restore_already_pending: 'systemRestoreAlreadyPending',
     invalid_snapshot: 'systemInvalidSnapshot',
+    snapshot_schema_newer: 'rstSchemaNewer',
+    snapshot_schema_unsupported: 'rstSchemaUnsupported',
+    snapshot_migrations_mismatch: 'rstMigrationsMismatch',
+    snapshot_upgrade_failed: 'rstUpgradeFailed',
     no_pending_restore: 'systemNoPendingRestore',
     snapshot_too_large: 'systemSnapshotTooLarge',
     system_operation_in_progress: 'systemSystemBusy',
@@ -89,7 +94,14 @@
       sampled_at: number | null; age_seconds: number | null;
     };
     container_memory: { status: 'measured' | 'unavailable'; current_bytes: number | null; limit_bytes: number | null };
+    /** Effective operational settings and their sources. */
+    operations_settings?: OperationsSettings;
   }
+
+  const sourceLabels: Record<SettingSource, keyof Messages> = { saved: 'opsSourceSaved', container: 'opsSourceContainer', default: 'opsSourceDefault' };
+  /** ` · Saved here` and so on, after an effective value. */
+  const from = (setting?: { source: SettingSource }) => (setting ? ` · ${tr(sourceLabels[setting.source])}` : '');
+  const hourCount = (value: number) => new Intl.NumberFormat(locale.language, { style: 'unit', unit: 'hour', unitDisplay: 'long' }).format(value);
 
   type Action = 'backup' | 'upload' | 'discard';
   const actionLabels: Record<Action, keyof Messages> = { backup: 'systemDownload', upload: 'systemStage', discard: 'systemDiscard' };
@@ -104,6 +116,9 @@
   let password = $state('');
   let confirmed = $state(false);
   let selected = $state.raw<File | null>(null);
+  // The validation report of the restore staged in this view, for its upgrade notice.
+  interface StagedRestore { schema_version: number; target_schema_version: number; upgrade_required: boolean; created_at: number }
+  let staged = $state.raw<StagedRestore | null>(null);
   let fileInput = $state<HTMLInputElement>();
   let operationError = $state.raw<unknown>(null);
   let passwordMissing = $state(false);
@@ -180,6 +195,10 @@
     return new Intl.NumberFormat(locale.language, { style: 'unit', unit, unitDisplay: 'long', maximumFractionDigits: 1 }).format(amount);
   }
 
+  function upgradeNotice(report: StagedRestore) {
+    return tr('rstUpgradeNotice', { from: report.schema_version, to: report.target_schema_version });
+  }
+
   function errorMessage(error: unknown) {
     if (error instanceof ApiError && Object.hasOwn(problemLabels, error.code)) return tr(problemLabels[error.code]);
     return tr(problemMessage(error));
@@ -247,13 +266,15 @@
         toast(tr('systemDownloadRequested'));
       } else if (current === 'upload' && file) {
         const snapshot = new Blob([file], { type: 'application/octet-stream' });
-        await app.api('/system/restore', 'POST', snapshot, 'json', request.signal);
+        const report = await app.api<StagedRestore>('/system/restore', 'POST', snapshot, 'json', request.signal);
+        staged = report;
         selected = null;
         if (fileInput) fileInput.value = '';
-        toast(tr('systemStageReady'), { body: tr('admRestartToApply') });
+        toast(tr('systemStageReady'), { body: report.upgrade_required ? `${upgradeNotice(report)} ${tr('admRestartToApply')}` : tr('admRestartToApply') });
         if (diagnostics) diagnostics = { ...diagnostics, restore_status: 'pending_restart' };
       } else {
         await app.api('/system/restore', 'DELETE', undefined, 'json', request.signal);
+        staged = null;
         toast(tr('systemDiscarded'));
       }
       if (current !== 'backup') void loadDiagnostics();
@@ -417,12 +438,13 @@
     restore_authorize: 'auditRestoreAuthorize', restore_validate: 'auditRestoreValidate',
     restore_stage: 'auditRestoreStage', restore_cancel: 'auditRestoreCancel', restore_apply: 'auditRestoreApply',
     monitoring_update: 'auditMonitoringUpdate', destination_policy_update: 'auditDestinationPolicy',
+    domain_delete: 'domDeleted',
   };
   const auditGroups = {
     account: ['setup_token_issued', 'recovery_token_issued', 'account_setup', 'login', 'account_recovery', 'password_change'],
     keys: ['key_create', 'key_rotate', 'key_revoke'],
     backups: ['backup_authorize', 'backup_download', 'restore_authorize', 'restore_validate', 'restore_stage', 'restore_cancel', 'restore_apply'],
-    settings: ['monitoring_update', 'destination_policy_update'],
+    settings: ['monitoring_update', 'destination_policy_update', 'domain_delete'],
   } as const;
   type AuditGroup = keyof typeof auditGroups;
   const auditGroupLabels: Record<AuditGroup, keyof Messages> = {
@@ -431,6 +453,7 @@
   interface AuditItem {
     id: number; created_at: number; action: string; actor: 'admin' | 'system' | 'api_key';
     object_id: number | null; outcome: 'success' | 'rejected' | 'failed';
+    details?: { host?: string };
   }
   const actorLabels: Record<AuditItem['actor'], keyof Messages> = { admin: 'auditAdmin', system: 'auditSystem', api_key: 'apiKeys' };
   const outcomeStates: Record<AuditItem['outcome'], [StateView['tone'], IconName, keyof Messages]> = {
@@ -574,7 +597,14 @@
             <dt>{tr('systemLinkCount')}</dt><dd class="num">{num(d.link_count)}</dd>
             <dt>{tr('systemAnalyticsEnabled')}</dt><dd>{d.analytics_enabled ? tr('enabled') : tr('disabled')}</dd>
             <dt>{tr('systemRawEventCount')}</dt><dd class="num">{num(d.raw_event_count)}</dd>
-            <dt>{tr('systemMonitoringEnabled')}</dt><dd>{d.monitoring_enabled ? tr('enabled') : tr('disabled')}</dd>
+            <dt>{tr('systemMonitoringEnabled')}</dt><dd>{d.monitoring_enabled ? tr('enabled') : tr('disabled')}{from(d.operations_settings?.monitor_enabled)}</dd>
+            {#if d.operations_settings}
+              {@const ops = d.operations_settings}
+              <dt>{tr('opsInterval')}</dt><dd>{hourCount(ops.monitor_interval_hours.value)}{from(ops.monitor_interval_hours)}</dd>
+              <dt>{tr('opsPriority')}</dt><dd>{hourCount(ops.monitor_priority_hours.value)}{from(ops.monitor_priority_hours)}</dd>
+              <dt>{tr('opsTitles')}</dt><dd>{ops.title_lookup_enabled.value ? tr('enabled') : tr('disabled')}{from(ops.title_lookup_enabled)}</dd>
+              <dt>{tr('opsNotifications')}</dt><dd>{ops.notifications_active ? tr('enabled') : tr('disabled')}{from(ops.notification_webhook)}</dd>
+            {/if}
             <dt>{tr('systemLastMonitorCheck')}</dt><dd>{dateTime(d.last_monitor_check_at)}</dd>
             <dt>{tr('systemOperationStatus')}</dt><dd>{d.system_operation_in_progress ? tr('systemOperationActive') : tr('systemOperationIdle')}</dd>
           </dl>
@@ -660,15 +690,20 @@
             <header class="panel-head"><div class="panel-title"><h2 id="sys-schedule">{tr('admSchedule')}</h2></div></header>
             <dl class="facts panel-body">
               <dt>{tr('systemSchedule')}</dt><dd>{d.scheduled_backups ? tr('enabled') : tr('disabled')}</dd>
+              {#if d.operations_settings}
+                {@const ops = d.operations_settings}
+                <dt>{tr('opsBackupInterval')}</dt><dd>{hourCount(ops.backup_interval_hours.value)}{from(ops.backup_interval_hours)}</dd>
+                <dt>{tr('opsBackupKeep')}</dt><dd>{num(ops.backup_keep.value)}{from(ops.backup_keep)}</dd>
+              {/if}
             </dl>
-            <p class="field-hint schedule-hint">{tr('admScheduleHint1')} <code>BACKUP_INTERVAL_HOURS</code> {tr('admScheduleHint2')} <code>BACKUP_KEEP</code> {tr('admScheduleHint3')}</p>
+            <p class="field-hint schedule-hint">{tr('opsScheduleInSettings')} <a href={href('settings', undefined, { section: 'operations' })}>{tr('opsOpenSettings')}</a>.</p>
           </section>
           <section class="panel danger-zone" aria-labelledby="sys-restore">
             <header class="panel-head"><div class="panel-title"><h2 id="sys-restore">{tr('systemRestore')}</h2><p>{tr('admRestoreSubtitle')}</p></div></header>
             <div class="panel-body restore">
               <dl class="facts"><dt>{tr('systemRestoreStatus')}</dt><dd>{tr(restoreLabels[d.restore_status])}</dd></dl>
               {#if pending}
-                <div class="notice" data-tone="warning"><Icon name="triangle-alert" /><div><b>{tr('admRestoreStaged')}</b><p>{tr('systemRestartHint')}</p></div></div>
+                <div class="notice" data-tone="warning"><Icon name="triangle-alert" /><div><b>{tr('admRestoreStaged')}</b>{#if staged?.upgrade_required}<p>{upgradeNotice(staged)}</p>{/if}<p>{tr('systemRestartHint')}</p></div></div>
                 <div><button class="btn" data-variant="ghost" onclick={() => choose('discard')}><Icon name="x" />{tr('systemDiscard')}</button></div>
               {:else}
                 <p class="secondary small">{tr('systemRestoreHint')}</p>
@@ -734,7 +769,7 @@
                   {#if n.expiry_notice_hours !== null}<dt>{tr('notificationExpiryNotice')}</dt><dd>{new Intl.NumberFormat(locale.language, { style: 'unit', unit: 'hour', unitDisplay: 'long' }).format(n.expiry_notice_hours)}</dd>{/if}
                 </dl>
               {:else}
-                <div class="panel-body"><div class="notice" data-tone="neutral"><Icon name="webhook" /><div><p>{tr('notificationsOff')}</p></div></div></div>
+                <div class="panel-body"><div class="notice" data-tone="neutral"><Icon name="webhook" /><div><p>{tr('notificationsOff')} {tr('opsSetWebhookIn')} <a href={href('settings', undefined, { section: 'operations' })}>{tr('opsOpenSettings')}</a>.</p></div></div></div>
               {/if}
             </section>
             <section class="panel" aria-labelledby="sys-outbox">
@@ -765,7 +800,7 @@
             {/if}
           </header>
           {#if !lookups.enabled}
-            <div class="panel-body"><div class="notice" data-tone="neutral"><Icon name="info" /><div><p>{tr('titleDisabled')}</p></div></div></div>
+            <div class="panel-body"><div class="notice" data-tone="neutral"><Icon name="info" /><div><p>{tr('titleDisabled')} {tr('opsTurnOnIn')} <a href={href('settings', undefined, { section: 'operations' })}>{tr('opsOpenSettings')}</a>.</p></div></div></div>
           {/if}
           {#if lookups.items.length}
             <div class="table-wrap">
@@ -818,7 +853,7 @@
                     <td class="muted nowrap"><time datetime={new Date(item.created_at * 1000).toISOString()}>{stamp(item.created_at)}</time></td>
                     <td><b class="strong">{auditActions[item.action] ? tr(auditActions[item.action]) : item.action}</b></td>
                     <td>{actorLabels[item.actor] ? tr(actorLabels[item.actor]) : item.actor}</td>
-                    <td class="secondary mono">{item.object_id === null ? '—' : `#${item.object_id}`}</td>
+                    <td class="secondary mono">{item.details?.host ?? (item.object_id === null ? '—' : `#${item.object_id}`)}</td>
                     <td><Badge state={view(tone, icon, tr(label))} /></td>
                   </tr>
                 {/each}

@@ -2,7 +2,7 @@ use axum::{Extension, Json, Router, extract::State, routing::get};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
-use crate::{domains, input::PublicHosts};
+use crate::{domains, input::PublicHosts, monitor::Monitor};
 
 use super::{AppState, Problem};
 
@@ -75,13 +75,14 @@ const ATTENTION: &str = "WITH candidates AS (
               id DESC
      LIMIT ?3";
 
+/// The monitor, if any, so the overview reports whether health checks are on right now.
 #[derive(Clone)]
-struct MonitoringEnabled(bool);
+struct MonitoringEnabled(Option<Monitor>);
 
-pub(super) fn routes(monitoring_enabled: bool) -> Router<AppState> {
+pub(super) fn routes(monitor: Option<Monitor>) -> Router<AppState> {
     Router::new()
         .route("/api/v1/overview", get(overview))
-        .layer(Extension(MonitoringEnabled(monitoring_enabled)))
+        .layer(Extension(MonitoringEnabled(monitor)))
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -139,8 +140,9 @@ struct Overview {
 
 async fn overview(
     State(state): State<AppState>,
-    Extension(MonitoringEnabled(enabled)): Extension<MonitoringEnabled>,
+    Extension(MonitoringEnabled(monitor)): Extension<MonitoringEnabled>,
 ) -> Result<Json<Overview>, Problem> {
+    let enabled = monitor.as_ref().is_some_and(Monitor::enabled);
     read_overview(&state.pool, &state.hosts, enabled)
         .await
         .map(Json)

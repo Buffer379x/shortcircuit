@@ -81,25 +81,18 @@ pub(crate) enum Sort {
 }
 
 /// Redirects of the link `l` in the visit window, or null when its traffic is not tracked.
-/// Matches `visits_30d`. Requires `search_context`, `VISITS_TOTALS`, and `VISITS_JOIN`.
+/// Matches `visits_30d`. Requires `search_context`. Each link's sum reads only its own range of
+/// the covering index `analytics_daily_by_link_kind`, which is faster than one materialized
+/// range scan of all daily rollups joined back to the links.
 macro_rules! visits_sql {
     () => {
         "CASE WHEN l.analytics_enabled = 1 AND (SELECT tracking FROM search_context) = 1
-            THEN COALESCE(v.total, 0) END"
+            THEN COALESCE((SELECT sum(d.total) FROM analytics_daily d
+                WHERE d.link_id = l.id AND d.kind = 'redirect'
+                  AND d.day BETWEEN (SELECT first_day FROM search_context)
+                                AND (SELECT last_day FROM search_context)), 0) END"
     };
 }
-
-/// Redirects per link in the visit window. One range scan of the daily rollups, whose primary
-/// key starts with the day, replaces a lookup per link and needs no extra index, so the schema
-/// and existing backups stay unchanged. Follows `search_context`.
-const VISITS_TOTALS: &str = ", search_visits(link_id, total) AS MATERIALIZED (
-        SELECT link_id, sum(total) FROM analytics_daily
-        WHERE kind = 'redirect'
-          AND day BETWEEN (SELECT first_day FROM search_context)
-                      AND (SELECT last_day FROM search_context)
-          AND (SELECT tracking FROM search_context) = 1
-        GROUP BY link_id) ";
-const VISITS_JOIN: &str = " LEFT JOIN search_visits v ON v.link_id = l.id";
 
 /// Time of the last recorded redirect of the link `l` in Unix seconds, or null without one.
 /// Matches `last_redirect_at`, or the start of `last_redirect_date` once its detail is gone.
@@ -141,11 +134,6 @@ impl Sort {
             self,
             Self::VisitsDesc | Self::VisitsAsc | Self::LastVisitDesc | Self::LastVisitAsc
         )
-    }
-
-    /// Whether the sort reads the visit totals of `VISITS_TOTALS`.
-    fn visits(self) -> bool {
-        matches!(self, Self::VisitsDesc | Self::VisitsAsc)
     }
 
     fn descending(self) -> bool {
@@ -418,9 +406,6 @@ pub(crate) async fn search(
         .push(", ")
         .push_bind(today)
         .push(", COALESCE((SELECT enabled FROM analytics_settings WHERE id = 1), 0)) ");
-    if sort.visits() {
-        query.push(VISITS_TOTALS);
-    }
     // A traffic sort computes its value once per link in a subquery. Its LIMIT keeps SQLite
     // from flattening the subquery, so the cursor condition and the order read the computed
     // value instead of evaluating the correlated subqueries again.
@@ -433,9 +418,6 @@ pub(crate) async fn search(
         .push(", ")
         .push(if traffic { sort.expression() } else { "NULL" })
         .push(" AS sort_value FROM links l");
-    if sort.visits() {
-        query.push(VISITS_JOIN);
-    }
     if filter.state.is_some() {
         query.push(crate::store::link_state_joins!());
     }

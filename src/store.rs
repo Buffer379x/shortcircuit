@@ -164,6 +164,12 @@ pub async fn open_database_with_timeout(
     Ok(pool)
 }
 
+/// The embedded schema migrations in version order. Restore builds its reference schemas from
+/// them and upgrades older snapshots with them.
+pub(crate) fn migrator() -> &'static Migrator {
+    &MIGRATIONS
+}
+
 /// Number of verified pre-upgrade snapshots to keep.
 const PRE_UPGRADE_KEEP: usize = 2;
 

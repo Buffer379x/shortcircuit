@@ -11,9 +11,9 @@ use std::{
 
 use shortcircuit::{
     AdminConfig, AdminServices, Analytics, Auth, BackupSchedule, BootstrapKind, Monitor, Notifier,
-    Operations, PublicControls, PublicHosts, RateLimit, TitleLookup, TrustedProxies,
-    admin_router_with, apply_pending_restore, create_snapshot, data_lock,
-    open_database_with_timeout, public_router_with_controls, restore_snapshot,
+    Operations, OperationsEnvironment, PublicControls, PublicHosts, RateLimit, RuntimeSettings,
+    TitleLookup, TrustedProxies, admin_router_with, apply_pending_restore, create_snapshot,
+    data_lock, open_database_with_timeout, public_router_with_controls, restore_snapshot,
 };
 use tokio::{net::TcpListener, sync::watch, time};
 use tracing_subscriber::EnvFilter;
@@ -101,19 +101,6 @@ async fn signal_to_stop() -> io::Result<()> {
     tokio::signal::ctrl_c().await
 }
 
-fn backup_schedule() -> Result<Option<BackupSchedule>, AppError> {
-    let hours = setting("BACKUP_INTERVAL_HOURS", "0")?
-        .parse()
-        .map_err(|_| io::Error::other("invalid BACKUP_INTERVAL_HOURS"))?;
-    if hours == 0 {
-        return Ok(None);
-    }
-    let keep = setting("BACKUP_KEEP", "7")?
-        .parse()
-        .map_err(|_| io::Error::other("invalid BACKUP_KEEP"))?;
-    BackupSchedule::new(hours, keep).map_err(|error| io::Error::other(error).into())
-}
-
 fn rate_limit(variable: &str) -> Result<Option<RateLimit>, AppError> {
     let limit = setting(variable, "")?;
     if limit.is_empty() {
@@ -133,36 +120,12 @@ fn rate_limit(variable: &str) -> Result<Option<RateLimit>, AppError> {
     .map_err(|reason| io::Error::other(format!("invalid {variable}: {reason}")).into())
 }
 
-fn monitor_settings(notifier: Option<Notifier>) -> Result<Monitor, AppError> {
-    let enabled = flag("MONITOR_ENABLED")?;
-    let hourly = |name, default| -> Result<u16, AppError> {
-        setting(name, default)?
-            .parse::<u16>()
-            .map_err(|_| io::Error::other(format!("invalid {name}")).into())
-    };
-    let interval_hours = hourly("MONITOR_INTERVAL_HOURS", "24")?;
-    let priority_default = interval_hours.min(6).to_string();
-    let priority_hours = hourly("MONITOR_PRIORITY_HOURS", &priority_default)?;
-    Monitor::new(enabled, notifier, interval_hours, priority_hours)
-        .map_err(|error| io::Error::other(error).into())
-}
-
-fn flag(variable: &str) -> Result<bool, AppError> {
-    match setting(variable, "false")?.as_str() {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err(io::Error::other(format!("{variable} must be true or false")).into()),
-    }
-}
-
 async fn serve() -> Result<(), AppError> {
     let database_busy_timeout = busy_timeout()?;
-    let titles = TitleLookup::new(flag("TITLE_LOOKUP_ENABLED")?);
-    // A configured webhook activates notifications. MONITOR_WEBHOOK_URL remains an alias.
-    let notifier = Notifier::from_env(|name| env::var(name).ok()).map_err(io::Error::other)?;
-    let backup_schedule =
-        backup_schedule()?.map(|schedule| schedule.with_notifier(notifier.clone()));
-    let monitor = monitor_settings(notifier.clone())?;
+    // Container values for operational settings are start values. Settings > Operations can
+    // override each one; they are validated here, before any migration runs.
+    let operations_environment =
+        OperationsEnvironment::from_env(|name| env::var(name).ok()).map_err(io::Error::other)?;
     let proxies =
         TrustedProxies::parse(&setting("TRUSTED_PROXIES", "")?).map_err(io::Error::other)?;
     let public_controls = PublicControls {
@@ -186,13 +149,18 @@ async fn serve() -> Result<(), AppError> {
         .into());
     }
     let database = database_path();
-    let operations = Operations::new(database.clone(), backup_schedule.is_some())
-        .with_monitoring(monitor.enabled());
     let (_lock, restore_applied) = apply_pending_restore(&database).await?;
     let pool = open_database_with_timeout(&database, database_busy_timeout).await?;
     if let Some(applied) = restore_applied {
         Operations::record_startup_restore(&pool, applied).await;
     }
+    let settings = RuntimeSettings::load(&pool, operations_environment).await?;
+    // Each job reads the effective settings and idles while its feature is off.
+    let notifier = Notifier::new(&settings);
+    let titles = TitleLookup::new(&settings);
+    let monitor = Monitor::new(&settings, notifier.clone());
+    let backup_schedule = BackupSchedule::new(&settings, notifier.clone());
+    let operations = Operations::new(database.clone()).with_settings(settings.clone());
     // Listen only after restores and migrations, so early requests are refused, not stalled.
     let public_socket = TcpListener::bind(public_addr).await?;
     let public_port = public_socket.local_addr()?.port();
@@ -228,13 +196,16 @@ async fn serve() -> Result<(), AppError> {
     let (analytics, mut writer) = Analytics::start(pool.clone()).await?;
     let (stop, receiver) = watch::channel(false);
     let sampler = tokio::spawn(operations.sample_resources(receiver.clone()));
-    let monitoring = monitor.enabled().then(|| {
+    let monitoring = {
         let monitor = monitor.clone();
         let pool = pool.clone();
         let receiver = receiver.clone();
-        tokio::spawn(async move { monitor.run(pool, receiver).await })
-    });
-    let notification_job = notifier.clone().map(|notifier| {
+        Some(tokio::spawn(
+            async move { monitor.run(pool, receiver).await },
+        ))
+    };
+    let notification_job = {
+        let notifier = notifier.clone();
         let pool = pool.clone();
         let receiver = receiver.clone();
         let directory = database
@@ -242,21 +213,23 @@ async fn serve() -> Result<(), AppError> {
             .map_or_else(|| PathBuf::from("."), PathBuf::from);
         // Only the counter, so the notifier never keeps the analytics writer alive.
         let dropped = analytics.dropped_counter();
-        tokio::spawn(async move { notifier.run(pool, directory, Some(dropped), receiver).await })
-    });
-    let title_job = titles.enabled().then(|| {
+        Some(tokio::spawn(async move {
+            notifier.run(pool, directory, Some(dropped), receiver).await
+        }))
+    };
+    let title_job = {
         let titles = titles.clone();
         let pool = pool.clone();
         let receiver = receiver.clone();
-        tokio::spawn(async move { titles.run(pool, receiver).await })
-    });
-    let scheduled = backup_schedule.map(|schedule| {
-        tokio::spawn(schedule.run(
-            pool.clone(),
-            database.with_file_name("backups"),
-            receiver.clone(),
+        Some(tokio::spawn(
+            async move { titles.run(pool, receiver).await },
         ))
-    });
+    };
+    let scheduled = Some(tokio::spawn(backup_schedule.run(
+        pool.clone(),
+        database.with_file_name("backups"),
+        receiver.clone(),
+    )));
     let public = axum::serve(
         public_socket,
         public_router_with_controls(
@@ -280,7 +253,8 @@ async fn serve() -> Result<(), AppError> {
                 operations: Some(operations),
                 monitor: Some(monitor),
                 titles: Some(titles),
-                notifications: notifier,
+                notifications: Some(notifier),
+                runtime_settings: Some(settings),
             },
         )
         .into_make_service_with_connect_info::<SocketAddr>(),
@@ -366,6 +340,12 @@ async fn restore(source: PathBuf) -> Result<(), AppError> {
         "Restored database schema {} from snapshot created at UTC Unix timestamp {}",
         result.schema_version, result.created_at
     );
+    if let Some(current) = result.upgraded_to {
+        println!(
+            "Upgraded the restored database from schema {} to schema {current}",
+            result.schema_version
+        );
+    }
     if let Some(path) = result.rollback {
         if result.rollback_is_snapshot {
             println!("Rollback snapshot: {}", path.display());

@@ -287,7 +287,7 @@
   {/if}
 
   {#if report && !report.enabled}
-    <div class="notice" data-tone="warning"><Icon name="circle-pause" /><div><p>{tr('monitorOff')}</p></div></div>
+    <div class="notice" data-tone="warning"><Icon name="circle-pause" /><div><p>{tr('monitorOff')} {tr('opsOffInSettings')} <a href={href('settings', undefined, { section: 'operations' })}>{tr('opsOpenSettings')}</a>.</p></div></div>
   {/if}
 
   {#if !report && !loadError}
@@ -387,7 +387,7 @@
       {:else if items.length}
         <Empty icon="circle-check" title={tr('insNothingHere')}>{tr('insNoResult')}</Empty>
       {:else}
-        <Empty icon="activity" title={tr('monitorEmpty')}>{enabled ? tr('insEmptyHint') : tr('monitorOff')}</Empty>
+        <Empty icon="activity" title={tr('monitorEmpty')}>{#if enabled}{tr('insEmptyHint')}{:else}{tr('monitorOff')} {tr('opsOffInSettings')} <a href={href('settings', undefined, { section: 'operations' })}>{tr('opsOpenSettings')}</a>.{/if}</Empty>
       {/if}
       {#if report.next_after}
         <footer class="panel-foot pager">

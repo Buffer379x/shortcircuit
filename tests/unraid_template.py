@@ -46,7 +46,16 @@ class UnraidTemplate(unittest.TestCase):
         )
         variables = {config.get("Target"): config.text or "" for config in template.findall("./Config[@Type='Variable']")}
         self.assertEqual(variables["TRUSTED_PROXIES"], "")
-        self.assertEqual(variables["BACKUP_INTERVAL_HOURS"], "24")
+        # Operational settings are set in Settings > Operations, not in the template. The built-in
+        # backup default matches what the template used to set: daily, keeping seven.
+        for name in (
+            "BACKUP_INTERVAL_HOURS", "BACKUP_KEEP", "MONITOR_ENABLED", "TITLE_LOOKUP_ENABLED",
+            "NOTIFICATION_WEBHOOK_URL", "NOTIFICATION_WEBHOOK_URL_FILE", "NOTIFICATION_EVENTS",
+        ):
+            self.assertNotIn(name, variables)
+        runtime = (ROOT / "src" / "runtime_settings.rs").read_text()
+        self.assertIn("const DEFAULT_BACKUP_INTERVAL: u16 = 24;", runtime)
+        self.assertIn("const DEFAULT_BACKUP_KEEP: u16 = 7;", runtime)
         self.assertIsNone(template.find("./Config[@Target='/data']"))
 
     def test_template_references_the_branding_image(self):

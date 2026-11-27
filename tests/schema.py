@@ -268,6 +268,145 @@ class LinkSchemaTests(unittest.TestCase):
         db.execute("DELETE FROM links")
         self.assertEqual(db.execute("SELECT count(*) FROM link_monitor").fetchone(), (0,))
 
+    def test_domain_deletion_audit_keeps_entries_and_bounds_details(self):
+        domain_audit = MIGRATION.with_name("0028_domain_deletion_audit.sql")
+        self.assertTrue(domain_audit.is_file(), "expected a versioned domain deletion audit migration")
+        db = self.database()
+        db.execute("PRAGMA foreign_keys = ON")
+        for migration in sorted(MIGRATION.parent.glob("*.sql")):
+            if MIGRATION < migration < domain_audit:
+                db.executescript(migration.read_text())
+        # Every action that the previous schema accepts must stay accepted.
+        previous = db.execute(
+            "SELECT sql FROM sqlite_schema WHERE name = 'admin_audit'"
+        ).fetchone()[0]
+        actions = previous.split("action IN (", 1)[1].split(")", 1)[0]
+        accepted = [item.strip().strip("'") for item in actions.split(",")]
+        for action in accepted:
+            db.execute(
+                "INSERT INTO admin_audit (action, actor, actor_id, outcome) VALUES (?, 'admin', 1, 'success')",
+                (action,),
+            )
+        db.execute("DELETE FROM admin_audit WHERE id > 2")
+        before = db.execute("SELECT * FROM admin_audit ORDER BY id").fetchall()
+        db.executescript(domain_audit.read_text())
+        self.assertEqual(
+            db.execute(
+                "SELECT id, created_at, action, actor, actor_id, object_id, outcome FROM admin_audit ORDER BY id"
+            ).fetchall(),
+            before,
+        )
+        self.assertEqual(db.execute("SELECT count(*) FROM admin_audit WHERE details IS NOT NULL").fetchone(), (0,))
+        for action in accepted + ["domain_delete"]:
+            with self.subTest(action=action):
+                db.execute(
+                    "INSERT INTO admin_audit (action, actor, actor_id, outcome) VALUES (?, 'admin', 1, 'success')",
+                    (action,),
+                )
+        # The ID sequence carries forward, so a trimmed ID is never issued again.
+        self.assertGreater(db.execute("SELECT min(id) FROM admin_audit WHERE id > 2").fetchone()[0], len(accepted))
+        db.execute(
+            "INSERT INTO admin_audit (action, actor, actor_id, outcome, details) "
+            "VALUES ('domain_delete', 'admin', 1, 'success', ?)",
+            ('{"host":"old.example","links":"move","target":"new.example","count":2}',),
+        )
+        for details in ["[]", "1", "{", "{\"x\":\"" + "a" * 1024 + "\"}"]:
+            with self.subTest(details=details[:12]), self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "INSERT INTO admin_audit (action, actor, actor_id, outcome, details) "
+                    "VALUES ('domain_delete', 'admin', 1, 'success', ?)",
+                    (details,),
+                )
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute("INSERT INTO admin_audit (action, actor, actor_id, outcome) VALUES ('domain_purge', 'admin', 1, 'success')")
+        self.assertEqual(
+            db.execute("SELECT count(*) FROM sqlite_schema WHERE type = 'trigger' AND name = 'admin_audit_trim'").fetchone(),
+            (1,),
+        )
+
+
+    def test_public_pages_are_constrained_and_audit_actions_carry_forward(self):
+        pages = MIGRATION.with_name("0027_public_pages.sql")
+        self.assertTrue(pages.is_file(), "expected a versioned public pages migration")
+        db = self.database()
+        for migration in sorted(MIGRATION.parent.glob("*.sql")):
+            if MIGRATION < migration < pages:
+                db.executescript(migration.read_text())
+        previous = db.execute("SELECT sql FROM sqlite_schema WHERE name = 'admin_audit'").fetchone()[0]
+        accepted = [item.strip().strip("'") for item in previous.split("action IN (", 1)[1].split(")", 1)[0].split(",")]
+        for action in accepted:
+            db.execute("INSERT INTO admin_audit (action, actor, actor_id, outcome) VALUES (?, 'admin', 1, 'success')", (action,))
+        before = db.execute("SELECT * FROM admin_audit ORDER BY id").fetchall()
+        db.executescript(pages.read_text())
+        self.assertEqual(db.execute("SELECT * FROM admin_audit ORDER BY id").fetchall(), before)
+        for action in ["public_pages_update", "public_pages_reset", "public_pages_import"]:
+            db.execute("INSERT INTO admin_audit (action, actor, actor_id, outcome) VALUES (?, 'admin', 1, 'success')", (action,))
+        png = b"\x89PNG\r\n\x1a\n"
+        db.execute("INSERT INTO public_pages (page, lang, mode, title, accent, logo_type, logo) "
+                   "VALUES ('missing', 'en', 'structured', 'Gone', '#ff79c6', 'image/png', ?)", (png,))
+        db.execute("INSERT INTO public_pages (page, lang, mode, html) VALUES ('password', 'de', 'custom', '{{form}}')")
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute("INSERT INTO public_pages (page, lang, mode) VALUES ('missing', 'en', 'structured')")
+        for columns, values in [
+            ("page, lang, mode", ("admin", "en", "structured")),
+            ("page, lang, mode", ("missing", "fr", "structured")),
+            ("page, lang, mode", ("missing", "de", "builtin")),
+            ("page, lang, mode, accent", ("missing", "de", "structured", "#FF79C6")),
+            ("page, lang, mode, accent", ("missing", "de", "structured", "red")),
+            ("page, lang, mode, logo_type, logo", ("missing", "de", "structured", "image/svg+xml", png)),
+            ("page, lang, mode, logo", ("missing", "de", "structured", png)),
+            ("page, lang, mode, logo_type, logo", ("missing", "de", "structured", "image/png", b"x" * 65537)),
+            ("page, lang, mode", ("missing", "de", "custom")),
+            ("page, lang, mode, html, title", ("missing", "de", "custom", "<p>x</p>", "t")),
+            ("page, lang, mode, html", ("missing", "de", "structured", "<p>x</p>")),
+            ("page, lang, mode, html", ("missing", "de", "custom", "x" * 131073)),
+            ("page, lang, mode, button", ("unknown_host", "de", "structured", "Go")),
+            ("page, lang, mode, title", ("missing", "de", "structured", "")),
+        ]:
+            marks = ", ".join("?" for _ in values)
+            with self.subTest(values=str(values)[:60]), self.assertRaises(sqlite3.IntegrityError):
+                db.execute(f"INSERT INTO public_pages ({columns}) VALUES ({marks})", values)
+
+
+    def test_runtime_settings_start_unsaved_and_are_range_checked(self):
+        # Schema 26: one row whose NULL columns mean "not saved here", so an upgrade changes nothing.
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        for migration in sorted(MIGRATION.parent.glob("*.sql")):
+            if int(migration.name[:4]) <= 26:
+                db.executescript(migration.read_text())
+        row = db.execute("SELECT * FROM runtime_settings").fetchall()
+        self.assertEqual(len(row), 1)
+        self.assertEqual(set(row[0][1:]), {None})
+        db.execute(
+            "UPDATE runtime_settings SET monitor_enabled = 1, monitor_interval_hours = 12, "
+            "monitor_priority_hours = 12, backup_interval_hours = 0, backup_keep = 365, "
+            "notification_webhook_url = '', notification_authorization = '', "
+            "notification_events = 'security,link_health', notification_click_milestones = '', "
+            "notification_expiry_notice_hours = 720"
+        )
+        db.execute("UPDATE runtime_settings SET notification_webhook_url = 'https://hooks.example/x'")
+        for column, value in [
+            ("monitor_enabled", 2),
+            ("monitor_interval_hours", 0),
+            ("monitor_interval_hours", 721),
+            ("monitor_priority_hours", 13),
+            ("backup_interval_hours", -1),
+            ("backup_keep", 0),
+            ("notification_webhook_url", "http://hooks.example/"),
+            ("notification_events", "Security"),
+            ("notification_events", ""),
+            ("notification_click_milestones", "10;20"),
+            ("notification_expiry_notice_hours", 0),
+            ("monitor_enabled", "yes"),
+        ]:
+            with self.subTest(column=column, value=value), self.assertRaises(sqlite3.IntegrityError):
+                db.execute(f"UPDATE runtime_settings SET {column} = ?", (value,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute("INSERT INTO runtime_settings (id) VALUES (2)")
+        for action in ("operations_settings_authorize", "operations_settings_update"):
+            db.execute("INSERT INTO admin_audit (action, actor, actor_id, outcome) VALUES (?, 'admin', 1, 'success')", (action,))
+
 
 if __name__ == "__main__":
     unittest.main()

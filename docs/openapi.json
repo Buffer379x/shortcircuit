@@ -590,6 +590,10 @@
                               "rejected",
                               "failed"
                             ]
+                          },
+                          "details": {
+                            "type": "object",
+                            "description": "Non-secret details for some actions. domain_delete records host, links, target, count, and environment. Omitted when the entry has none."
                           }
                         },
                         "required": [
@@ -1609,6 +1613,128 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/CatalogDomainInput"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCatalogDomain",
+        "summary": "Delete a public domain and move or delete its links",
+        "tags": [
+          "Domains"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "description": "Requires a browser session; API keys are refused. One transaction rechecks the link count and, for move, the slug conflicts, then moves or deletes the links, removes the saved settings, and writes a domain_delete audit entry with the host, link action, target, and count. Moved links keep their IDs, history, protection, rules, policies, and health checks; a pending title lookup is cleared as with any host change. Recorded analytics keep the host they were recorded under. Short URLs and QR codes for the deleted host stop working. Deleted links are removed exactly as by bulk delete. A host from PUBLIC_HOSTS stays served with default settings until it is removed from the environment.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Exact configured admin origin.",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogDomainDelete"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Domain deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogDomainDeletion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request syntax is invalid.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The host is neither saved nor listed in PUBLIC_HOSTS.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "domain_deletion_changed: the link count differs from expected_links. domain_move_conflict: slugs already exist on the target. domain_has_api_keys: unexpired API keys are restricted to a host outside PUBLIC_HOSTS.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds 32,768 bytes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request content type is unsupported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid_host, invalid_domain_deletion (inconsistent action, target, or count), invalid_move_target, or domain_delete_confirmation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
               }
             }
           }
@@ -6302,7 +6428,8 @@
                       "minimum": 0
                     },
                     "scheduled_backups": {
-                      "type": "boolean"
+                      "type": "boolean",
+                      "description": "Whether the effective backup interval is above 0."
                     },
                     "restore_status": {
                       "type": "string",
@@ -6380,7 +6507,8 @@
                       "description": "UTC Unix seconds"
                     },
                     "monitoring_enabled": {
-                      "type": "boolean"
+                      "type": "boolean",
+                      "description": "Whether health checks are currently allowed."
                     },
                     "last_monitor_check_at": {
                       "type": [
@@ -6539,6 +6667,10 @@
                           "description": "Null when the cgroup has no limit or the reading is unavailable."
                         }
                       }
+                    },
+                    "operations_settings": {
+                      "$ref": "#/components/schemas/OperationsSettings",
+                      "description": "Effective operational settings and their sources. Present on the full server."
                     }
                   },
                   "required": [
@@ -6770,7 +6902,18 @@
                     "schema_version": {
                       "type": "integer",
                       "format": "int64",
-                      "minimum": 1
+                      "minimum": 1,
+                      "description": "Schema version of the uploaded snapshot."
+                    },
+                    "target_schema_version": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 1,
+                      "description": "Schema version after the restart that applies the restore."
+                    },
+                    "upgrade_required": {
+                      "type": "boolean",
+                      "description": "Whether that restart upgrades the snapshot from `schema_version` to `target_schema_version`."
                     },
                     "created_at": {
                       "type": "integer",
@@ -6780,6 +6923,8 @@
                   },
                   "required": [
                     "schema_version",
+                    "target_schema_version",
+                    "upgrade_required",
                     "created_at"
                   ],
                   "additionalProperties": false
@@ -6798,7 +6943,7 @@
             }
           }
         },
-        "description": "Consumes a fresh restore grant. A staged snapshot is activated during the next controlled startup.",
+        "description": "Consumes a fresh restore grant. A staged snapshot is activated during the next controlled startup. Snapshots from schema 6 up to the current schema are accepted; an older one is upgraded to `target_schema_version` during that startup, and validation tests the upgrade on a temporary copy first. Refusals return `422` with `snapshot_schema_newer`, `snapshot_schema_unsupported`, `snapshot_migrations_mismatch`, `snapshot_upgrade_failed`, or `invalid_snapshot`.",
         "parameters": [
           {
             "in": "header",
@@ -7520,7 +7665,7 @@
       "get": {
         "operationId": "readNotificationStatus",
         "summary": "Read notification settings and delivery status",
-        "description": "Shows the configured event kinds, delivery counts, and the 25 most recent outbox rows. Settings come from environment variables and are read-only here.",
+        "description": "Shows the configured event kinds, delivery counts, and the 25 most recent outbox rows. Settings are changed in Settings > Operations (PATCH /api/v1/settings/operations); container variables are start values.",
         "tags": [
           "Notifications"
         ],
@@ -7610,6 +7755,891 @@
           },
           "409": {
             "description": "notifications_disabled when no webhook is configured.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/domains/deletion": {
+      "get": {
+        "operationId": "previewCatalogDomainDeletion",
+        "summary": "Preview what deleting a public domain affects",
+        "tags": [
+          "Domains"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "description": "Requires a browser session. Reports the link count, PUBLIC_HOSTS membership, restricted API keys, move targets, and, with target, up to 20 conflicting slugs and their total. Changes nothing.",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "required": false,
+            "description": "Active domain to check for slug conflicts.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion preview.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogDomainDeletionPreview"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The host is neither saved nor listed in PUBLIC_HOSTS.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid_host, invalid_domain_deletion, or invalid_move_target.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/operations": {
+      "get": {
+        "operationId": "readOperationsSettings",
+        "summary": "Read operations settings",
+        "description": "Health checks, title lookup, scheduled backups, and notifications, each with its effective value and source: saved here, container variable, or built-in default. The webhook URL and the Authorization header value are never returned. Browser sessions only; API keys are refused.",
+        "tags": [
+          "Settings"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Effective operations settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationsSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateOperationsSettings",
+        "summary": "Change operations settings",
+        "description": "Saves the given fields, which then take precedence over container variables, and deletes the saved values named in reset, so the container value or the default applies again. Changes apply without a restart and are audited by setting name. Setting or resetting notification_webhook_url or notification_authorization needs a grant from POST /api/v1/settings/operations/authorize, which the change consumes; without one the request fails with 403 operation_authorization_required. Validation runs first, so an invalid change keeps the grant. Error codes: invalid_monitor_intervals, invalid_backup_interval, invalid_backup_keep, invalid_notification_webhook, notification_webhook_not_public, invalid_notification_authorization, invalid_notification_events, click_milestones_required, invalid_click_milestones, invalid_expiry_notice, and invalid_reset.",
+        "tags": [
+          "Settings"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationsSettingsChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Effective operations settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationsSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/operations/authorize": {
+      "post": {
+        "operationId": "authorizeOperationsSettings",
+        "summary": "Confirm a notification target change",
+        "description": "Checks the current password and grants one change of the notification webhook or its authorization, bound to the current browser session, for two minutes. Rate limited by RATE_LIMIT_SENSITIVE and audited.",
+        "tags": [
+          "Settings"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin, including its scheme and any non-default port.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "password"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful operation"
+          },
+          "default": {
+            "description": "Request error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/public-pages": {
+      "get": {
+        "operationId": "readPublicPages",
+        "summary": "Read the public pages",
+        "description": "Returns the configured pages, the built-in copy of every page and language, and the size limits. A page and language without an entry uses the built-in page.",
+        "tags": [
+          "Public pages"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configured pages and built-in copy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicPagesState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required. API keys are refused.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "savePublicPage",
+        "summary": "Save one public page and language",
+        "description": "Validates the draft, sanitizes custom HTML, stores the result, and records a `public_pages_update` audit entry. Visitors see the change on their next request.",
+        "tags": [
+          "Public pages"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicPageDraft"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stored page and what the sanitizer removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicPageSaved"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required. API keys are refused.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid draft: page_too_large, html_required, form_required, form_duplicate, form_not_supported, invalid_placeholder, unsafe_css, invalid_mode_fields, invalid_text, text_too_long, button_not_supported, invalid_accent, accent_contrast, invalid_logo, or logo_too_large.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/public-pages/reset": {
+      "post": {
+        "operationId": "resetPublicPages",
+        "summary": "Return pages to the built-in page",
+        "description": "Send `page` and `lang` to reset one entry or `{\"all\": true}` to reset every entry. Records a `public_pages_reset` audit entry.",
+        "tags": [
+          "Public pages"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicPagesReset"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The pages after the reset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicPagesState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required. API keys are refused.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid_reset.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/public-pages/preview": {
+      "post": {
+        "operationId": "previewPublicPage",
+        "summary": "Render a draft for preview",
+        "description": "Validates and renders a draft with the public renderer without saving it. The rendered page is held in memory for ten minutes, at most 16 at a time.",
+        "tags": [
+          "Public pages"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicPageDraft"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Where the rendered draft can be framed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicPagePreview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required. API keys are refused.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid draft: page_too_large, html_required, form_required, form_duplicate, form_not_supported, invalid_placeholder, unsafe_css, invalid_mode_fields, invalid_text, text_too_long, button_not_supported, invalid_accent, accent_contrast, invalid_logo, or logo_too_large.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/public-pages/preview/{id}": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "description": "The preview identifier.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "showPublicPagePreview",
+        "summary": "Show a rendered preview",
+        "description": "Returns the rendered HTML with the public page's status and Content Security Policy, except `frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN`, so only the admin interface can frame it.",
+        "tags": [
+          "Public pages"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A rendered password or one-time page.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A rendered missing or unknown-host page, or an unknown or expired preview.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required. API keys are refused.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/public-pages/import/validate": {
+      "post": {
+        "operationId": "validatePublicPagesImport",
+        "summary": "Check a template file",
+        "description": "Validates and sanitizes every entry exactly like a single save and renders a preview of each. Nothing is stored.",
+        "tags": [
+          "Public pages"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicPagesBundle"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-page result and the sanitized template.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicPagesImportReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required. API keys are refused.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid template: invalid_format, unsupported_version, too_many_pages, duplicate_page, or any page code with `row` and `field`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/public-pages/import": {
+      "post": {
+        "operationId": "importPublicPages",
+        "summary": "Replace all pages with a template file",
+        "description": "Replaces every page in one transaction. Pages the file does not contain return to the built-in page. Records a `public_pages_import` audit entry.",
+        "tags": [
+          "Public pages"
+        ],
+        "security": [
+          {
+            "browserSession": [],
+            "csrf": []
+          },
+          {
+            "localSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "description": "The exact configured admin origin.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicPagesBundle"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The pages after the import.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicPagesState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required. API keys are refused.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid template: invalid_format, unsupported_version, too_many_pages, duplicate_page, or any page code with `row` and `field`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/public-pages/export": {
+      "get": {
+        "operationId": "exportPublicPages",
+        "summary": "Export the public pages",
+        "description": "Downloads every configured page as a template file, logos included as base64.",
+        "tags": [
+          "Public pages"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The template file.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicPagesBundle"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required. API keys are refused.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/public-pages/presets": {
+      "get": {
+        "operationId": "listPublicPagePresets",
+        "summary": "List the starter templates",
+        "tags": [
+          "Public pages"
+        ],
+        "security": [
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Built-in starter templates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicPagePresets"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session is required. API keys are refused.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -11694,7 +12724,1018 @@
             "description": "True when more files exist than were scanned (1,000 entries per location) or listed (100)."
           }
         }
+      },
+      "CatalogDomainDeletionPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/CatalogHost"
+          },
+          "managed": {
+            "type": "boolean",
+            "description": "Saved settings exist for the host."
+          },
+          "environment": {
+            "type": "boolean",
+            "description": "The host is listed in PUBLIC_HOSTS. After deletion it stays served with default settings until it is removed from the environment."
+          },
+          "links": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Links on the host, archived and disabled links included."
+          },
+          "api_keys": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Unexpired API keys restricted to the host. A host that is not in PUBLIC_HOSTS cannot be deleted while any exist."
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogHost"
+            },
+            "description": "Active domains other than this host that can receive its links."
+          },
+          "move": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Present when the request named a target.",
+            "properties": {
+              "target": {
+                "$ref": "#/components/schemas/CatalogHost"
+              },
+              "conflicts": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0,
+                "description": "Slugs on this host that already exist on the target."
+              },
+              "conflicting_slugs": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "string"
+                },
+                "description": "The first conflicting slugs in slug order."
+              }
+            },
+            "required": [
+              "target",
+              "conflicts",
+              "conflicting_slugs"
+            ]
+          }
+        },
+        "required": [
+          "host",
+          "managed",
+          "environment",
+          "links",
+          "api_keys",
+          "targets"
+        ]
+      },
+      "CatalogDomainDelete": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/CatalogHost"
+          },
+          "links": {
+            "type": "string",
+            "enum": [
+              "move",
+              "delete",
+              "none"
+            ],
+            "description": "What happens to the host's links. none is accepted only when expected_links is 0."
+          },
+          "target": {
+            "$ref": "#/components/schemas/CatalogHost",
+            "description": "Required for move and rejected otherwise. Must be another active domain."
+          },
+          "confirm": {
+            "type": "string",
+            "description": "The host name, typed by the administrator. Required for delete. When present for other actions it must also match."
+          },
+          "expected_links": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "The link count from the preview. A different count at deletion time returns 409 domain_deletion_changed."
+          }
+        },
+        "required": [
+          "host",
+          "links",
+          "expected_links"
+        ]
+      },
+      "CatalogDomainDeletion": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/CatalogHost"
+          },
+          "links": {
+            "type": "string",
+            "enum": [
+              "move",
+              "delete",
+              "none"
+            ]
+          },
+          "target": {
+            "$ref": "#/components/schemas/CatalogHost"
+          },
+          "moved": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "deleted": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "environment": {
+            "type": "boolean",
+            "description": "The host remains served from PUBLIC_HOSTS with default settings."
+          }
+        },
+        "required": [
+          "host",
+          "links",
+          "moved",
+          "deleted",
+          "environment"
+        ]
+      },
+      "OperationsSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Effective operational settings. Secrets report only whether they are set.",
+        "required": [
+          "monitor_enabled",
+          "monitor_interval_hours",
+          "monitor_priority_hours",
+          "title_lookup_enabled",
+          "backup_interval_hours",
+          "backup_keep",
+          "notification_webhook",
+          "notification_authorization",
+          "notification_events",
+          "notification_click_milestones",
+          "notification_expiry_notice_hours",
+          "notifications_active",
+          "connector"
+        ],
+        "properties": {
+          "monitor_enabled": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "source",
+              "container"
+            ],
+            "description": "Health checks. Container variable MONITOR_ENABLED, default false.",
+            "properties": {
+              "value": {
+                "type": "boolean"
+              },
+              "source": {
+                "enum": [
+                  "saved",
+                  "container",
+                  "default"
+                ],
+                "description": "saved: set in Settings > Operations. container: from the container variable. default: built in."
+              },
+              "container": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "description": "The container value a reset returns to, or null when none is set."
+              }
+            }
+          },
+          "monitor_interval_hours": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "source",
+              "container"
+            ],
+            "description": "Stable link interval. MONITOR_INTERVAL_HOURS, default 24.",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 720
+              },
+              "source": {
+                "enum": [
+                  "saved",
+                  "container",
+                  "default"
+                ],
+                "description": "saved: set in Settings > Operations. container: from the container variable. default: built in."
+              },
+              "container": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1,
+                "maximum": 720,
+                "description": "The container value a reset returns to, or null when none is set."
+              }
+            }
+          },
+          "monitor_priority_hours": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "source",
+              "container"
+            ],
+            "description": "Priority link interval, at most the stable interval. MONITOR_PRIORITY_HOURS, default 6 or the stable interval if shorter.",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 720
+              },
+              "source": {
+                "enum": [
+                  "saved",
+                  "container",
+                  "default"
+                ],
+                "description": "saved: set in Settings > Operations. container: from the container variable. default: built in."
+              },
+              "container": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1,
+                "maximum": 720,
+                "description": "The container value a reset returns to, or null when none is set."
+              }
+            }
+          },
+          "title_lookup_enabled": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "source",
+              "container"
+            ],
+            "description": "Title lookup. TITLE_LOOKUP_ENABLED, default false.",
+            "properties": {
+              "value": {
+                "type": "boolean"
+              },
+              "source": {
+                "enum": [
+                  "saved",
+                  "container",
+                  "default"
+                ],
+                "description": "saved: set in Settings > Operations. container: from the container variable. default: built in."
+              },
+              "container": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "description": "The container value a reset returns to, or null when none is set."
+              }
+            }
+          },
+          "backup_interval_hours": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "source",
+              "container"
+            ],
+            "description": "Scheduled backup interval; 0 is off. BACKUP_INTERVAL_HOURS, default 24.",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 720
+              },
+              "source": {
+                "enum": [
+                  "saved",
+                  "container",
+                  "default"
+                ],
+                "description": "saved: set in Settings > Operations. container: from the container variable. default: built in."
+              },
+              "container": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 720,
+                "description": "The container value a reset returns to, or null when none is set."
+              }
+            }
+          },
+          "backup_keep": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "source",
+              "container"
+            ],
+            "description": "Scheduled backups to keep. BACKUP_KEEP, default 7.",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 365
+              },
+              "source": {
+                "enum": [
+                  "saved",
+                  "container",
+                  "default"
+                ],
+                "description": "saved: set in Settings > Operations. container: from the container variable. default: built in."
+              },
+              "container": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1,
+                "maximum": 365,
+                "description": "The container value a reset returns to, or null when none is set."
+              }
+            }
+          },
+          "notification_webhook": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "configured",
+              "source",
+              "container_configured"
+            ],
+            "properties": {
+              "configured": {
+                "type": "boolean"
+              },
+              "origin": {
+                "type": "string",
+                "description": "Scheme, host, and port of the webhook. Never the path, query, or credentials."
+              },
+              "source": {
+                "enum": [
+                  "saved",
+                  "container",
+                  "default"
+                ],
+                "description": "saved: set in Settings > Operations. container: from the container variable. default: built in."
+              },
+              "container_configured": {
+                "type": "boolean"
+              }
+            },
+            "description": "NOTIFICATION_WEBHOOK_URL, its _FILE form, or the MONITOR_WEBHOOK_URL alias. Off by default."
+          },
+          "notification_authorization": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "configured",
+              "source",
+              "container_configured"
+            ],
+            "properties": {
+              "configured": {
+                "type": "boolean"
+              },
+              "origin": {
+                "type": "string",
+                "description": "Scheme, host, and port of the webhook. Never the path, query, or credentials."
+              },
+              "source": {
+                "enum": [
+                  "saved",
+                  "container",
+                  "default"
+                ],
+                "description": "saved: set in Settings > Operations. container: from the container variable. default: built in."
+              },
+              "container_configured": {
+                "type": "boolean"
+              }
+            },
+            "description": "NOTIFICATION_WEBHOOK_AUTHORIZATION_FILE. origin is never present."
+          },
+          "notification_events": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "source",
+              "container"
+            ],
+            "description": "NOTIFICATION_EVENTS. Default: every kind except click_milestone unless milestones are set, or only link_health for the MONITOR_WEBHOOK_URL alias.",
+            "properties": {
+              "value": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "link_health",
+                    "link_expiring",
+                    "link_expired",
+                    "click_milestone",
+                    "backup_failed",
+                    "job_failed",
+                    "storage_low",
+                    "security"
+                  ]
+                }
+              },
+              "source": {
+                "enum": [
+                  "saved",
+                  "container",
+                  "default"
+                ],
+                "description": "saved: set in Settings > Operations. container: from the container variable. default: built in."
+              },
+              "container": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "enum": [
+                    "link_health",
+                    "link_expiring",
+                    "link_expired",
+                    "click_milestone",
+                    "backup_failed",
+                    "job_failed",
+                    "storage_low",
+                    "security"
+                  ]
+                },
+                "description": "The container value a reset returns to, or null when none is set."
+              }
+            }
+          },
+          "notification_click_milestones": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "source",
+              "container"
+            ],
+            "description": "NOTIFICATION_CLICK_MILESTONES, default none.",
+            "properties": {
+              "value": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000000
+                }
+              },
+              "source": {
+                "enum": [
+                  "saved",
+                  "container",
+                  "default"
+                ],
+                "description": "saved: set in Settings > Operations. container: from the container variable. default: built in."
+              },
+              "container": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "maxItems": 10,
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000000
+                },
+                "description": "The container value a reset returns to, or null when none is set."
+              }
+            }
+          },
+          "notification_expiry_notice_hours": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "source",
+              "container"
+            ],
+            "description": "NOTIFICATION_EXPIRY_NOTICE_HOURS, default 24.",
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 720
+              },
+              "source": {
+                "enum": [
+                  "saved",
+                  "container",
+                  "default"
+                ],
+                "description": "saved: set in Settings > Operations. container: from the container variable. default: built in."
+              },
+              "container": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1,
+                "maximum": 720,
+                "description": "The container value a reset returns to, or null when none is set."
+              }
+            }
+          },
+          "notifications_active": {
+            "type": "boolean",
+            "description": "A valid webhook is effective and deliveries run."
+          },
+          "connector": {
+            "type": "boolean",
+            "description": "The internal connector is configured. Its variables stay environment-only."
+          }
+        }
+      },
+      "OperationsSettingsChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Fields to save. Omitted fields keep their current saved value or source.",
+        "properties": {
+          "monitor_enabled": {
+            "type": "boolean"
+          },
+          "monitor_interval_hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 720
+          },
+          "monitor_priority_hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 720
+          },
+          "title_lookup_enabled": {
+            "type": "boolean"
+          },
+          "backup_interval_hours": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 720
+          },
+          "backup_keep": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          },
+          "notification_webhook_url": {
+            "type": "string",
+            "maxLength": 4096,
+            "writeOnly": true,
+            "description": "An HTTPS URL on port 443, or at the connector origin when one is configured. A literal non-public address is refused without a connector. An empty string turns notifications off."
+          },
+          "notification_authorization": {
+            "type": "string",
+            "maxLength": 4096,
+            "writeOnly": true,
+            "description": "An Authorization header value, or an empty string to send none."
+          },
+          "notification_events": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "link_health",
+                "link_expiring",
+                "link_expired",
+                "click_milestone",
+                "backup_failed",
+                "job_failed",
+                "storage_low",
+                "security"
+              ]
+            },
+            "minItems": 1
+          },
+          "notification_click_milestones": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000000000
+            }
+          },
+          "notification_expiry_notice_hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 720
+          },
+          "reset": {
+            "type": "array",
+            "uniqueItems": true,
+            "description": "Saved values to delete. A field cannot be set and reset together.",
+            "items": {
+              "enum": [
+                "monitor_enabled",
+                "monitor_interval_hours",
+                "monitor_priority_hours",
+                "title_lookup_enabled",
+                "backup_interval_hours",
+                "backup_keep",
+                "notification_webhook_url",
+                "notification_authorization",
+                "notification_events",
+                "notification_click_milestones",
+                "notification_expiry_notice_hours"
+              ]
+            }
+          }
+        }
+      },
+      "PublicPageDraft": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "enum": [
+              "missing",
+              "unknown_host",
+              "password",
+              "once"
+            ]
+          },
+          "lang": {
+            "type": "string",
+            "enum": [
+              "en",
+              "de"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "structured",
+              "custom"
+            ],
+            "description": "`structured` fills the built-in layout. `custom` serves sanitized HTML."
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Structured mode. Plain text."
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 600,
+            "description": "Structured mode. Plain text; line breaks are kept."
+          },
+          "button": {
+            "type": "string",
+            "maxLength": 60,
+            "description": "Structured mode. Not for `unknown_host`."
+          },
+          "accent": {
+            "type": "string",
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "description": "Structured mode. Dark or white button text must reach 4.5:1."
+          },
+          "logo": {
+            "type": "object",
+            "description": "Structured mode. Replaces the mark.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ]
+              },
+              "data": {
+                "type": "string",
+                "contentEncoding": "base64",
+                "description": "At most 64 KiB decoded."
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ],
+            "additionalProperties": false
+          },
+          "html": {
+            "type": "string",
+            "description": "Custom mode. At most 64 KiB. Placeholders: {{host}}, {{lang}}, {{root_link}}, and {{form}}, which password and one-time pages require exactly once."
+          }
+        },
+        "required": [
+          "page",
+          "lang",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "PublicPagesState": {
+        "type": "object",
+        "properties": {
+          "pages": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/PublicPageDraft"
+                }
+              ],
+              "properties": {
+                "updated_at": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "builtin": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "page": {
+                  "type": "string",
+                  "enum": [
+                    "missing",
+                    "unknown_host",
+                    "password",
+                    "once"
+                  ]
+                },
+                "lang": {
+                  "type": "string",
+                  "enum": [
+                    "en",
+                    "de"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "button": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "page",
+                "lang",
+                "title",
+                "message"
+              ]
+            }
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "html_bytes": {
+                "type": "integer"
+              },
+              "logo_bytes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "html_bytes",
+              "logo_bytes"
+            ]
+          }
+        },
+        "required": [
+          "pages",
+          "builtin",
+          "limits"
+        ]
+      },
+      "PublicPageSaved": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "$ref": "#/components/schemas/PublicPageDraft"
+          },
+          "removed": {
+            "type": "array",
+            "description": "Categories the sanitizer removed: script, event_handler, style_attribute, unsafe_url, frame, plugin, form, meta, element, attribute.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "page",
+          "removed"
+        ]
+      },
+      "PublicPagesReset": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "enum": [
+              "missing",
+              "unknown_host",
+              "password",
+              "once"
+            ]
+          },
+          "lang": {
+            "type": "string",
+            "enum": [
+              "en",
+              "de"
+            ]
+          },
+          "all": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PublicPagePreview": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "array",
+            "description": "Categories the sanitizer removed: script, event_handler, style_attribute, unsafe_url, frame, plugin, form, meta, element, attribute.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "html": {
+            "type": "string",
+            "description": "The sanitized markup of a custom draft."
+          }
+        },
+        "required": [
+          "url",
+          "removed"
+        ]
+      },
+      "PublicPagesBundle": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "const": "shortcircuit-public-pages"
+          },
+          "version": {
+            "const": 1
+          },
+          "pages": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/components/schemas/PublicPageDraft"
+            }
+          }
+        },
+        "required": [
+          "format",
+          "version",
+          "pages"
+        ],
+        "additionalProperties": false
+      },
+      "PublicPagesImportReport": {
+        "type": "object",
+        "properties": {
+          "pages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "page": {
+                  "type": "string",
+                  "enum": [
+                    "missing",
+                    "unknown_host",
+                    "password",
+                    "once"
+                  ]
+                },
+                "lang": {
+                  "type": "string",
+                  "enum": [
+                    "en",
+                    "de"
+                  ]
+                },
+                "mode": {
+                  "type": "string"
+                },
+                "removed": {
+                  "type": "array",
+                  "description": "Categories the sanitizer removed: script, event_handler, style_attribute, unsafe_url, frame, plugin, form, meta, element, attribute.",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "preview": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "page",
+                "lang",
+                "mode",
+                "removed",
+                "preview"
+              ]
+            }
+          },
+          "bundle": {
+            "$ref": "#/components/schemas/PublicPagesBundle"
+          }
+        },
+        "required": [
+          "pages",
+          "bundle"
+        ]
+      },
+      "PublicPagePresets": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "bundle": {
+                  "$ref": "#/components/schemas/PublicPagesBundle"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "bundle"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
       }
     }
-  }
+  },
+  "tags": [
+    {
+      "name": "Settings",
+      "description": "Operational settings that apply without a restart."
+    },
+    {
+      "name": "Public pages",
+      "description": "Visitor-facing pages on the public listener: edit, preview, import, export, and reset. Browser sessions only."
+    }
+  ]
 }
