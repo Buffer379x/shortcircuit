@@ -10,6 +10,8 @@
   import Icon from '../lib/Icon.svelte';
   import type { IconName } from '../lib/icons';
   import PageHeader from '../lib/ui/PageHeader.svelte';
+  import PublicPages from './settings/PublicPages.svelte';
+  import Operations from './settings/Operations.svelte';
   import Dialog from '../lib/ui/Dialog.svelte';
   import { app } from '../lib/app.svelte';
   import { locale, setLanguage, tr } from '../lib/locale.svelte';
@@ -20,10 +22,11 @@
 
   let { timeZone = $bindable(), onPasswordChanged }: { timeZone?: string; onPasswordChanged: (user?: User) => Promise<void> } = $props();
 
-  type Section = 'account' | 'appearance' | 'privacy' | 'security';
+  type Section = 'account' | 'appearance' | 'privacy' | 'pages' | 'operations' | 'security';
   const SECTIONS: [Section, keyof Messages, IconName][] = [
     ['account', 'account', 'user'], ['appearance', 'admAppearance', 'palette'],
-    ['privacy', 'admPrivacy', 'eye-off'], ['security', 'admSecurity', 'shield'],
+    ['privacy', 'admPrivacy', 'eye-off'], ['pages', 'stPublicPages', 'file-text'],
+    ['operations', 'stOperations', 'server'], ['security', 'admSecurity', 'shield'],
   ];
   const initial = route.params.get('section') as Section;
   let section = $state<Section>(SECTIONS.some(([key]) => key === initial) ? initial : 'account');
@@ -301,6 +304,10 @@
             <div><button class="btn" data-variant="danger-quiet" disabled={saving || clearing} onclick={openClear}><Icon name="trash-2" />{tr('admClearOpen')}</button></div>
           </div>
         </section>
+      {:else if section === 'pages'}
+        <PublicPages />
+      {:else if section === 'operations'}
+        <Operations />
       {:else}
         <section class="panel" aria-labelledby="st-sessions">
           <header class="panel-head"><div class="panel-title"><h2 id="st-sessions">{tr('admSessions')}</h2><p>{tr('admSessionsHint', { name: app.user?.username ?? '' })}</p></div></header>
