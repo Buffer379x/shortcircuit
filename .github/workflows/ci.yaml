@@ -85,7 +85,16 @@ jobs:
           setup_token=$(docker compose exec -T shortcircuit shortcircuit setup-token)
           printf '::add-mask::%s\n' "$setup_token"
           SHORTCIRCUIT_SETUP_TOKEN="$setup_token" SHORTCIRCUIT_PLAYWRIGHT="$browser_deps/node_modules/playwright" \
-            SHORTCIRCUIT_AXE_CORE="$browser_deps/node_modules/axe-core" node tests/admin-browser.cjs
+            SHORTCIRCUIT_AXE_CORE="$browser_deps/node_modules/axe-core" SHORTCIRCUIT_ARTIFACTS="$RUNNER_TEMP/browser-failure" \
+            node tests/admin-browser.cjs
+      - name: Keep browser failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-failure-screenshots
+          path: ${{ runner.temp }}/browser-failure
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Exercise backup and offline restore
         id: smoke
         run: |

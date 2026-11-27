@@ -938,8 +938,13 @@ async function verify() {
     await tagField.fill('other');
     await tagField.press('Enter');
     await tagField.fill('inte');
-    await dialog.getByRole('listbox', { name: 'Tag suggestions', exact: true })
-      .getByRole('option', { name: startsWith('internal') }).click();
+    // Choose the suggestion with the keyboard, as the combobox is designed: the first option is active.
+    const suggestion = dialog.getByRole('listbox', { name: 'Tag suggestions', exact: true })
+      .getByRole('option', { name: startsWith('internal') });
+    await suggestion.waitFor();
+    assert.equal(await suggestion.getAttribute('aria-selected'), 'true');
+    assert.equal(await tagField.getAttribute('aria-activedescendant'), await suggestion.getAttribute('id'));
+    await tagField.press('Enter');
     await dialog.getByRole('button', { name: 'Remove tag internal', exact: true }).waitFor();
     await dialog.getByRole('button', { name: 'Remove tag other', exact: true }).waitFor();
     assert.equal(await tagField.inputValue(), '');
