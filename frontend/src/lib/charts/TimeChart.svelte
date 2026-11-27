@@ -16,7 +16,12 @@
   const x = (i: number) => pad.left + (i / Math.max(1, labels.length - 1)) * iw;
   const y = (v: number) => pad.top + ih - (v / max) * ih;
   const ticks = $derived([0, 0.25, 0.5, 0.75, 1].map((t) => t * max));
-  const xTicks = $derived(labels.map((_, i) => i).filter((i) => i % Math.ceil(labels.length / (width < 520 ? 4 : 7)) === 0 || i === labels.length - 1));
+  // Evenly spaced date labels, first and last included, never closer than one label width.
+  const xTicks = $derived.by(() => {
+    const count = Math.min(labels.length, width < 520 ? 3 : width < 900 ? 5 : 7);
+    if (count < 2) return labels.length ? [0] : [];
+    return [...new Set(Array.from({ length: count }, (_, k) => Math.round((k * (labels.length - 1)) / (count - 1))))];
+  });
 
   // Four gridline steps of 1, 2, 2.5, or 5 times a power of ten.
   function niceMax(v: number) {

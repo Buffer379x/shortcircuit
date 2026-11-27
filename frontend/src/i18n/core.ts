@@ -24,7 +24,6 @@ export const en = {
   accountMenu: 'Account menu',
   accountSettings: 'Account settings',
   administrator: 'Administrator',
-  signOut: 'Sign out',
   themeLabel: 'Theme',
   themeDark: 'Dark',
   themeLight: 'Light',
@@ -47,10 +46,7 @@ export const en = {
   instanceVersion: 'Version',
   instanceBackup: 'Last backup',
   instanceNoBackup: 'None yet',
-  close: 'Close',
-  cancel: 'Cancel',
   dismiss: 'Dismiss',
-  notifications: 'Notifications',
   copyShortLink: 'Copy short link',
   copyLabel: 'Copy {value}',
   copied: 'Copied',
@@ -86,7 +82,6 @@ export const en = {
   protectionOneTime: 'One-time',
   favorite: 'Favorite',
   justNow: 'Just now',
-  never: 'Never',
 };
 
 export const de: Record<keyof typeof en, string> = {
@@ -114,7 +109,6 @@ export const de: Record<keyof typeof en, string> = {
   accountMenu: 'Kontomenü',
   accountSettings: 'Kontoeinstellungen',
   administrator: 'Administrator',
-  signOut: 'Abmelden',
   themeLabel: 'Design',
   themeDark: 'Dunkel',
   themeLight: 'Hell',
@@ -137,10 +131,7 @@ export const de: Record<keyof typeof en, string> = {
   instanceVersion: 'Version',
   instanceBackup: 'Letzte Sicherung',
   instanceNoBackup: 'Noch keine',
-  close: 'Schließen',
-  cancel: 'Abbrechen',
   dismiss: 'Ausblenden',
-  notifications: 'Meldungen',
   copyShortLink: 'Kurzlink kopieren',
   copyLabel: '{value} kopieren',
   copied: 'Kopiert',
@@ -176,5 +167,4 @@ export const de: Record<keyof typeof en, string> = {
   protectionOneTime: 'Einmalig',
   favorite: 'Favorit',
   justNow: 'Gerade eben',
-  never: 'Nie',
 };
