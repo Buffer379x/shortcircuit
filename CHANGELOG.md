@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.0-preview.1
+
 - Admin interface redesigned with Polar Signal:
   - Near-monochrome dark and light themes with pink as the signal color, local Geist fonts, and Lucide icons.
   - A grouped sidebar with a command palette (Ctrl/Cmd+K), and a link details page with a route map, rules, access, health, and history.

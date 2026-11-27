@@ -1,6 +1,6 @@
 # Unraid installation
 
-ShortCircuit runs in one container on `linux/amd64`. Docker Manager pulls `ghcr.io/buffer379x/shortcircuit:0.7.0-preview.1` and creates a persistent Docker volume on first start. The image uses UID and GID 10001, public port 8080, and admin port 8081. [Download the template](https://github.com/Buffer379x/shortcircuit/releases/download/v0.6.0-preview.2/my-shortcircuit.xml) · [Docker icon](../assets/branding/unraid-docker.png) · [SVG favicon](../assets/branding/favicon.svg) · [PNG favicon](../assets/branding/favicon.png)
+ShortCircuit runs in one container on `linux/amd64`. Docker Manager pulls `ghcr.io/buffer379x/shortcircuit:0.8.0-preview.1` and creates a persistent Docker volume on first start. The image uses UID and GID 10001, public port 8080, and admin port 8081. [Download the template](https://github.com/Buffer379x/shortcircuit/releases/download/v0.6.0-preview.2/my-shortcircuit.xml) · [Docker icon](../assets/branding/unraid-docker.png) · [SVG favicon](../assets/branding/favicon.svg) · [PNG favicon](../assets/branding/favicon.png)
 
 ## Install with Docker Manager
 
@@ -35,9 +35,9 @@ The named volume `shortcircuit-data` persists across container replacement. It r
 
 For a new appdata bind mount, remove `--volume=shortcircuit-data:/data` and add a path mapping to `/data`. Use a local pool directory writable by UID/GID 10001. [Unraid shares](https://docs.unraid.net/unraid-os/using-unraid-to/manage-storage/shares/) · [SQLite WAL](https://www.sqlite.org/wal.html)
 
-To upgrade from 0.6.0-preview.2, download a verified backup on **System and backups** and copy it outside the Docker data store. Note the current image digest. In Docker Manager, edit the existing container, set **Repository** to `ghcr.io/buffer379x/shortcircuit:0.7.0-preview.1`, and click **Apply**. Keep the existing `/data` mount, network and any fixed IP, public hostnames, and admin origin. Startup writes a verified snapshot to `/data/backups/pre-upgrade` and migrates schema 11 to 24. Optionally add **Trusted proxies** and **Backup interval** from the updated template: an existing container keeps its own settings.
+To upgrade from 0.7.0-preview.1, download a verified backup on **System › Backups** and copy it outside the Docker data store. Note the current image digest. In Docker Manager, edit the existing container, set **Repository** to `ghcr.io/buffer379x/shortcircuit:0.8.0-preview.1`, and click **Apply**. Keep the existing `/data` mount, network and any fixed IP, public hostnames, and admin origin. 0.8.0-preview.1 keeps schema version 24, so no migration runs; it brings the Polar Signal interface and additive API fields. From 0.6.0-preview.2, startup first writes a verified snapshot to `/data/backups/pre-upgrade` and migrates schema 11 to 24. Optionally add **Trusted proxies** and **Backup interval** from the updated template: an existing container keeps its own settings.
 
-For rollback, follow [Release verification](RELEASE_VERIFICATION.md#rollback): restore the pre-upgrade snapshot into a separate data volume with the 0.6.0-preview.2 image. The older image refuses an upgraded volume. Verify the restored container and its links before moving traffic to it. [Backup and rollback](BACKUP_RESTORE.md)
+For rollback from 0.8.0-preview.1 to 0.7.0-preview.1, set **Repository** back to the noted 0.7.0-preview.1 digest; both use schema 24, so the volume stays usable. For a rollback to 0.6.0-preview.2, follow [Release verification](RELEASE_VERIFICATION.md#rollback): restore the pre-upgrade snapshot into a separate data volume with that image, because it refuses an upgraded volume. Verify the restored container and its links before moving traffic to it. [Backup and rollback](BACKUP_RESTORE.md)
 
 ## Configuration
 
