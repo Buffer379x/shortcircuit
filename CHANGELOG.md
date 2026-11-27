@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The image applies Debian security updates at build time on a refreshed bookworm-slim base, which fixes the newly published `libpam` finding (CVE-2025-6020).
 - API v1, additive: monitoring list items include the link `title` and `target`. Health no longer requests each link separately, which kept it within the admin request budget.
 - Links: filter the list by live status (active, scheduled, expired, disabled, limit reached) and sort it by 30-day visits or last visit from the column headers. API v1, additive: `POST /api/v1/links/search` accepts `state` and the sorts `visits_desc`, `visits_asc`, `last_visit_desc`, and `last_visit_asc`; links without a value come last. [API](docs/API.md#catalog-search)
 - Protected-link passwords also have a budget per link: 5 attempts per client and 30 across all clients per minute by default (`RATE_LIMIT_PUBLIC_PASSWORD_LINK`). Guessing one link's password no longer exhausts the attempts for every other link. [Security](docs/SECURITY.md#client-addresses-and-request-limits)
