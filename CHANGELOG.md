@@ -10,6 +10,7 @@
 - `GET /api/v1/system` no longer waits 250 ms for a CPU sample. A background sampler reads the CPU counters every 15 seconds from startup until shutdown, and `cpu` adds `sampled_at` and `age_seconds` (API v1, additive). Before the first sample, and after 60 seconds without one, CPU use is reported as unavailable. `raw_event_count` is counted at most once every 30 seconds.
 - Analytics retention runs in its own task beside the event writer and deletes at most 512 rows per short transaction with a pause between chunks, so a long cleanup no longer holds up event ingestion. Retention periods and the hourly schedule are unchanged.
 - System, Backups: a read-only **Stored snapshots** table lists command-line, scheduled, and pre-upgrade snapshots and restore rollback copies with type, time, schema, and size, from the new browser-only `GET /api/v1/system/backups`. It returns file names only and lists up to 100 files. Stored files are not downloadable; Download backup still creates a new verified snapshot.
+- Sorting the link list by 30-day visits reads the daily totals in one pass instead of once per link: with 20,000 links and 600,000 daily rows the query takes about 70–100 ms instead of 175–215 ms. The schema stays at version 24, so existing backups stay restorable.
 - Imports name the first failing row: a rejected JSON or CSV import adds `row` and, when known, `field` to the `invalid_exchange` or `destination_not_allowed` problem (API v1, additive), and Import and export shows them next to the error.
 
 ## 0.8.0-preview.2
