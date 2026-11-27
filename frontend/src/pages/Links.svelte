@@ -339,7 +339,11 @@
         items = items.filter((x) => x.id !== l.id);
         toggleRow(l, false);
         await tick();
-        viewGroup?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+        // Continue from the view switcher only when focus was in the removed row; focus that moved
+        // elsewhere while the request ran stays there.
+        if (!document.activeElement || document.activeElement === document.body) {
+          viewGroup?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+        }
       }
       toast(tr(message), { body: `${l.host}/${l.slug}` });
       linksChanged();
@@ -704,6 +708,7 @@
                       </a>
                       <span class="link-url"><ShortUrl host={l.host} slug={l.slug} /><CopyButton value={shortUrl(l)} label={tr('copyLabel', { value: `${l.host}/${l.slug}` })} /></span>
                       <span class="dest mobile-dest"><b>{d.host}</b>{d.rest}</span>
+                      {#if l.description}<span class="link-desc truncate">{l.description}</span>{/if}
                     </div>
                   </td>
                   {#if show('dest')}
@@ -918,6 +923,14 @@
     min-width: 0;
     max-width: 340px;
   }
+  .link-desc {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    line-height: var(--leading-xs);
+  }
+  .links-table[data-density='compact'] .link-desc {
+    display: none;
+  }
   .link-title {
     display: flex;
     align-items: center;
@@ -1130,7 +1143,15 @@
     .links-table .row-actions .reveal {
       display: none;
     }
+    /* Touch targets on phones are at least 24 px (WCAG 2.5.8). */
+    .link-title {
+      min-height: 24px;
+    }
+    .link-url {
+      height: 24px;
+    }
     .link-url :global(.btn) {
+      --btn-h: 24px;
       opacity: 1;
     }
     .list-search {

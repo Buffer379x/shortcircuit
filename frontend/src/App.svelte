@@ -260,7 +260,7 @@
       </nav>
       <div class="sidebar-foot">
         {#if instance}
-          <a class="instance" href={href('system')} aria-label={tr('instanceLabel')}>
+          <a class="instance" href={href('system')}>
             <span class="instance-head"><i class="dot" data-ok={instanceOk || undefined} aria-hidden="true"></i>{instanceOk ? tr('instanceRunning') : tr('instanceAttention')}</span>
             <dl>
               <dt>{tr('instanceVersion')}</dt><dd>{instance.version}</dd>
@@ -297,7 +297,7 @@
           {/if}
         </nav>
         <div class="spacer"></div>
-        <button class="search-trigger" aria-keyshortcuts="Control+K Meta+K" onclick={() => (overlays.palette = true)}>
+        <button class="search-trigger" title={tr('searchTrigger')} aria-keyshortcuts="Control+K Meta+K" onclick={() => (overlays.palette = true)}>
           <Icon name="search" /><span>{tr('searchTrigger')}</span><kbd class="kbd" aria-hidden="true">Ctrl K</kbd>
         </button>
         <Menu label={tr('themeLabel')} icon={theme.choice === 'system' ? 'monitor' : theme.choice === 'dark' ? 'moon' : 'sun'} width={180}>

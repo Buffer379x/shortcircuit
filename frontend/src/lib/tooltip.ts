@@ -30,9 +30,9 @@ export const tip: Action<HTMLElement, string> = (node, text) => {
   let timer = 0;
   const enter = () => {
     clearTimeout(timer);
-    timer = window.setTimeout(() => show(node, current), 350);
+    if (current) timer = window.setTimeout(() => show(node, current), 350);
   };
-  const focus = () => node.matches(':focus-visible') && show(node, current);
+  const focus = () => current && node.matches(':focus-visible') && show(node, current);
   const leave = () => {
     clearTimeout(timer);
     hide();
