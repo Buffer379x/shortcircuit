@@ -1,6 +1,6 @@
 # Release verification and rollback
 
-This procedure verifies a release candidate (currently `0.8.0-preview.1`, upgrading from `0.7.0-preview.1` or `0.6.0-preview.2`) for the owner's Unraid host with Nginx Proxy Manager (NPM). It separates checks that run in CI or a disposable local environment from checks that need the target host, the real proxy, real domains, or a person with a specific device. A release, a new image or template tag, and any change to the live Unraid host, proxy, domains, or data require the owner's explicit approval. [Testing](TESTING.md) · [Unraid installation](UNRAID_INSTALLATION.md) · [Reverse proxy](REVERSE_PROXY.md) · [Backup and restore](BACKUP_RESTORE.md)
+This procedure verifies a release candidate (currently `0.8.0-preview.2`, upgrading from `0.8.0-preview.1`, `0.7.0-preview.1`, or `0.6.0-preview.2`) for the owner's Unraid host with Nginx Proxy Manager (NPM). It separates checks that run in CI or a disposable local environment from checks that need the target host, the real proxy, real domains, or a person with a specific device. A release, a new image or template tag, and any change to the live Unraid host, proxy, domains, or data require the owner's explicit approval. [Testing](TESTING.md) · [Unraid installation](UNRAID_INSTALLATION.md) · [Reverse proxy](REVERSE_PROXY.md) · [Backup and restore](BACKUP_RESTORE.md)
 
 ## What the candidate changes on upgrade
 

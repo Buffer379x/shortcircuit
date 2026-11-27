@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.0-preview.2
+
 - Health: on phones and narrow containers each monitored link is a card with its result, last check, response time, and priority switch.
 
 ## 0.8.0-preview.1

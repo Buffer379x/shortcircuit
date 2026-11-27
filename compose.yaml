@@ -1,6 +1,6 @@
 services:
   shortcircuit:
-    image: shortcircuit:0.8.0-preview.1
+    image: shortcircuit:0.8.0-preview.2
     build:
       context: .
       args:
