@@ -31,13 +31,15 @@ RUN mkdir -p /notices/rust && cd /usr/local/cargo/registry/src && \
     find . -type f \( -iname 'license*' -o -iname 'copying*' -o -iname 'notice*' -o -iname 'copyright*' \) \
     -exec cp --parents --target-directory=/notices/rust {} +
 
-FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS runtime
+FROM debian:bookworm-slim@sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e AS runtime
 LABEL org.opencontainers.image.title="ShortCircuit" \
       org.opencontainers.image.description="Self-hosted URL shortener and link management" \
       org.opencontainers.image.source="https://github.com/Buffer379x/shortcircuit" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="0.8.0-preview.2"
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+# The pinned base can lag behind Debian security updates, so apply them at build time.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && install -d -m 0700 -o 10001 -g 10001 /data
 COPY --from=build /build/target/release/shortcircuit /usr/local/bin/shortcircuit
