@@ -1,6 +1,6 @@
 # Project status
 
-**November 27, 2026 · 0.8.0-preview.1, schema version 24.** Architecture and design are approved for implementation. Existing links are recreated manually. The handoff's Stage 1 items are implemented in source and verified locally. Target-host acceptance and release approval are pending. [Quality review](QUALITY_REVIEW.md) · [Improvement plan](IMPROVEMENT_PLAN.md) · [Release verification](RELEASE_VERIFICATION.md)
+**November 27, 2026 · 0.8.0-preview.2, schema version 24.** Architecture and design are approved for implementation. Existing links are recreated manually. The handoff's Stage 1 items are implemented in source and verified locally. Target-host acceptance and release approval are pending. [Quality review](QUALITY_REVIEW.md) · [Improvement plan](IMPROVEMENT_PLAN.md) · [Release verification](RELEASE_VERIFICATION.md)
 
 | Area | Status |
 |---|---|
@@ -20,7 +20,7 @@
 | Destination policy | Opt-in allow and block rules for destination hosts, enforced on every destination write and on each redirect before visits or one-time access are consumed. |
 | Database verification | The schema tests cover compatibility, the redirect index, and exact stored destinations. The authentication and lifecycle migrations have additional transactional regression tests. |
 | Build and container verification | GitHub Actions checks the Rust integration tests, Clippy, Rustfmt, frontend types and assets, and a non-root container with a Chromium smoke test. [CI results](https://github.com/Buffer379x/shortcircuit/actions) |
-| GitHub | The owner approved public source development and container previews. The repository uses MIT. [Repository](https://github.com/Buffer379x/shortcircuit) · [Preview](https://github.com/Buffer379x/shortcircuit/releases/tag/v0.8.0-preview.1) |
+| GitHub | The owner approved public source development and container previews. The repository uses MIT. [Repository](https://github.com/Buffer379x/shortcircuit) · [Preview](https://github.com/Buffer379x/shortcircuit/releases/tag/v0.8.0-preview.2) |
 | UI and branding | The embedded Svelte admin interface follows the Polar Signal design system: shell with grouped navigation and command palette, overview, links with details pages, analytics, health, QR Studio, domains, import and export, API keys, system, settings, and sign-in, in English and German with dark, light, or system appearance. Brand assets, public pages, and the Unraid icon use the new mark. [Design system](DESIGN_SYSTEM.md) |
 | Browser verification | CI exercises the integrated administration workflow in Chromium. The [capture instructions](../README.md) cover the separate design preview. |
 | Unraid | The project owner confirmed that preview.1 starts through Unraid and displays the Docker icon and browser favicon. The amd64 template supports a Docker-managed data volume and private administration through a reverse proxy. [Installation](UNRAID_INSTALLATION.md) |
@@ -46,7 +46,7 @@ The [quality review](QUALITY_REVIEW.md) found one P0 issue: the read-only contai
 
 ## Release readiness
 
-**Not ready for a stable release.** On November 27, 2026 the owner approved merging the Polar Signal redesign and publishing it as `0.8.0-preview.1`, a development preview. On November 26, 2026 the owner had approved `0.7.0-preview.1`. Template decision: keep the Docker volume, which works with the template alone, and enable daily backups and the Trusted proxies field. The source passes every local check, including the container lifecycle with the image as shipped and an upgrade from the published preview with 300,000 analytics events. What remains open:
+**Not ready for a stable release.** On November 27, 2026 the owner approved merging the Polar Signal redesign and publishing it as `0.8.0-preview.1`, a development preview, followed by `0.8.0-preview.2` with the mobile Health cards. On November 26, 2026 the owner had approved `0.7.0-preview.1`. Template decision: keep the Docker volume, which works with the template alone, and enable daily backups and the Trusted proxies field. The source passes every local check, including the container lifecycle with the image as shipped and an upgrade from the published preview with 300,000 analytics events. What remains open:
 
 - **CI has not run on this working tree**, and the workspace has no Git metadata, so no commits exist. Commit the changes in focused pieces and let Core checks run before any release step.
 - **Owner decisions:**
