@@ -2,15 +2,30 @@ use axum::{
     Router,
     body::Bytes,
     extract::Request,
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
     routing::get,
 };
 
 const INDEX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/admin.html"));
-const JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/admin.js"));
-const CSS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/admin.css"));
+const JS: Encoded = Encoded {
+    identity: include_bytes!(concat!(env!("OUT_DIR"), "/admin.js")),
+    gzip: include_bytes!(concat!(env!("OUT_DIR"), "/admin.js.gz")),
+    brotli: include_bytes!(concat!(env!("OUT_DIR"), "/admin.js.br")),
+};
+const CSS: Encoded = Encoded {
+    identity: include_bytes!(concat!(env!("OUT_DIR"), "/admin.css")),
+    gzip: include_bytes!(concat!(env!("OUT_DIR"), "/admin.css.gz")),
+    brotli: include_bytes!(concat!(env!("OUT_DIR"), "/admin.css.br")),
+};
+
+/// An asset in its original form and precompressed by the frontend build.
+struct Encoded {
+    identity: &'static [u8],
+    gzip: &'static [u8],
+    brotli: &'static [u8],
+}
 const FONT_SANS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/geist-latin.woff2"));
 const FONT_SANS_EXT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/geist-latin-ext.woff2"));
 const FONT_MONO: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/geist-mono-latin.woff2"));
@@ -30,11 +45,11 @@ pub(super) fn routes() -> Router {
         )
         .route(
             "/assets/admin.js",
-            get(|| async { asset("text/javascript; charset=utf-8", JS) }),
+            get(|headers: HeaderMap| async move { encoded("text/javascript; charset=utf-8", &JS, &headers) }),
         )
         .route(
             "/assets/admin.css",
-            get(|| async { asset("text/css; charset=utf-8", CSS) }),
+            get(|headers: HeaderMap| async move { encoded("text/css; charset=utf-8", &CSS, &headers) }),
         )
         .route(
             "/assets/geist-latin-wght-normal.woff2",
@@ -78,6 +93,51 @@ pub(super) fn routes() -> Router {
         )
 }
 
+/// Serves the smallest encoding the client accepts. A missing compressed copy (a frontend built
+/// without the compression step) falls back to the original bytes.
+fn encoded(kind: &'static str, asset_bytes: &Encoded, headers: &HeaderMap) -> Response {
+    let accepted = headers
+        .get_all(header::ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .filter_map(|item| {
+            let mut parts = item.split(';');
+            let name = parts.next()?.trim().to_ascii_lowercase();
+            let refused = parts.any(|p| {
+                matches!(
+                    p.trim().replace(' ', "").as_str(),
+                    "q=0" | "q=0.0" | "q=0.00" | "q=0.000"
+                )
+            });
+            (!refused).then_some(name)
+        })
+        .collect::<Vec<_>>();
+    let choice = if accepted.iter().any(|n| n == "br") && !asset_bytes.brotli.is_empty() {
+        Some(("br", asset_bytes.brotli))
+    } else if accepted.iter().any(|n| n == "gzip") && !asset_bytes.gzip.is_empty() {
+        Some(("gzip", asset_bytes.gzip))
+    } else {
+        None
+    };
+    let mut response = match choice {
+        Some((encoding, bytes)) => {
+            let mut response = asset(kind, bytes);
+            if response.status().is_success() {
+                response
+                    .headers_mut()
+                    .insert(header::CONTENT_ENCODING, HeaderValue::from_static(encoding));
+            }
+            response
+        }
+        None => asset(kind, asset_bytes.identity),
+    };
+    response
+        .headers_mut()
+        .insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+    response
+}
+
 fn asset(kind: &'static str, bytes: &'static [u8]) -> Response {
     if bytes.is_empty() {
         return (
@@ -102,4 +162,64 @@ pub(super) async fn security_headers(request: Request, next: Next) -> Response {
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE: Encoded = Encoded {
+        identity: b"plain",
+        gzip: b"gz",
+        brotli: b"br",
+    };
+
+    fn served(accept: Option<&str>) -> (Option<String>, String) {
+        let mut headers = HeaderMap::new();
+        if let Some(value) = accept {
+            headers.insert(
+                header::ACCEPT_ENCODING,
+                HeaderValue::from_str(value).unwrap(),
+            );
+        }
+        let response = encoded("text/css; charset=utf-8", &SAMPLE, &headers);
+        assert_eq!(response.headers()[header::VARY], "accept-encoding");
+        let encoding = response
+            .headers()
+            .get(header::CONTENT_ENCODING)
+            .map(|v| v.to_str().unwrap().to_owned());
+        (
+            encoding,
+            response.headers()[header::CONTENT_TYPE]
+                .to_str()
+                .unwrap()
+                .to_owned(),
+        )
+    }
+
+    #[test]
+    fn serves_the_best_accepted_encoding() {
+        assert_eq!(served(Some("gzip, deflate, br")).0.as_deref(), Some("br"));
+        assert_eq!(served(Some("gzip")).0.as_deref(), Some("gzip"));
+        assert_eq!(served(Some("br;q=0, gzip")).0.as_deref(), Some("gzip"));
+        assert_eq!(served(Some("identity")).0, None);
+        assert_eq!(served(None).0, None);
+        assert_eq!(served(Some("gzip")).1, "text/css; charset=utf-8");
+    }
+
+    #[test]
+    fn falls_back_when_no_compressed_copy_exists() {
+        let only_plain = Encoded {
+            identity: b"plain",
+            gzip: b"",
+            brotli: b"",
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ACCEPT_ENCODING,
+            HeaderValue::from_static("br, gzip"),
+        );
+        let response = encoded("text/javascript", &only_plain, &headers);
+        assert!(response.headers().get(header::CONTENT_ENCODING).is_none());
+    }
 }
