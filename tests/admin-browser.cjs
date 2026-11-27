@@ -1146,12 +1146,18 @@ async function verify() {
       patched = operationsPatch();
       await operationsBar.getByRole('button', { name: 'Save changes', exact: true }).click();
       const savedBackups = await (await patched).json();
-      assert.deepEqual(savedBackups.backup_interval_hours, { value: 12, source: 'saved', container: null });
+      const { container: backupContainer, ...savedInterval } = savedBackups.backup_interval_hours;
+      assert.deepEqual(savedInterval, { value: 12, source: 'saved' });
+      // The container value is whatever the environment passes (compose sets 0, a bare image
+      // none). Saving here keeps it and only overrides it.
+      assert.ok(backupContainer === null || Number.isInteger(backupContainer), String(backupContainer));
       await toast('Operations settings saved').waitFor();
       await operationsBar.waitFor({ state: 'hidden' });
+      // Reset returns to the container value when the environment sets one, else the default.
       patched = operationsPatch();
-      await backupsPanel.getByRole('button', { name: 'Reset to default', exact: true }).click();
-      assert.equal((await (await patched).json()).backup_interval_hours.value, 24);
+      const backupReset = backupContainer === null ? 'Reset to default' : 'Reset to container value';
+      await backupsPanel.getByRole('button', { name: backupReset, exact: true }).click();
+      assert.equal((await (await patched).json()).backup_interval_hours.value, backupContainer ?? 24);
 
       const secret = 'https://hooks.example/services/synthetic-browser-secret';
       const notificationsPanel = page.getByRole('region', { name: 'Notifications', exact: true });
