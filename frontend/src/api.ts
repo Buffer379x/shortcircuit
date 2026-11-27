@@ -174,6 +174,18 @@ export interface LinkMonitorSummary {
   failure: string | null;
 }
 
+/** A stored preview image (API v1, additive). The image is `GET /links/{id}/preview`. */
+export interface LinkPreviewSummary {
+  /** `image`: the page's og:image or twitter:image. `icon`: the page icon. */
+  kind: 'image' | 'icon';
+  width: number;
+  height: number;
+  /** Unix seconds. */
+  fetched_at: number;
+  /** Scheme, host, and port of the image URL. */
+  origin: string;
+}
+
 export interface CatalogLink extends Link, LinkOrganization {
   selection_key: string;
   recorded_redirects: number;
@@ -192,6 +204,7 @@ export interface CatalogLink extends Link, LinkOrganization {
   /** Redirects per UTC day for the last 14 days, oldest first. */
   trend: number[];
   monitor: LinkMonitorSummary | null;
+  preview: LinkPreviewSummary | null;
 }
 
 export interface BulkLinkResult {
@@ -292,7 +305,8 @@ export function createApi(csrf: () => string | undefined, request = fetch): Api 
       const field = typeof problem?.field === 'string' && /^[a-z_]{1,32}$/.test(problem.field) ? problem.field : null;
       throw new ApiError(response.status, code, row, row === null ? null : field);
     }
-    if (response.status === 204) return undefined as T;
+    // 204, and a 202 that only confirms a queued job, carry no body.
+    if (response.status === 204 || (response.status === 202 && !response.headers.get('content-type')?.includes('json'))) return undefined as T;
     return responseFormat === 'json' ? response.json() : response as T;
   };
 }
@@ -334,6 +348,9 @@ export interface OperationsSettings {
   monitor_interval_hours: OperationsSetting<number>;
   monitor_priority_hours: OperationsSetting<number>;
   title_lookup_enabled: OperationsSetting<boolean>;
+  preview_images_enabled: OperationsSetting<boolean>;
+  /** Whether previews are fetched: preview images and title lookup are both on. */
+  preview_images_active: boolean;
   backup_interval_hours: OperationsSetting<number>;
   backup_keep: OperationsSetting<number>;
   notification_webhook: OperationsSecret;

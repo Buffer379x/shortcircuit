@@ -15,6 +15,7 @@ mod input;
 mod monitor;
 mod notifications;
 mod outbound;
+mod previews;
 mod protection;
 mod public_pages;
 mod qr;

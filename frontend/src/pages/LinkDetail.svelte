@@ -9,10 +9,11 @@
   import Badge from '../lib/ui/Badge.svelte';
   import CopyButton from '../lib/ui/CopyButton.svelte';
   import Empty from '../lib/ui/Empty.svelte';
+  import LinkPreview from '../lib/ui/LinkPreview.svelte';
   import Menu from '../lib/ui/Menu.svelte';
   import TagChip from '../lib/ui/TagChip.svelte';
   import TimeChart from '../lib/charts/TimeChart.svelte';
-  import { app, shortUrl } from '../lib/app.svelte';
+  import { app, loadPreviewSetting, shortUrl } from '../lib/app.svelte';
   import { ago, date, day, num, splitUrl, when } from '../lib/fmt';
   import { tr } from '../lib/locale.svelte';
   import { linksChanged, openCreate, overlays } from '../lib/overlays.svelte';
@@ -48,6 +49,11 @@
   let historyCount = $state<number | null>(null);
   let working = $state(false);
   let request = 0;
+  // Preview refresh: the fetch runs in the background, so the page polls briefly for the result.
+  let previewBusy = $state(false);
+  let previewWaiting = $state(false);
+  let previewPoll: ReturnType<typeof setTimeout> | undefined;
+  void loadPreviewSetting();
 
   const uid = $props.id();
   const url = $derived(link ? shortUrl(link) : '');
@@ -95,6 +101,7 @@
 
   onDestroy(() => {
     app.crumb = '';
+    clearTimeout(previewPoll);
   });
 
   async function loadAll(current: number) {
@@ -202,6 +209,45 @@
     await app.api<LinkOrganization>(`/links/${current.id}/organization`, 'PATCH', { key: current.selection_key, ...change });
     return tr(message);
   });
+
+  async function refreshPreview() {
+    if (!link || previewBusy) return;
+    const current = link.id;
+    previewBusy = true;
+    try {
+      await app.api(`/links/${current}/preview/refresh`, 'POST');
+      toast(tr('pvQueued'));
+      previewWaiting = true;
+      link = { ...link, preview: null };
+      pollPreview(current, 0);
+    } catch (failure) {
+      toast(tr(problemMessage(failure)), { tone: 'error' });
+    } finally {
+      previewBusy = false;
+    }
+  }
+
+  function pollPreview(current: number, attempt: number) {
+    clearTimeout(previewPoll);
+    if (attempt >= 10) {
+      previewWaiting = false;
+      return;
+    }
+    previewPoll = setTimeout(async () => {
+      try {
+        const next = await fetchLink(current);
+        if (!next || link?.id !== current) return;
+        if (next.preview) {
+          link = { ...link, preview: next.preview };
+          previewWaiting = false;
+          return;
+        }
+      } catch {
+        /* Keep polling; the next attempt or a reload shows the result. */
+      }
+      pollPreview(current, attempt + 1);
+    }, 3000);
+  }
 
   function onRulesSaved(saved: Policy) {
     policy = saved;
@@ -326,27 +372,52 @@
               {/if}
             </div>
           </section>
-          <section class="panel">
-            <header class="panel-head">
-              <div class="panel-title"><h2>{tr('detSettingsTitle')}</h2></div>
-              <span class="spacer"></span>
-              <button type="button" class="btn" data-variant="ghost" data-size="sm" onclick={() => (overlays.editId = link!.id)}>{tr('detEdit')}</button>
-            </header>
-            <dl class="facts panel-body">
-              {#if policy}
-                <dt>{tr('detRedirect')}</dt><dd>{policy.status} · {policy.status === 301 || policy.status === 308 ? tr('permanent') : tr('temporary')}</dd>
-                <dt>{tr('detQuery')}</dt><dd>{policy.forward_query ? tr('detForwarded') : tr('detNotForwarded')}</dd>
-                <dt>{tr('detExtraPath')}</dt><dd>{policy.forward_path ? tr('detAllowed') : tr('detNotAllowed')}</dd>
-                <dt>{tr('detSearchEngines')}</dt><dd>{policy.noindex ? tr('detNoIndex') : tr('detIndexable')}</dd>
-              {/if}
-              <dt>{tr('detAnalytics')}</dt><dd>{link.analytics_enabled ? tr('detAnalyticsRecorded') : tr('detOff')}</dd>
-              {#if link.monitor !== undefined}
-                <dt>{tr('detMonitoring')}</dt><dd>{link.monitor ? (link.monitor.priority ? tr('detMonitoredPriority') : tr('detMonitored')) : tr('detOff')}</dd>
-              {/if}
-              <dt>{tr('detCreated')}</dt><dd>{date(link.created_at)}</dd>
-              <dt>{tr('detId')}</dt><dd class="mono">{link.id}</dd>
-            </dl>
-          </section>
+          <div class="stack">
+            {#if app.previews}
+              <section class="panel" aria-labelledby="{uid}-preview">
+                <header class="panel-head">
+                  <div class="panel-title"><h2 id="{uid}-preview">{tr('pvTitle')}</h2><p>{tr('pvHint')}</p></div>
+                  <span class="spacer"></span>
+                  {#if !link.protection}
+                    <button type="button" class="btn" data-variant="ghost" data-size="sm" disabled={previewBusy} aria-busy={previewBusy} onclick={refreshPreview}><Icon name="refresh-cw" />{tr('pvRefresh')}</button>
+                  {/if}
+                </header>
+                <div class="panel-body stack">
+                  <LinkPreview id={link.id} preview={link.preview} size="card" />
+                  {#if link.preview}
+                    <dl class="facts">
+                      <dt>{tr('pvKind')}</dt><dd>{link.preview.kind === 'icon' ? tr('pvKindIcon') : tr('pvKindImage')}</dd>
+                      <dt>{tr('pvSource')}</dt><dd class="mono truncate">{link.preview.origin}</dd>
+                      <dt>{tr('pvFetched')}</dt><dd>{when(link.preview.fetched_at)}</dd>
+                    </dl>
+                  {:else}
+                    <p class="muted" role="status">{link.protection ? tr('pvProtected') : previewWaiting ? tr('pvPending') : tr('pvNone')}</p>
+                  {/if}
+                </div>
+              </section>
+            {/if}
+            <section class="panel">
+              <header class="panel-head">
+                <div class="panel-title"><h2>{tr('detSettingsTitle')}</h2></div>
+                <span class="spacer"></span>
+                <button type="button" class="btn" data-variant="ghost" data-size="sm" onclick={() => (overlays.editId = link!.id)}>{tr('detEdit')}</button>
+              </header>
+              <dl class="facts panel-body">
+                {#if policy}
+                  <dt>{tr('detRedirect')}</dt><dd>{policy.status} · {policy.status === 301 || policy.status === 308 ? tr('permanent') : tr('temporary')}</dd>
+                  <dt>{tr('detQuery')}</dt><dd>{policy.forward_query ? tr('detForwarded') : tr('detNotForwarded')}</dd>
+                  <dt>{tr('detExtraPath')}</dt><dd>{policy.forward_path ? tr('detAllowed') : tr('detNotAllowed')}</dd>
+                  <dt>{tr('detSearchEngines')}</dt><dd>{policy.noindex ? tr('detNoIndex') : tr('detIndexable')}</dd>
+                {/if}
+                <dt>{tr('detAnalytics')}</dt><dd>{link.analytics_enabled ? tr('detAnalyticsRecorded') : tr('detOff')}</dd>
+                {#if link.monitor !== undefined}
+                  <dt>{tr('detMonitoring')}</dt><dd>{link.monitor ? (link.monitor.priority ? tr('detMonitoredPriority') : tr('detMonitored')) : tr('detOff')}</dd>
+                {/if}
+                <dt>{tr('detCreated')}</dt><dd>{date(link.created_at)}</dd>
+                <dt>{tr('detId')}</dt><dd class="mono">{link.id}</dd>
+              </dl>
+            </section>
+          </div>
         </div>
       {:else if tab === 'analytics'}
         {#if !link.analytics_enabled}

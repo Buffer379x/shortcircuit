@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use crate::{
     history::Actor,
+    previews,
     titles::{LookupEntry, RequestError, TitleLookup},
 };
 
@@ -17,6 +18,8 @@ pub(super) fn routes(titles: TitleLookup) -> Router<AppState> {
     Router::new()
         .route("/api/v1/title-lookups", get(list).post(queue_untitled))
         .route("/api/v1/links/{id}/title-lookup", post(queue_link))
+        // Browser sessions only, like title lookups: it starts outgoing requests.
+        .route("/api/v1/links/{id}/preview/refresh", post(refresh_preview))
         .layer(Extension(titles))
 }
 
@@ -86,5 +89,32 @@ async fn queue_link(
         .request(&state.pool, resource_id(id)?, &requester(&actor))
         .await
         .map_err(problem)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+fn preview_problem(error: previews::RequestError) -> Problem {
+    match error {
+        previews::RequestError::Disabled => {
+            Problem(StatusCode::CONFLICT, "preview_images_disabled")
+        }
+        previews::RequestError::TitleLookupRequired => {
+            Problem(StatusCode::CONFLICT, "title_lookup_required")
+        }
+        previews::RequestError::Missing => Problem(StatusCode::NOT_FOUND, "not_found"),
+        previews::RequestError::Protected => Problem(StatusCode::CONFLICT, "preview_protected"),
+        previews::RequestError::Database => Problem::unavailable(),
+    }
+}
+
+/// Clears the link's preview and queues a new fetch from its destination page.
+async fn refresh_preview(
+    State(state): State<AppState>,
+    Extension(titles): Extension<TitleLookup>,
+    id: Result<Path<i64>, PathRejection>,
+) -> Result<StatusCode, Problem> {
+    titles
+        .request_preview(&state.pool, resource_id(id)?)
+        .await
+        .map_err(preview_problem)?;
     Ok(StatusCode::ACCEPTED)
 }

@@ -11,6 +11,8 @@ export const app = $state({
   /** Name of the item shown on a detail page, for the breadcrumb. */
   crumb: '',
   counts: { links: null as number | null, unreachable: 0, domains: null as number | null, keys: null as number | null },
+  /** Whether link preview images are shown (Settings > Operations), or null until loaded. */
+  previews: null as boolean | null,
 });
 
 export function tagColor(name: string) {
@@ -27,5 +29,17 @@ export async function loadTags() {
     app.tags = result.items;
   } catch {
     /* Tags only add colors and suggestions; pages show their own errors. */
+  }
+}
+
+/** Loads once per session whether preview images are on. Settings > Operations updates it. */
+export async function loadPreviewSetting() {
+  if (app.previews !== null) return;
+  try {
+    const settings = await app.api<{ preview_images_active: boolean }>('/settings/operations');
+    app.previews = settings.preview_images_active;
+  } catch {
+    /* Previews only add thumbnails; without the setting they stay hidden. */
+    app.previews = false;
   }
 }

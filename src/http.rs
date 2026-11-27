@@ -117,7 +117,11 @@ pub fn public_router_with_controls(
 pub(crate) async fn response_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // A handler may allow private caching, as the link preview image does; nothing else is
+    // cached.
+    headers
+        .entry(header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
     headers
         .entry(header::REFERRER_POLICY)
         .or_insert(HeaderValue::from_static("no-referrer"));

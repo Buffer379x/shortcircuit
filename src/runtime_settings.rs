@@ -5,8 +5,9 @@
 //! authoritative for that setting until it is reset. Nothing is saved after an upgrade, so
 //! existing installations keep their container values.
 //!
-//! The effective settings are published through a watch channel. The monitor, title lookup,
-//! backup scheduler, and notifier read the current value on each pass and wake on a change.
+//! The effective settings are published through a watch channel. The monitor, title lookup
+//! with its preview images, backup scheduler, and notifier read the current value on each pass
+//! and wake on a change.
 //! Connector infrastructure, hosts, proxies, rate limits, listeners, and the log level stay
 //! environment-only.
 
@@ -67,6 +68,7 @@ pub struct OperationsEnvironment {
     monitor_interval: Option<u16>,
     monitor_priority: Option<u16>,
     title_lookup: Option<bool>,
+    preview_images: Option<bool>,
     backup_interval: Option<u16>,
     backup_keep: Option<u16>,
     notifications: NotificationEnv,
@@ -117,6 +119,7 @@ impl OperationsEnvironment {
             monitor_interval,
             monitor_priority,
             title_lookup: flag("TITLE_LOOKUP_ENABLED")?,
+            preview_images: flag("PREVIEW_IMAGES_ENABLED")?,
             backup_interval,
             backup_keep,
             notifications: NotificationEnv::from_env(&read)?,
@@ -135,6 +138,7 @@ struct Saved {
     monitor_interval_hours: Option<u16>,
     monitor_priority_hours: Option<u16>,
     title_lookup_enabled: Option<bool>,
+    preview_images_enabled: Option<bool>,
     backup_interval_hours: Option<u16>,
     backup_keep: Option<u16>,
     notification_webhook_url: Option<String>,
@@ -150,6 +154,8 @@ pub(crate) struct Effective {
     pub(crate) monitor_interval_hours: Setting<u16>,
     pub(crate) monitor_priority_hours: Setting<u16>,
     pub(crate) title_lookup_enabled: Setting<bool>,
+    /// Effective only while title lookup is on too; see `previews_active`.
+    pub(crate) preview_images_enabled: Setting<bool>,
     pub(crate) backup_interval_hours: Setting<u16>,
     pub(crate) backup_keep: Setting<u16>,
     webhook_url: Option<String>,
@@ -163,6 +169,14 @@ pub(crate) struct Effective {
     pub(crate) notifications: Option<Arc<NotificationConfig>>,
 }
 
+impl Effective {
+    /// Whether preview images are fetched. They come from the title lookup page request, so
+    /// they need both switches.
+    pub(crate) fn previews_active(&self) -> bool {
+        self.title_lookup_enabled.value && self.preview_images_enabled.value
+    }
+}
+
 /// The API representation. It never contains the webhook URL or the authorization value.
 #[derive(Serialize)]
 pub(crate) struct View {
@@ -170,6 +184,9 @@ pub(crate) struct View {
     monitor_interval_hours: Setting<u16>,
     monitor_priority_hours: Setting<u16>,
     title_lookup_enabled: Setting<bool>,
+    preview_images_enabled: Setting<bool>,
+    /// Whether previews are fetched: both preview images and title lookup are on.
+    preview_images_active: bool,
     backup_interval_hours: Setting<u16>,
     backup_keep: Setting<u16>,
     notification_webhook: Secret,
@@ -243,6 +260,11 @@ fn resolve(
         monitor_priority_hours.value = interval;
     }
     let title_lookup_enabled = pick(saved.title_lookup_enabled, env.title_lookup, false);
+    // Off by default: every preview is an outgoing request that must be turned on explicitly.
+    let preview_images_enabled = pick(saved.preview_images_enabled, env.preview_images, false);
+    if !strict && preview_images_enabled.value && !title_lookup_enabled.value {
+        tracing::warn!("preview images need title lookup; previews stay off until it is on");
+    }
     let backup_interval_hours = pick(
         saved.backup_interval_hours,
         env.backup_interval,
@@ -337,6 +359,7 @@ fn resolve(
         monitor_interval_hours,
         monitor_priority_hours,
         title_lookup_enabled,
+        preview_images_enabled,
         backup_interval_hours,
         backup_keep,
         webhook_url,
@@ -359,6 +382,8 @@ pub(crate) struct Patch {
     monitor_interval_hours: Option<i64>,
     monitor_priority_hours: Option<i64>,
     title_lookup_enabled: Option<bool>,
+    /// Requires title lookup to be on when it is turned on.
+    preview_images_enabled: Option<bool>,
     backup_interval_hours: Option<i64>,
     backup_keep: Option<i64>,
     /// An HTTPS URL, or an empty string to turn notifications off.
@@ -372,11 +397,12 @@ pub(crate) struct Patch {
     reset: Vec<String>,
 }
 
-const FIELDS: [&str; 11] = [
+const FIELDS: [&str; 12] = [
     "monitor_enabled",
     "monitor_interval_hours",
     "monitor_priority_hours",
     "title_lookup_enabled",
+    "preview_images_enabled",
     "backup_interval_hours",
     "backup_keep",
     "notification_webhook_url",
@@ -455,6 +481,12 @@ impl Patch {
         }
         if set("title_lookup_enabled", self.title_lookup_enabled.is_some())? {
             saved.title_lookup_enabled = self.title_lookup_enabled;
+        }
+        if set(
+            "preview_images_enabled",
+            self.preview_images_enabled.is_some(),
+        )? {
+            saved.preview_images_enabled = self.preview_images_enabled;
         }
         if set(
             "backup_interval_hours",
@@ -574,7 +606,7 @@ struct Shared {
 }
 
 const SELECT_SAVED: &str = "SELECT monitor_enabled, monitor_interval_hours, monitor_priority_hours,
-        title_lookup_enabled, backup_interval_hours, backup_keep, notification_webhook_url,
+        title_lookup_enabled, preview_images_enabled, backup_interval_hours, backup_keep, notification_webhook_url,
         notification_authorization, notification_events, notification_click_milestones,
         notification_expiry_notice_hours
     FROM runtime_settings WHERE id = 1";
@@ -620,6 +652,8 @@ impl RuntimeSettings {
             monitor_interval_hours: effective.monitor_interval_hours.clone(),
             monitor_priority_hours: effective.monitor_priority_hours.clone(),
             title_lookup_enabled: effective.title_lookup_enabled.clone(),
+            preview_images_enabled: effective.preview_images_enabled.clone(),
+            preview_images_active: effective.previews_active(),
             backup_interval_hours: effective.backup_interval_hours.clone(),
             backup_keep: effective.backup_keep.clone(),
             notification_webhook: effective.webhook.clone(),
@@ -648,6 +682,11 @@ impl RuntimeSettings {
             .await?;
         let next = patch.apply(saved.clone()).map_err(SaveError::Invalid)?;
         let effective = resolve(&self.0.env, &next, true).map_err(SaveError::Invalid)?;
+        // Previews come from the title lookup page request. Turning them on while title lookup
+        // stays off would do nothing, so say so. Turning title lookup off later only pauses them.
+        if patch.preview_images_enabled == Some(true) && !effective.title_lookup_enabled.value {
+            return Err(SaveError::Invalid("title_lookup_required"));
+        }
         // Delivery would refuse a private literal address; say so when it is entered.
         if patch
             .notification_webhook_url
@@ -669,8 +708,8 @@ impl RuntimeSettings {
         }
         sqlx::query(
             "UPDATE runtime_settings SET monitor_enabled = ?, monitor_interval_hours = ?,
-                 monitor_priority_hours = ?, title_lookup_enabled = ?, backup_interval_hours = ?,
-                 backup_keep = ?, notification_webhook_url = ?, notification_authorization = ?,
+                 monitor_priority_hours = ?, title_lookup_enabled = ?, preview_images_enabled = ?,
+                 backup_interval_hours = ?, backup_keep = ?, notification_webhook_url = ?, notification_authorization = ?,
                  notification_events = ?, notification_click_milestones = ?,
                  notification_expiry_notice_hours = ?, updated_at = unixepoch()
              WHERE id = 1",
@@ -679,6 +718,7 @@ impl RuntimeSettings {
         .bind(next.monitor_interval_hours)
         .bind(next.monitor_priority_hours)
         .bind(next.title_lookup_enabled)
+        .bind(next.preview_images_enabled)
         .bind(next.backup_interval_hours)
         .bind(next.backup_keep)
         .bind(&next.notification_webhook_url)
@@ -724,6 +764,7 @@ fn changed_fields(before: &Saved, after: &Saved) -> Vec<&'static str> {
         before.monitor_interval_hours != after.monitor_interval_hours,
         before.monitor_priority_hours != after.monitor_priority_hours,
         before.title_lookup_enabled != after.title_lookup_enabled,
+        before.preview_images_enabled != after.preview_images_enabled,
         before.backup_interval_hours != after.backup_interval_hours,
         before.backup_keep != after.backup_keep,
         before.notification_webhook_url != after.notification_webhook_url,
@@ -759,9 +800,9 @@ async fn reschedule_sooner(
 }
 
 /// Removes saved values from a verified snapshot that would activate outgoing requests or that
-/// are secrets: the health check and title lookup switches, the webhook URL, and its
-/// authorization. A restored installation then uses its own container values for them until an
-/// administrator saves them again. Older schemas without the table are left unchanged.
+/// are secrets: the health check, title lookup, and preview image switches, the webhook URL, and
+/// its authorization. A restored installation then uses its own container values for them until
+/// an administrator saves them again. Older schemas without the table are left unchanged.
 pub(crate) async fn scrub_snapshot(
     connection: &mut sqlx::SqliteConnection,
 ) -> Result<(), sqlx::Error> {
@@ -775,8 +816,19 @@ pub(crate) async fn scrub_snapshot(
             "UPDATE runtime_settings SET monitor_enabled = NULL, title_lookup_enabled = NULL,
                  notification_webhook_url = NULL, notification_authorization = NULL",
         )
-        .execute(connection)
+        .execute(&mut *connection)
         .await?;
+        let previews: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pragma_table_info('runtime_settings')
+                            WHERE name = 'preview_images_enabled')",
+        )
+        .fetch_one(&mut *connection)
+        .await?;
+        if previews {
+            sqlx::query("UPDATE runtime_settings SET preview_images_enabled = NULL")
+                .execute(connection)
+                .await?;
+        }
     }
     Ok(())
 }

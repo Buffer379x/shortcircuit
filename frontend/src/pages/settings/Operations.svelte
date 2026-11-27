@@ -1,5 +1,6 @@
 <script lang="ts">
-  // Settings > Operations: health checks, title lookup, scheduled backups, and notifications.
+  // Settings > Operations: health checks, title lookup and preview images, scheduled backups,
+  // and notifications.
   // Switches apply at once. Intervals, retention, and notification events are staged and saved
   // through the unsaved-changes bar. The webhook and its Authorization header are write-only and
   // change only after a password confirmation. Each value shows where it comes from.
@@ -178,11 +179,21 @@
     }
   }
 
-  function toggle(field: 'monitor_enabled' | 'title_lookup_enabled', event: Event) {
+  const TOGGLED: Record<'monitor_enabled' | 'title_lookup_enabled' | 'preview_images_enabled', [keyof Messages, keyof Messages]> = {
+    monitor_enabled: ['opsHealthOn', 'opsHealthOff'],
+    title_lookup_enabled: ['opsTitlesOn', 'opsTitlesOff'],
+    preview_images_enabled: ['pvOn', 'pvOff'],
+  };
+
+  function toggle(field: keyof typeof TOGGLED, event: Event) {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
-    const done: keyof Messages = field === 'monitor_enabled' ? (enabled ? 'opsHealthOn' : 'opsHealthOff') : enabled ? 'opsTitlesOn' : 'opsTitlesOff';
-    void change(field, { [field]: enabled }, tr(done));
+    void change(field, { [field]: enabled }, tr(TOGGLED[field][enabled ? 0 : 1]));
   }
+
+  // The links list and link details show preview images only while previews are fetched.
+  $effect(() => {
+    if (settings) app.previews = settings.preview_images_active;
+  });
 
   function reset(field: string) {
     void change(field, { reset: [field] }, tr('opsResetDone'));
@@ -329,6 +340,16 @@
         {@render source('title_lookup_enabled', s.title_lookup_enabled)}
       </div>
       <div><input id="ops-titles-switch" class="switch" type="checkbox" checked={s.title_lookup_enabled.value} disabled={!!switching} onchange={(event) => toggle('title_lookup_enabled', event)} aria-labelledby="ops-title-lookup" aria-describedby="ops-title-lookup-hint" /></div>
+    </div>
+    <div class="setting">
+      <div>
+        <b id="ops-previews">{tr('pvSwitch')}</b>
+        <p id="ops-previews-hint">{tr('pvSwitchHint')}</p>
+        {#if !s.title_lookup_enabled.value}<p id="ops-previews-requires">{s.preview_images_enabled.value ? tr('pvPaused') : tr('pvSwitchNeedsTitles')}</p>{/if}
+        {@render source('preview_images_enabled', s.preview_images_enabled)}
+      </div>
+      <!-- Turning previews on needs title lookup; turning them off is always possible. -->
+      <div><input id="ops-previews-switch" class="switch" type="checkbox" checked={s.preview_images_enabled.value} disabled={!!switching || (!s.title_lookup_enabled.value && !s.preview_images_enabled.value)} onchange={(event) => toggle('preview_images_enabled', event)} aria-labelledby="ops-previews" aria-describedby={s.title_lookup_enabled.value ? 'ops-previews-hint' : 'ops-previews-hint ops-previews-requires'} /></div>
     </div>
   </section>
 

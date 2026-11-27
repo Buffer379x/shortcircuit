@@ -17,13 +17,14 @@ use tower::ServiceExt;
 const ORIGIN: &str = "https://admin.example";
 
 /// Tables that hold per-link state and are cleaned up when a link row is deleted.
-const LINK_TABLES: [&str; 8] = [
+const LINK_TABLES: [&str; 9] = [
     "link_tags",
     "link_protection",
     "link_redirect_policies",
     "link_history",
     "link_monitor",
     "link_title_lookups",
+    "link_previews",
     "analytics_events",
     "analytics_daily",
 ];
@@ -182,6 +183,7 @@ impl App {
              INSERT INTO link_monitor (link_id, priority) VALUES (?1, 1);
              INSERT INTO link_title_lookups (link_id, host, target, requested_by, status, completed_at)
              VALUES (?1, ?2, 'https://example.test/', 'admin', 'no_title', unixepoch());
+             INSERT INTO link_previews (link_id) VALUES (?1);
              INSERT INTO analytics_events (occurred_at, link_id, host, kind, visit_class, source)
              VALUES (unixepoch(), ?1, ?2, 'redirect', 'human', 'direct');
              INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, total)

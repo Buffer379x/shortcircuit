@@ -653,6 +653,7 @@ async fn scrub_snapshot(path: &Path) -> Result<(), RestoreError> {
     // Outbound work queued in the snapshot belongs to an earlier timeline.
     crate::notifications::after_restore(&mut *transaction).await?;
     crate::titles::discard_pending(&mut *transaction).await?;
+    crate::previews::discard_pending(&mut *transaction).await?;
     transaction.commit().await?;
     // Rebuild the file to discard free pages belonging to older temporary credentials.
     sqlx::query("VACUUM").execute(&mut snapshot).await?;

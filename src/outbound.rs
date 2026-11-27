@@ -23,13 +23,42 @@ const MAX_HOPS: u8 = 3;
 const MAX_ADDRESSES: usize = 16;
 const MAX_URL: usize = 4096;
 const MAX_HEADERS: usize = 16 * 1024;
-/// Response bytes read when looking for a page title.
+/// Response bytes read when looking for a page title and preview metadata.
 pub(crate) const MAX_TITLE_BYTES: usize = 128 * 1024;
+/// Largest image response read for a preview thumbnail.
+pub(crate) const MAX_IMAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TITLE_CHARS: usize = 160;
 const MAX_CONNECTOR_NETWORKS: usize = 16;
 
 pub(crate) struct Fetcher {
     permits: Semaphore,
+    reach: Reach,
+}
+
+/// The start of a fetched HTML page.
+pub(crate) struct Page {
+    pub(crate) title: Option<String>,
+    /// The final URL after redirects. Relative preview URLs resolve against it.
+    pub(crate) url: Url,
+    /// The bytes read up to the end of the document head, for preview metadata. Empty unless
+    /// requested.
+    pub(crate) head: Vec<u8>,
+}
+
+/// Why a preview image could not be fetched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImageFailure {
+    Fetch(Failure),
+    /// The response exceeds `MAX_IMAGE_BYTES`.
+    TooLarge,
+    /// The response is not a raster image type that previews accept, for example SVG or HTML.
+    Unsupported,
+}
+
+impl From<Failure> for ImageFailure {
+    fn from(failure: Failure) -> Self {
+        Self::Fetch(failure)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -56,6 +85,19 @@ impl Fetcher {
     pub(crate) fn new() -> Self {
         Self {
             permits: Semaphore::new(4),
+            reach: Reach::default(),
+        }
+    }
+
+    /// A fetcher that also reaches `http://127.0.0.1:<port>`, for synthetic local servers in unit
+    /// tests. Every other address, including other loopback ports, stays refused.
+    #[cfg(test)]
+    pub(crate) fn with_test_port(port: u16) -> Self {
+        Self {
+            permits: Semaphore::new(4),
+            reach: Reach {
+                test_port: Some(port),
+            },
         }
     }
 
@@ -63,7 +105,7 @@ impl Fetcher {
         let _permit = self.permits.try_acquire().map_err(|_| Failure::Busy)?;
         let started = Instant::now();
         let url = parse_url(target)?;
-        let (response, redirects) = timeout(DEADLINE, follow(url, Mode::Probe))
+        let (response, redirects) = timeout(DEADLINE, follow(url, Mode::Probe, self.reach))
             .await
             .map_err(|_| Failure::Timeout)??;
         Ok(Probe {
@@ -73,13 +115,15 @@ impl Fetcher {
         })
     }
 
-    /// Fetches the start of an HTML page and extracts its title as plain text.
-    /// Each redirect hop is revalidated, and at most `MAX_TITLE_BYTES` are read.
-    pub(crate) async fn fetch_title(&self, target: &str) -> Result<Option<String>, Failure> {
+    /// Fetches the start of an HTML page and extracts its title as plain text. With `head`, it
+    /// keeps reading to the end of the document head and returns those bytes for preview
+    /// metadata, so the title and the preview share one page request. Each redirect hop is
+    /// revalidated, and at most `MAX_TITLE_BYTES` are read.
+    pub(crate) async fn fetch_page(&self, target: &str, head: bool) -> Result<Page, Failure> {
         let _permit = self.permits.try_acquire().map_err(|_| Failure::Busy)?;
-        let url = parse_url(target)?;
+        let url = self.reach.parse(target)?;
         timeout(DEADLINE, async {
-            let (mut response, _) = follow(url, Mode::Page).await?;
+            let (mut response, _) = follow(url, Mode::Page, self.reach).await?;
             if !response.status().is_success() {
                 return Err(Failure::Protocol);
             }
@@ -90,12 +134,7 @@ impl Fetcher {
             {
                 return Err(Failure::Protocol);
             }
-            let content_type = response
-                .headers()
-                .get(CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or_default()
-                .to_ascii_lowercase();
+            let content_type = media_type(&response);
             let media = content_type.split(';').next().unwrap_or_default().trim();
             if !matches!(media, "text/html" | "application/xhtml+xml") {
                 return Err(Failure::NotHtml);
@@ -109,18 +148,76 @@ impl Fetcher {
                         "iso-8859-1" | "latin1" | "windows-1252"
                     )
                 });
+            let final_url = response.url().clone();
             let mut body = Vec::new();
             while body.len() < MAX_TITLE_BYTES {
                 let Some(chunk) = response.chunk().await.map_err(request_failure)? else {
                     break;
                 };
                 let room = MAX_TITLE_BYTES - body.len();
+                // Search only the new bytes and a short overlap for the end marker.
+                let from = body.len().saturating_sub(8);
                 body.extend_from_slice(&chunk[..chunk.len().min(room)]);
-                if find_ignore_case(&body, b"</title").is_some() {
+                let rest = &body[from..];
+                let done = if head {
+                    find_ignore_case(rest, b"</head").is_some()
+                        || find_ignore_case(rest, b"<body").is_some()
+                } else {
+                    find_ignore_case(rest, b"</title").is_some()
+                };
+                if done {
                     break;
                 }
             }
-            Ok(extract_title(&body, latin1))
+            Ok(Page {
+                title: extract_title(&body, latin1),
+                url: final_url,
+                head: if head { body } else { Vec::new() },
+            })
+        })
+        .await
+        .map_err(|_| Failure::Timeout)?
+    }
+
+    /// Fetches one preview image through the same public address policy, with every redirect
+    /// revalidated. Only raster image responses of at most `MAX_IMAGE_BYTES` are read; SVG,
+    /// HTML, and other documents are refused before their body is read.
+    pub(crate) async fn fetch_image(&self, target: &str) -> Result<Vec<u8>, ImageFailure> {
+        let _permit = self.permits.try_acquire().map_err(|_| Failure::Busy)?;
+        let url = self.reach.parse(target)?;
+        timeout(DEADLINE, async {
+            let (mut response, _) = follow(url, Mode::Image, self.reach).await?;
+            if !response.status().is_success() {
+                return Err(Failure::Protocol.into());
+            }
+            if response
+                .headers()
+                .get(CONTENT_ENCODING)
+                .is_some_and(|value| !value.as_bytes().eq_ignore_ascii_case(b"identity"))
+            {
+                return Err(Failure::Protocol.into());
+            }
+            let content_type = media_type(&response);
+            let media = content_type.split(';').next().unwrap_or_default().trim();
+            let raster = (media.starts_with("image/") && !media.contains("svg"))
+                || matches!(media, "" | "application/octet-stream");
+            if !raster {
+                return Err(ImageFailure::Unsupported);
+            }
+            if response
+                .content_length()
+                .is_some_and(|length| length > MAX_IMAGE_BYTES as u64)
+            {
+                return Err(ImageFailure::TooLarge);
+            }
+            let mut body = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(request_failure)? {
+                if body.len() + chunk.len() > MAX_IMAGE_BYTES {
+                    return Err(ImageFailure::TooLarge);
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(body)
         })
         .await
         .map_err(|_| Failure::Timeout)?
@@ -160,15 +257,63 @@ enum Mode {
     Probe,
     /// A GET request for an HTML page.
     Page,
+    /// A GET request for a preview image.
+    Image,
 }
 
-async fn follow(mut url: Url, mode: Mode) -> Result<(Response, u8), Failure> {
+/// Addresses beyond the public policy that a fetcher may reach. Production fetchers reach
+/// none; the field exists only in unit tests, so release builds carry no exception.
+#[derive(Clone, Copy, Default)]
+struct Reach {
+    #[cfg(test)]
+    test_port: Option<u16>,
+}
+
+impl Reach {
+    #[cfg(test)]
+    fn test_origin(self, url: &Url) -> bool {
+        self.test_port.is_some()
+            && url.scheme() == "http"
+            && url.host() == Some(Host::Ipv4(Ipv4Addr::LOCALHOST))
+            && url.port() == self.test_port
+            && url.username().is_empty()
+            && url.password().is_none()
+    }
+
+    #[cfg(not(test))]
+    fn test_origin(self, _: &Url) -> bool {
+        false
+    }
+
+    fn parse(self, value: &str) -> Result<Url, Failure> {
+        match Url::parse(value) {
+            Ok(url) if self.test_origin(&url) => Ok(url),
+            _ => parse_url(value),
+        }
+    }
+
+    fn validate(self, url: Url) -> Result<Url, Failure> {
+        if self.test_origin(&url) {
+            return Ok(url);
+        }
+        validate_url(url)
+    }
+
+    async fn client(self, url: &Url) -> Result<Client, Failure> {
+        if self.test_origin(url) {
+            return base_builder().build().map_err(|_| Failure::Protocol);
+        }
+        pinned_client(url).await
+    }
+}
+
+async fn follow(mut url: Url, mode: Mode, reach: Reach) -> Result<(Response, u8), Failure> {
     let mut method = match mode {
         Mode::Probe => Method::HEAD,
-        Mode::Page => Method::GET,
+        Mode::Page | Mode::Image => Method::GET,
     };
     for hops in 0..=MAX_HOPS {
-        let client = pinned_client(&url).await?;
+        let client = reach.client(&url).await?;
         let mut response = send(&client, method.clone(), url.clone(), mode).await?;
         if method == Method::HEAD
             && matches!(
@@ -196,7 +341,7 @@ async fn follow(mut url: Url, mode: Mode) -> Result<(Response, u8), Failure> {
             return Err(Failure::Protocol);
         }
         let next = url.join(location).map_err(|_| Failure::Protocol)?;
-        url = validate_url(next)?;
+        url = reach.validate(next)?;
     }
     Err(Failure::Protocol)
 }
@@ -207,10 +352,23 @@ async fn send(client: &Client, method: Method, url: Url, mode: Mode) -> Result<R
         Mode::Probe if method == Method::GET => request = request.header("range", "bytes=0-0"),
         Mode::Probe => {}
         Mode::Page => request = request.header(ACCEPT, "text/html, application/xhtml+xml"),
+        Mode::Image => {
+            request = request.header(ACCEPT, "image/png, image/jpeg, image/webp, image/gif")
+        }
     }
     let response = request.send().await.map_err(request_failure)?;
     check_headers(&response)?;
     Ok(response)
+}
+
+/// The lowercase `Content-Type` value, or an empty string.
+fn media_type(response: &Response) -> String {
+    response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
 }
 
 fn check_headers(response: &Response) -> Result<(), Failure> {
@@ -597,7 +755,7 @@ fn never_connector(ip: IpAddr) -> bool {
     }
 }
 
-fn find_ignore_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+pub(crate) fn find_ignore_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window.eq_ignore_ascii_case(needle))
@@ -649,7 +807,7 @@ pub(crate) fn extract_title(body: &[u8], latin1: bool) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
-fn decode_entities(text: &str) -> String {
+pub(crate) fn decode_entities(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(position) = rest.find('&') {

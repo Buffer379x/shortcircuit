@@ -66,6 +66,28 @@ impl Compiled {
         }
     }
 
+    /// A disabled policy, which permits every destination.
+    #[cfg(test)]
+    pub(crate) fn permissive() -> Self {
+        Self::unloaded()
+    }
+
+    /// An enabled policy with one block rule for `host`.
+    #[cfg(test)]
+    pub(crate) fn blocking(host: &str) -> Self {
+        Self {
+            generation: 0,
+            policy: Policy {
+                enabled: true,
+                rules: vec![Rule {
+                    host: host.to_owned(),
+                    subdomains: false,
+                    action: RuleAction::Block,
+                }],
+            },
+        }
+    }
+
     pub(crate) fn enabled(&self) -> bool {
         self.policy.enabled
     }

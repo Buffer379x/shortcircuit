@@ -16,18 +16,22 @@
   import TagInput from '../lib/ui/TagInput.svelte';
   import ShortUrl from '../lib/ui/ShortUrl.svelte';
   import CopyButton from '../lib/ui/CopyButton.svelte';
+  import LinkPreview from '../lib/ui/LinkPreview.svelte';
   import Empty from '../lib/ui/Empty.svelte';
   import Sparkline from '../lib/charts/Sparkline.svelte';
   import Tags from './Tags.svelte';
   import { createSeed, linkCache } from '../features/LinkForm.svelte';
   import { linkState, health } from '../lib/status';
-  import { app, loadTags, shortUrl, tagColor } from '../lib/app.svelte';
+  import { app, loadPreviewSetting, loadTags, shortUrl, tagColor } from '../lib/app.svelte';
   import { num, ago, day, splitUrl } from '../lib/fmt';
   import { route, href, setParams } from '../lib/router.svelte';
   import { overlays, openCreate, linksChanged } from '../lib/overlays.svelte';
   import { toast } from '../lib/toast.svelte';
   import { tr } from '../lib/locale.svelte';
   import { tip } from '../lib/tooltip';
+
+  // Thumbnails appear only while preview images are on.
+  void loadPreviewSetting();
 
   type View = 'all' | 'favorites' | 'attention' | 'archived';
   type Column = 'dest' | 'tags' | 'visits' | 'trend' | 'status' | 'health' | 'last';
@@ -488,7 +492,7 @@
 
   function exportShown() {
     const listed = items.map(({ selection_key: _k, favorite: _f, archived: _a, recorded_redirects: _r, last_redirect_date: _d, last_redirect_at: _t, ...l }) => {
-      const { state: _s, starts_at: _st, expires_at: _e, max_visits: _m, visits_used: _u, protection: _p, rule_count: _c, visits_30d: _v, trend: _tr, monitor: _mo, ...link } = l;
+      const { state: _s, starts_at: _st, expires_at: _e, max_visits: _m, visits_used: _u, protection: _p, rule_count: _c, visits_30d: _v, trend: _tr, monitor: _mo, preview: _pv, ...link } = l;
       return link;
     });
     downloadFile(new Blob([JSON.stringify(listed, null, 2) + '\n'], { type: 'application/json' }), 'shortcircuit-links.json');
@@ -705,6 +709,8 @@
                 <tr aria-selected={isSelected}>
                   <td class="c-check"><input class="checkbox" type="checkbox" aria-label={tr('lnkSelectLink', { name: `${l.host}/${l.slug}` })} checked={isSelected} disabled={bulkBusy || (!isSelected && selected.size >= MAX_SELECTION)} onchange={(e) => toggleRow(l, e.currentTarget.checked)} /></td>
                   <td class="c-link">
+                    <div class="link-row">
+                    {#if app.previews}<LinkPreview id={l.id} preview={l.preview} />{/if}
                     <div class="link-cell">
                       <a class="link-title" href={href('links', l.id)} onclick={() => opened(l)}>
                         {#if l.favorite}<Icon name="star" label={tr('favorite')} />{/if}
@@ -714,6 +720,7 @@
                       <span class="link-url"><ShortUrl host={l.host} slug={l.slug} /><CopyButton value={shortUrl(l)} label={tr('copyLabel', { value: `${l.host}/${l.slug}` })} /></span>
                       <span class="dest mobile-dest"><b>{d.host}</b>{d.rest}</span>
                       {#if l.description}<span class="link-desc truncate">{l.description}</span>{/if}
+                    </div>
                     </div>
                   </td>
                   {#if show('dest')}
@@ -921,6 +928,13 @@
   }
   .c-link {
     min-width: 240px;
+  }
+  /* The optional preview thumbnail sits before the link text, in the table and in cards. */
+  .link-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
   }
   .link-cell {
     display: grid;

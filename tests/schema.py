@@ -407,6 +407,64 @@ class LinkSchemaTests(unittest.TestCase):
         for action in ("operations_settings_authorize", "operations_settings_update"):
             db.execute("INSERT INTO admin_audit (action, actor, actor_id, outcome) VALUES (?, 'admin', 1, 'success')", (action,))
 
+    def test_link_previews_keep_only_bounded_thumbnails_and_follow_the_link(self):
+        # Schema 29: one row per link; bytes and metadata only while ready; origin without a path.
+        previews = MIGRATION.with_name("0029_link_previews.sql")
+        self.assertTrue(previews.is_file(), "expected a versioned link preview migration")
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        db.execute("PRAGMA foreign_keys = ON")
+        for migration in sorted(MIGRATION.parent.glob("*.sql")):
+            if migration < previews:
+                db.executescript(migration.read_text())
+        self.insert(db, "go.example", "one")
+        self.insert(db, "go.example", "two")
+        db.executescript(previews.read_text())
+        self.assertEqual(db.execute("SELECT preview_images_enabled FROM runtime_settings").fetchone(), (None,))
+        for value in (2, "yes"):
+            with self.subTest(value=value), self.assertRaises(sqlite3.IntegrityError):
+                db.execute("UPDATE runtime_settings SET preview_images_enabled = ?", (value,))
+        ready = ("INSERT INTO link_previews (link_id, status, kind, mime, bytes, width, height, "
+                 "source_origin, fetched_at) VALUES (?, 'ready', ?, 'image/jpeg', ?, ?, ?, ?, 1)")
+        db.execute(ready, (1, "image", b"\xff\xd8", 480, 270, "https://cdn.example"))
+        for values in [
+            (2, "image", b"x" * 49153, 480, 270, "https://cdn.example"),
+            (2, "image", b"x", 481, 270, "https://cdn.example"),
+            (2, "icon", b"x", 65, 64, "https://cdn.example"),
+            (2, "image", b"x", 10, 10, "https://cdn.example/path?token=a"),
+            (2, "image", b"x", 10, 10, "https://user@cdn.example"),
+            (2, "image", b"x", 10, 10, "ftp://cdn.example"),
+            (2, "image", "text", 10, 10, "https://cdn.example"),
+            (2, "svg", b"x", 10, 10, "https://cdn.example"),
+            (9, "image", b"x", 10, 10, "https://cdn.example"),
+        ]:
+            with self.subTest(values=values[1:4]), self.assertRaises(sqlite3.IntegrityError):
+                db.execute(ready, values)
+        for statement in [
+            "INSERT INTO link_previews (link_id, bytes) VALUES (2, X'FF')",
+            "INSERT INTO link_previews (link_id, status, fetched_at) VALUES (2, 'failed', 1)",
+            "INSERT INTO link_previews (link_id, status, failure, fetched_at) VALUES (2, 'failed', 'other', 1)",
+            "INSERT INTO link_previews (link_id, mime) VALUES (2, 'image/svg+xml')",
+        ]:
+            with self.subTest(statement=statement), self.assertRaises(sqlite3.IntegrityError):
+                db.execute(statement)
+        # A changed destination clears the thumbnail and queues a new fetch.
+        revision = db.execute("SELECT revision FROM link_previews").fetchone()
+        db.execute("UPDATE links SET title = 'Same target' WHERE id = 1")
+        self.assertEqual(db.execute("SELECT status FROM link_previews").fetchone(), ("ready",))
+        db.execute("UPDATE links SET target = 'https://example.test/moved' WHERE id = 1")
+        self.assertEqual(
+            db.execute("SELECT status, bytes, kind, source_origin, fetched_at FROM link_previews").fetchone(),
+            ("pending", None, None, None, None),
+        )
+        self.assertNotEqual(db.execute("SELECT revision FROM link_previews").fetchone(), revision)
+        # Protection removes it, and deleting the link cascades.
+        db.execute("INSERT INTO link_previews (link_id) VALUES (2)")
+        db.execute("INSERT INTO link_protection (link_id, one_time) VALUES (1, 1)")
+        self.assertEqual(db.execute("SELECT link_id FROM link_previews").fetchall(), [(2,)])
+        db.execute("DELETE FROM links WHERE id = 2")
+        self.assertEqual(db.execute("SELECT count(*) FROM link_previews").fetchone(), (0,))
+
 
 if __name__ == "__main__":
     unittest.main()
