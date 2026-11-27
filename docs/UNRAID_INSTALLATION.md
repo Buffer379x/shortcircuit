@@ -37,7 +37,7 @@ For a new appdata bind mount, remove `--volume=shortcircuit-data:/data` and add 
 
 To upgrade from 0.8.0-preview.2, 0.8.0-preview.1, or 0.7.0-preview.1, download a verified backup on **System › Backups** and copy it outside the Docker data store. Note the current image digest. In Docker Manager, edit the existing container, set **Repository** to `ghcr.io/buffer379x/shortcircuit:0.8.0-preview.3`, and click **Apply**. Keep the existing `/data` mount, network and any fixed IP, public hostnames, and admin origin. 0.8.0-preview.3 keeps schema version 24, so no migration runs. 0.8.0-preview.1 brought the Polar Signal interface and additive API fields. From 0.6.0-preview.2, startup first writes a verified snapshot to `/data/backups/pre-upgrade` and migrates schema 11 to 24. Optionally add **Trusted proxies** and **Backup interval** from the updated template: an existing container keeps its own settings.
 
-For rollback to 0.8.0-preview.2, 0.8.0-preview.1, or 0.7.0-preview.1, set **Repository** back to the noted digest; all of them use schema 24, so the volume stays usable. For a rollback to 0.6.0-preview.2, follow [Release verification](RELEASE_VERIFICATION.md#rollback): restore the pre-upgrade snapshot into a separate data volume with that image, because it refuses an upgraded volume. Verify the restored container and its links before moving traffic to it. [Backup and rollback](BACKUP_RESTORE.md)
+From 0.9.0 on, a release also restores backups from older releases back to 0.6.0-preview.1 and upgrades them to its own schema when the restore takes effect. 0.9.0 adds migrations after schema 24, so a rollback from 0.9.0 to 0.8 cannot reuse the volume: stop the container and restore the schema 24 pre-upgrade snapshot from `/data/backups/pre-upgrade`, or your own backup, with the noted 0.8 image into a separate data volume, as described in [Release verification](RELEASE_VERIFICATION.md#rollback). For rollback to 0.8.0-preview.2, 0.8.0-preview.1, or 0.7.0-preview.1 from 0.8.0-preview.3, set **Repository** back to the noted digest; all of them use schema 24, so the volume stays usable. For a rollback to 0.6.0-preview.2, follow [Release verification](RELEASE_VERIFICATION.md#rollback): restore the pre-upgrade snapshot into a separate data volume with that image, because it refuses an upgraded volume. Verify the restored container and its links before moving traffic to it. [Backup and rollback](BACKUP_RESTORE.md)
 
 ## Configuration
 
@@ -52,25 +52,27 @@ For rollback to 0.8.0-preview.2, 0.8.0-preview.1, or 0.7.0-preview.1, set **Repo
 | `SHORTCODE_LENGTH` | Generated shortcode length from 8 to 32. Defaults to 10. Added after preview.2. |
 | `SQLITE_BUSY_TIMEOUT_MS` | SQLite writer wait in milliseconds from 1 to 10,000. Defaults to 2,000. |
 | `TRUSTED_PROXIES` | Comma-separated trusted proxy IP addresses or CIDR networks. Empty by default. |
-| `MONITOR_ENABLED` | Set `true` to allow explicit monitor enrollment. Defaults to `false`. |
-| `MONITOR_INTERVAL_HOURS` | Target interval for stable links, 1–720 hours. Defaults to 24. |
-| `MONITOR_PRIORITY_HOURS` | Target interval for priority links. Defaults to 6 hours or the regular interval if shorter. |
+| `MONITOR_ENABLED` | Start value for **Allow health checks** in Settings › Operations. Defaults to `false`. |
+| `MONITOR_INTERVAL_HOURS` | Start value for the stable interval, 1–720 hours. Defaults to 24. |
+| `MONITOR_PRIORITY_HOURS` | Start value for the priority interval. Defaults to 6 hours or the regular interval if shorter. |
 | `MONITOR_WEBHOOK_URL_FILE` | Alias for `NOTIFICATION_WEBHOOK_URL_FILE` that selects only link-health events. Use this or `MONITOR_WEBHOOK_URL`, not both, and not together with `NOTIFICATION_WEBHOOK_URL`. |
-| `NOTIFICATION_WEBHOOK_URL_FILE` | Read-only file with the HTTPS notification webhook URL. Setting it, or `NOTIFICATION_WEBHOOK_URL`, activates notifications. Added after preview.2. |
-| `NOTIFICATION_EVENTS` | Comma-separated event kinds: `link_health`, `link_expiring`, `link_expired`, `click_milestone`, `backup_failed`, `job_failed`, `storage_low`, `security`. Defaults to all kinds except `click_milestone` unless milestones are set. |
-| `NOTIFICATION_CLICK_MILESTONES` | Up to 10 redirect counts, for example `100,1000`. Empty by default. |
-| `NOTIFICATION_EXPIRY_NOTICE_HOURS` | Hours before an expiry for `link_expiring`, 1–720. Defaults to 24. |
-| `NOTIFICATION_WEBHOOK_AUTHORIZATION_FILE` | Optional read-only file with an `Authorization` header value for the webhook. |
-| `NOTIFICATION_CONNECTOR_ORIGIN`, `NOTIFICATION_CONNECTOR_NETWORKS`, `NOTIFICATION_CONNECTOR_CA_FILE` | Optional internal connector: the exact HTTPS origin, permitted CIDR ranges, and an optional PEM CA file. Required only for a receiver on a private network. |
-| `TITLE_LOOKUP_ENABLED` | Set `true` to allow administrators to fetch page titles for untitled links. Defaults to `false`. Added after preview.2. |
-| `BACKUP_INTERVAL_HOURS` and `BACKUP_KEEP` | Optional backup interval and number of scheduled copies to keep. Default scheduling is disabled. |
+| `NOTIFICATION_WEBHOOK_URL_FILE` | Read-only file with the HTTPS notification webhook URL. Setting it, or `NOTIFICATION_WEBHOOK_URL`, activates notifications until a webhook is saved in Settings › Operations. Added after preview.2. |
+| `NOTIFICATION_EVENTS` | Comma-separated event kinds: `link_health`, `link_expiring`, `link_expired`, `click_milestone`, `backup_failed`, `job_failed`, `storage_low`, `security`. Defaults to all kinds except `click_milestone` unless milestones are set. Start value. |
+| `NOTIFICATION_CLICK_MILESTONES` | Up to 10 redirect counts, for example `100,1000`. Empty by default. Start value. |
+| `NOTIFICATION_EXPIRY_NOTICE_HOURS` | Hours before an expiry for `link_expiring`, 1–720. Defaults to 24. Start value. |
+| `NOTIFICATION_WEBHOOK_AUTHORIZATION_FILE` | Optional read-only file with an `Authorization` header value for the webhook. Start value. |
+| `NOTIFICATION_CONNECTOR_ORIGIN`, `NOTIFICATION_CONNECTOR_NETWORKS`, `NOTIFICATION_CONNECTOR_CA_FILE` | Optional internal connector: the exact HTTPS origin, permitted CIDR ranges, and an optional PEM CA file. Required only for a receiver on a private network. Environment-only: the interface cannot change it. |
+| `TITLE_LOOKUP_ENABLED` | Start value for **Allow title lookup** in Settings › Operations. Defaults to `false`. Added after preview.2. |
+| `BACKUP_INTERVAL_HOURS` and `BACKUP_KEEP` | Start values for the backup interval (0–720 hours, 0 is off) and the number of scheduled copies to keep (1–365). Since 0.9.0 the template no longer sets them, and the built-in defaults are daily and 7, the values the template used to set. An existing container keeps the variables it already has. |
+
+Health checks, title lookup, scheduled backups, and notifications are set in **Settings › Operations**. The variables marked as start values apply only while nothing is saved there; a value saved in the interface takes precedence, and **Reset to container value** returns to the variable. The page and System show where each value comes from. Hosts, the admin origin, trusted proxies, rate limits, listener addresses, the log level, and the notification connector stay variables.
 
 
 Settings marked as added after preview.2, and the monitor, notification, title lookup, and proxy settings, apply to source builds after preview.2. The published preview.2 image ignores them. [Monitoring and rate limits](SECURITY.md#implemented-outbound-monitoring-policy)
 
 ## Storage, proxy, and ports
 
-- **Keep data outside `docker.img`.** The template stores `/data`, every backup, and every rollback copy in the named volume `shortcircuit-data` inside Docker's data store. Recreating `docker.img` deletes all of them. Map `/data` to a local appdata path such as `/mnt/<pool>/appdata/shortcircuit` owned by UID and GID 10001, or copy backups from `/data/backups` to other storage regularly. Set `BACKUP_INTERVAL_HOURS` to enable scheduled backups.
+- **Keep data outside `docker.img`.** The template stores `/data`, every backup, and every rollback copy in the named volume `shortcircuit-data` inside Docker's data store. Recreating `docker.img` deletes all of them. Map `/data` to a local appdata path such as `/mnt/<pool>/appdata/shortcircuit` owned by UID and GID 10001, or copy backups from `/data/backups` to other storage regularly. Scheduled backups run daily by default; change them in Settings › Operations.
 - **Trust the proxy.** Behind Nginx Proxy Manager, add the variable `TRUSTED_PROXIES` with the proxy container address or its bridge network, for example `172.18.0.0/16`. Without it, every client shares the proxy's rate-limit budget for sign-in and protected links.
 - **Changed ports.** If you publish other host ports, set **Admin origin** and **WebUI** to the same address, and set the domain origin on **Domains**, so copied and QR short URLs use the published port.
 

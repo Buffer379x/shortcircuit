@@ -54,7 +54,7 @@
       place();
       requestAnimationFrame(() => {
         place();
-        items()[0]?.focus();
+        items()[0]?.focus({ preventScroll: true });
       });
     }
   }
@@ -77,12 +77,21 @@
     e.preventDefault();
   }
 
+  // Scrolling keeps the panel next to its trigger and closes it only once the trigger has left
+  // the viewport. Opening can itself scroll a little, for example to reveal the trigger.
+  function scrolled() {
+    if (!open) return;
+    const r = trigger.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > innerHeight) close(false);
+    else place();
+  }
+
   function outside(e: PointerEvent) {
     if (open && !panel?.contains(e.target as Node) && !trigger.contains(e.target as Node)) close(false);
   }
 </script>
 
-<svelte:window onpointerdown={outside} onresize={() => open && place()} onscroll={() => open && close(false)} />
+<svelte:window onpointerdown={outside} onresize={() => open && place()} onscroll={scrolled} />
 
 <button
   bind:this={trigger}

@@ -39,4 +39,4 @@ Edit the source, not the outputs. The admin interface draws the logo inline (`fr
   - Geist SemiBold with −2.2 % tracking, in the text color, never pink.
   - Do not split "Short" and "Circuit" into two colors or weights.
 - **The trace motif** may appear once per surface as quiet decoration: two grey detours and a direct pink route that meet at one terminal. Examples are the README banner and the sign-in and setup backgrounds.
-- **What branding does not touch.** Published short links, QR codes, saved QR designs, and colors set by users are never changed by branding updates.
+- **What branding does not touch.** Published short links, QR codes, saved QR designs, colors set by users, and public pages customized in Settings > Public pages are never changed by branding updates. A custom accent or logo there replaces the pink mark on those pages only; the built-in pages keep it.

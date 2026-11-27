@@ -119,6 +119,8 @@ async function verify() {
     assert.ok(pageResponse.ok());
     assert.match(pageResponse.headers()['content-security-policy'], /frame-ancestors 'none'/);
     assert.match(pageResponse.headers()['content-security-policy'], /style-src 'self'/);
+    // The only frame source is the admin origin, for the sandboxed public page preview.
+    assert.match(pageResponse.headers()['content-security-policy'], /frame-src 'self';/);
     for (const [name, type] of [['favicon.svg', 'image/svg+xml'], ['favicon.png', 'image/png']]) {
       assert.equal(await page.locator(`link[rel="icon"][href="/${name}"]`).count(), 1);
       const favicon = await page.request.get(admin + '/' + name);
@@ -177,7 +179,8 @@ async function verify() {
     await page.getByLabel('Password', { exact: true }).fill(adminPassword);
     await page.getByRole('button', { name: 'Create administrator', exact: true }).click();
     await heading('Overview').waitFor();
-    assert.equal(await page.title(), 'Overview – ShortCircuit');
+    // The browser tab shows only the product name; the page heading names the view.
+    assert.equal(await page.title(), 'ShortCircuit');
 
     // ---------- Create a link ----------
     await newLinkButton.click();
@@ -1016,14 +1019,225 @@ async function verify() {
     const mapped = await page.request.get(publicOrigin + '/mapped-check', { maxRedirects: 0 });
     assert.equal(mapped.headers().location, 'https://example.test/mapped-check');
 
+    // ---------- Domains: delete a domain (0.9.0, domains agent) ----------
+    // moving.test gets two links, one of which also exists on spare.test. A move to spare.test is
+    // blocked by the conflict, so moving.test is deleted with its links after typing its name.
+    // spare.test is then deleted by moving its link to localhost, at phone widths.
+    await navigate('Domains');
+    await heading('Domains').waitFor();
+    for (const host of ['moving.test', 'spare.test']) {
+      await page.getByRole('button', { name: 'Add domain', exact: true }).click();
+      const add = page.getByRole('dialog', { name: 'Add domain', exact: true });
+      await add.getByLabel('Host', { exact: true }).fill(host);
+      // Leaving the host field suggests the HTTPS origin.
+      const origin = add.getByLabel('Public origin', { exact: true });
+      await origin.click();
+      await page.waitForFunction(([field, value]) => document.getElementById(field)?.value === value, ['dm-origin', `https://${host}`]);
+      await add.getByRole('button', { name: 'Add domain', exact: true }).click();
+      await add.waitFor({ state: 'hidden' });
+      await toast('Domain added').waitFor();
+    }
+    await navigate('Import and export');
+    await heading('Import and export').waitFor();
+    if (await importAnother.isVisible()) await importAnother.click();
+    await chooseFile(dropZone, {
+      name: 'domain-links.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify({ version: 1, items: [
+        ['moving.test', 'keep', 'https://example.test/keep'],
+        ['moving.test', 'clash', 'https://example.test/clash-a'],
+        ['spare.test', 'clash', 'https://example.test/clash-b'],
+      ].map(([host, slug, target]) => ({
+        host, slug, target, title: '', description: '', tags: [], enabled: true, analytics_enabled: true,
+      })) })),
+    });
+    await previewTable.getByText('Will create', { exact: true }).first().waitFor();
+    await page.getByRole('button', { name: 'Apply import', exact: true }).click();
+    await importApplied.waitFor();
+    await importAnother.click();
+
+    await navigate('Domains');
+    await heading('Domains').waitFor();
+    const domainAction = async (host, item) => {
+      await page.getByRole('button', { name: `More actions for ${host}`, exact: true }).click();
+      await page.getByRole('menu', { name: `More actions for ${host}`, exact: true })
+        .getByRole('menuitem', { name: item, exact: true }).click();
+    };
+    await domainAction('moving.test', 'Delete domain');
+    const removeDomain = page.getByRole('dialog', { name: 'Delete moving.test', exact: true });
+    const removeButton = removeDomain.getByRole('button', { name: 'Delete domain', exact: true });
+    await removeDomain.getByText(startsWith('2 links use this domain')).waitFor();
+    await removeDomain.getByLabel('Target domain', { exact: true }).selectOption('spare.test');
+    await removeDomain.getByText(startsWith('One slug already exists on spare.test')).waitFor();
+    await removeDomain.locator('.slug-list').getByText('clash', { exact: true }).waitFor();
+    await removeDomain.getByText(startsWith('Short URLs and printed QR codes for moving.test stop working')).waitFor();
+    assert.equal(await removeButton.isDisabled(), true);
+    await removeDomain.getByRole('radio', { name: startsWith('Delete the links') }).check();
+    await removeDomain.getByRole('link', { name: 'Open Import and export', exact: true }).waitFor();
+    const typed = removeDomain.getByLabel('Type moving.test to confirm', { exact: true });
+    await typed.fill('moving');
+    assert.equal(await removeButton.isDisabled(), true);
+    await typed.fill('moving.test');
+    await removeButton.click();
+    await toast('Domain deleted').waitFor();
+    await page.locator('.toasts').getByText('moving.test: 2 links deleted', { exact: true }).waitFor();
+    await removeDomain.waitFor({ state: 'hidden' });
+    await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+    assert.equal(await page.getByRole('button', { name: 'More actions for moving.test', exact: true }).count(), 0);
+
+    // The dialog is a sheet on phones: check it at 390 and 320 px without horizontal scrolling.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await domainAction('spare.test', 'Delete domain');
+    const spare = page.getByRole('dialog', { name: 'Delete spare.test', exact: true });
+    await spare.getByText('One link uses this domain. Choose what happens to it.', { exact: true }).waitFor();
+    await spare.getByLabel('Target domain', { exact: true }).selectOption('localhost');
+    await spare.getByText('No slug conflicts on localhost.', { exact: true }).waitFor();
+    await noHorizontalScroll(page);
+    await page.setViewportSize({ width: 320, height: 568 });
+    await noHorizontalScroll(page);
+    await spare.getByRole('button', { name: 'Delete domain', exact: true }).click();
+    await page.locator('.toasts').getByText('spare.test: one link moved to localhost', { exact: true }).waitFor();
+    await spare.waitFor({ state: 'hidden' });
+    await page.setViewportSize({ width: 1360, height: 900 });
+    assert.equal((await page.request.get(publicOrigin + '/clash', { maxRedirects: 0 })).headers().location, 'https://example.test/clash-b');
+    const domainAudit = (await (await page.request.get(admin + '/api/v1/audit')).json()).items
+      .filter(item => item.action === 'domain_delete').map(item => item.details);
+    assert.deepEqual(domainAudit, [
+      { host: 'spare.test', links: 'move', target: 'localhost', count: 1, environment: false },
+      { host: 'moving.test', links: 'delete', target: null, count: 2, environment: false },
+    ]);
+
     // ---------- Monitoring defaults ----------
     await navigate('Health');
     await heading('Health').waitFor();
-    await page.getByText('Monitoring is off.', { exact: false }).first().waitFor();
+    await page.getByText('Health checks are off.', { exact: false }).first().waitFor();
     assert.equal(await page.getByRole('button', { name: 'Monitor links', exact: true }).isDisabled(), true);
     const monitor = await page.request.get(admin + '/api/v1/monitoring');
     assert.deepEqual(await monitor.json(), { enabled: false, items: [], next_after: null });
     assert.equal((await page.request.get(publicOrigin + '/api/v1/monitoring')).status(), 404);
+
+    // ---------- Settings > Operations (runtime settings; settings agent) ----------
+    // The Health notice links to the settings that replace MONITOR_ENABLED and the other
+    // container variables. Switches apply at once, other values save through the savebar, and
+    // the webhook needs the password and is never shown in full.
+    {
+      await page.getByRole('link', { name: 'Settings › Operations', exact: true }).first().click();
+      await page.waitForURL(/#\/settings\?section=operations$/);
+      const healthPanel = page.getByRole('region', { name: 'Health checks', exact: true });
+      const healthSwitch = healthPanel.getByRole('checkbox', { name: 'Allow health checks', exact: true });
+      assert.equal(await healthSwitch.isChecked(), false);
+      await healthPanel.getByText('Default', { exact: true }).first().waitFor();
+      const operationsPatch = () => page.waitForResponse(response =>
+        response.url().endsWith('/api/v1/settings/operations') && response.request().method() === 'PATCH');
+      let patched = operationsPatch();
+      await healthSwitch.check();
+      assert.equal((await (await patched).json()).monitor_enabled.source, 'saved');
+      await toast('Health checks on').waitFor();
+      assert.equal((await (await page.request.get(admin + '/api/v1/monitoring')).json()).enabled, true);
+      patched = operationsPatch();
+      await healthPanel.getByRole('button', { name: 'Reset to default', exact: true }).click();
+      assert.equal((await (await patched).json()).monitor_enabled.source, 'default');
+      await toast('Reset to the container value or default').waitFor();
+      assert.equal(await healthSwitch.isChecked(), false);
+
+      const backupsPanel = page.getByRole('region', { name: 'Scheduled backups', exact: true });
+      await backupsPanel.getByLabel('Backup interval', { exact: true }).fill('12');
+      const operationsBar = page.getByRole('region', { name: 'Unsaved changes', exact: true });
+      patched = operationsPatch();
+      await operationsBar.getByRole('button', { name: 'Save changes', exact: true }).click();
+      const savedBackups = await (await patched).json();
+      assert.deepEqual(savedBackups.backup_interval_hours, { value: 12, source: 'saved', container: null });
+      await toast('Operations settings saved').waitFor();
+      await operationsBar.waitFor({ state: 'hidden' });
+      patched = operationsPatch();
+      await backupsPanel.getByRole('button', { name: 'Reset to default', exact: true }).click();
+      assert.equal((await (await patched).json()).backup_interval_hours.value, 24);
+
+      const secret = 'https://hooks.example/services/synthetic-browser-secret';
+      const notificationsPanel = page.getByRole('region', { name: 'Notifications', exact: true });
+      await notificationsPanel.getByRole('button', { name: 'Change webhook…', exact: true }).click();
+      const target = page.getByRole('dialog', { name: 'Notification webhook', exact: true });
+      await target.getByLabel('Webhook URL', { exact: true }).fill(secret);
+      await target.getByLabel('Current password', { exact: true }).fill(adminPassword);
+      patched = operationsPatch();
+      await target.getByRole('button', { name: 'Save webhook', exact: true }).click();
+      const savedTarget = await patched;
+      assert.equal(savedTarget.status(), 200);
+      assert.equal(JSON.stringify(await savedTarget.json()).includes('synthetic-browser-secret'), false);
+      await toast('Webhook saved').waitFor();
+      await target.waitFor({ state: 'hidden' });
+      await notificationsPanel.getByText('https://hooks.example', { exact: true }).waitFor();
+      assert.equal((await page.content()).includes('synthetic-browser-secret'), false);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await noHorizontalScroll(page);
+      await page.setViewportSize({ width: 1360, height: 900 });
+      await notificationsPanel.getByRole('button', { name: 'Reset to default', exact: true }).click();
+      const resetTarget = page.getByRole('dialog', { name: 'Use the container webhook?', exact: true });
+      await resetTarget.getByLabel('Current password', { exact: true }).fill(adminPassword);
+      patched = operationsPatch();
+      await resetTarget.getByRole('button', { name: 'Reset to default', exact: true }).click();
+      assert.equal((await (await patched).json()).notifications_active, false);
+      await resetTarget.waitFor({ state: 'hidden' });
+      await notificationsPanel.getByText('Not set', { exact: true }).first().waitFor();
+      const settingsAudit = (await (await page.request.get(admin + '/api/v1/audit')).json()).items
+        .filter(item => item.action.startsWith('operations_settings'));
+      assert.equal(JSON.stringify(settingsAudit).includes('synthetic-browser-secret'), false);
+      assert.ok(settingsAudit.some(item => item.action === 'operations_settings_authorize'));
+    }
+
+    // ---------- Settings > Public pages (0.9.0, public-pages agent) ----------
+    // Fields mode edits the English missing page, the sandboxed preview shows the server's
+    // rendering, saving changes the public 404, and reset restores the built-in page.
+    {
+      await navigate('Settings');
+      await heading('Settings').waitFor();
+      await page.getByRole('navigation', { name: 'Settings sections', exact: true })
+        .getByRole('button', { name: 'Public pages', exact: true }).click();
+      await page.waitForURL(/#\/settings\?section=pages$/);
+      const editor = page.getByRole('region', { name: 'Public pages', exact: true });
+      await editor.getByLabel('Page', { exact: true }).selectOption('missing');
+      await editor.getByRole('radiogroup', { name: 'Language', exact: true })
+        .getByRole('radio', { name: 'English', exact: true }).click();
+      await editor.getByText('Uses the built-in page', { exact: false }).waitFor();
+      const customTitle = 'Browser test: this link is unavailable';
+      await editor.getByLabel(startsWith('Title')).fill(customTitle);
+      const previewed = page.waitForResponse(response =>
+        response.url() === admin + '/api/v1/settings/public-pages/preview' && response.request().method() === 'POST');
+      await editor.getByRole('button', { name: 'Update preview', exact: true }).click();
+      const previewUrl = (await (await previewed).json()).url;
+      const frame = editor.locator('iframe.preview-frame');
+      assert.equal(await frame.getAttribute('sandbox'), '');
+      await page.frameLocator('iframe.preview-frame').getByRole('heading', { name: customTitle, exact: true }).waitFor();
+      const framed = await page.request.get(admin + previewUrl);
+      assert.match(framed.headers()['content-security-policy'], /frame-ancestors 'self'$/);
+      assert.doesNotMatch(framed.headers()['content-security-policy'], /script-src/);
+      assert.equal(framed.headers()['x-frame-options'], 'SAMEORIGIN');
+
+      const savedPage = page.waitForResponse(response =>
+        response.url() === admin + '/api/v1/settings/public-pages' && response.request().method() === 'PATCH');
+      await editor.getByRole('button', { name: 'Save page', exact: true }).click();
+      assert.equal((await savedPage).status(), 200);
+      await toast('Page saved').waitFor();
+      await editor.getByText('Uses custom fields', { exact: false }).waitFor();
+      const customized = await page.request.get(publicOrigin + '/no-such-link');
+      assert.equal(customized.status(), 404);
+      assert.ok((await customized.text()).includes(customTitle));
+      assert.match(customized.headers()['content-security-policy'], /img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'/);
+      assert.doesNotMatch(customized.headers()['content-security-policy'], /script-src/);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await noHorizontalScroll(page);
+      await page.setViewportSize({ width: 1360, height: 900 });
+
+      await editor.getByRole('button', { name: 'Reset to built-in', exact: true }).click();
+      const resetPage = page.getByRole('dialog', { name: 'Reset “Missing or inactive link” (English) to the built-in page?', exact: true });
+      await resetPage.getByRole('button', { name: 'Reset to built-in', exact: true }).click();
+      await toast('Built-in page restored').waitFor();
+      await editor.getByText('Uses the built-in page', { exact: false }).waitFor();
+      assert.ok((await (await page.request.get(publicOrigin + '/no-such-link')).text()).includes('This short link doesn’t exist'));
+      const pagesAudit = (await (await page.request.get(admin + '/api/v1/audit')).json()).items
+        .filter(item => item.action.startsWith('public_pages')).map(item => item.action);
+      assert.deepEqual(pagesAudit, ['public_pages_reset', 'public_pages_update']);
+    }
 
     // ---------- Browser backup, staged restore, and the audit log ----------
     await navigate('System');
@@ -1194,6 +1408,8 @@ async function auditRoutes(browser, storageState, axeSource, { linkId }) {
     ['Appearance settings', '#/settings?section=appearance'],
     ['Privacy settings', '#/settings?section=privacy'],
     ['Security settings', '#/settings?section=security'],
+    ['Operations settings', '#/settings?section=operations'],
+    ['Public pages settings', '#/settings?section=pages'],
   ];
   const findings = [];
   for (const theme of ['dark', 'light']) {

@@ -44,6 +44,8 @@ Each check needs the owner's Unraid host, NPM, DNS, certificates, client devices
 
 ## Rollback
 
+An older image refuses a volume and backups from a newer schema. From 0.9.0 on, a release adds migrations after schema 24, so setting **Repository** back to a 0.8 image does not roll it back. Restore the schema 24 pre-upgrade snapshot with the 0.8 image into a separate volume instead. A newer release still restores older backups, so the reverse direction needs no extra step. [Backup and restore](BACKUP_RESTORE.md#rolling-back-an-upgrade)
+
 1. Stop the candidate container. Do not start an older image on the upgraded volume.
 2. Copy the snapshot from `/data/backups/pre-upgrade` or your own pre-upgrade backup, make it readable by UID 10001 (for example `chmod 644`), create a new volume or appdata directory, and restore it with the older image: `docker run --rm --user 10001:10001 -v <new-volume>:/data -v <snapshot-dir>:/restore:ro <old-image> restore /restore/<snapshot>.sqlite --confirm`.
 3. Start the older image with the new volume and the old template settings. Verify `/readyz`, sign-in, and the exact published redirects before moving proxy traffic back.

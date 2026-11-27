@@ -135,11 +135,12 @@ The table lists every shared component in `ui.css` or `lib/`. Pages compose them
 | Status | `Badge` with the central mapping in `lib/status.ts`: every state has a tone, an icon, and text. Normal states (Active, Reachable) render quietly. `HealthIcon` for dense tables. |
 | Tag | `TagChip`, `TagInput` (a combobox with suggestions and create). |
 | Short link | `ShortUrl`: the mono host truncates first, and `/slug` stays whole. `CopyButton` confirms in place and with a toast. |
-| Panel | `.panel`, `.panel-head` / `.panel-title` / `.panel-body` / `.panel-foot`. `.setting` rows for settings. `.facts` for key and value lists. |
+| Panel | `.panel`, `.panel-head` / `.panel-title` / `.panel-body` / `.panel-foot`. `.setting` rows for settings, with `.setting-source` for a value's source badge and reset action. `.savebar` is the sticky unsaved-changes bar with Discard and Save. `.facts` for key and value lists. |
 | Table | `.table` in `.table-wrap`. Rows are 52 px, or 40 px compact. Sticky header. `.th-sort` with `aria-sort`. Numbers right-aligned. One opener plus a `Menu` per row, with destructive items last. Container-query tiers hide columns, then turn rows into cards. |
 | Tabs | `.tabs` / `.tab` with `role="tab"` and arrow keys, or `aria-current` for route tabs. A fade shows where they overflow. |
 | Menu | `Menu`: arrow keys, Home, End, Escape back to the trigger, stays inside the viewport. `menuitemradio` and `menuitemcheckbox` for choices. |
 | Dialog | `Dialog`, a native `<dialog>`: the body scrolls while the head and foot stay visible, focus goes to the first field, and it becomes a bottom sheet on phones. `Drawer` for editing next to a list. |
+| Preview frame | `.preview-frame`: a full-width `<iframe sandbox="">` with a subtle border that shows a page the server rendered, such as a public page draft. Never add `allow-scripts` or `allow-same-origin`. Give it a `title`. |
 | Feedback | Toasts (`toast()`) for results: at most 4, 4.5 s, or 9 s for errors, in polite and alert regions. `.notice` in five tones for lasting conditions. `Empty` with a next action. `.skeleton`, `.spinner`. |
 | Charts | `TimeChart` (pointer and arrow-key crosshair, comparison series, a hidden data table), `BarList` (label, bar, value, share), `Donut` (at most 5 parts, with a legend that repeats the numbers), `Columns`, `Sparkline` (slate). |
 | Icons | `Icon` with 96 Lucide icons (ISC), 24-unit grid, stroke 1.75, 16 px by default (14 small, 20 large). Each icon has one meaning. Regenerate the set with `frontend/tools/icons.py`. |
@@ -168,3 +169,5 @@ The table lists every shared component in `ui.css` or `lib/`. Pages compose them
 ## Public pages
 
 The password, one-time, not-found, expired, and unknown-domain pages use the same mark, colors, and type scale. They use the system font stack, contain no JavaScript, set a strict CSP, and choose English or German from `Accept-Language`. Their status codes and headers are unchanged.
+
+Settings > Public pages can replace their copy per language, set one accent color (the button text switches between dark and white for 4.5:1), and replace the mark with a small raster logo, all inside this layout. Custom HTML is an expert mode that leaves the layout to the administrator. The starter template "Polar Signal" keeps this design with edited copy; "Minimal" is a plain custom design.

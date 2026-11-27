@@ -1,6 +1,7 @@
 //! Opt-in webhook notifications with a durable, deduplicated outbox.
 //!
-//! Configuring a webhook activates notifications. Events get a deterministic key so repeated
+//! Configuring a webhook, as a container variable or in Settings > Operations, activates
+//! notifications. The worker reads the effective settings on each pass. Events get a deterministic key so repeated
 //! detection, retries, and restarts never create a second delivery. A bounded worker detects
 //! scheduled events, delivers due rows with capped exponential backoff, and expires stale rows.
 //! After a restore, pending rows are discarded and only events after the restore are generated.
@@ -24,6 +25,7 @@ use crate::{
     analytics::DroppedCounter,
     outbound::{Connector, Failure, Fetcher, Webhook},
     resources::{self, StorageStatus},
+    runtime_settings::RuntimeSettings,
 };
 
 const MAX_ATTEMPTS: i64 = 8;
@@ -96,18 +98,44 @@ const SECURITY_ACTIONS: &[&str] = &[
     "restore_cancel",
     "restore_apply",
     "destination_policy_update",
+    "operations_settings_update",
+    "public_pages_update",
+    "public_pages_reset",
+    "public_pages_import",
 ];
 
+/// The notification handle. It reads the effective settings on every use, so a changed target,
+/// event selection, or deactivation in Settings > Operations applies without a restart.
 #[derive(Clone)]
 pub struct Notifier(Arc<Inner>);
 
 struct Inner {
+    settings: RuntimeSettings,
+    fetcher: Fetcher,
+    changed: Notify,
+}
+
+/// An active notification configuration: a validated webhook and the selected events.
+pub(crate) struct NotificationConfig {
     webhook: Webhook,
     events: BTreeSet<EventKind>,
     milestones: Vec<i64>,
     expiry_notice: i64,
-    fetcher: Fetcher,
-    changed: Notify,
+}
+
+/// Notification values from container variables. Each is only a start value: a value saved in
+/// Settings > Operations takes precedence.
+#[derive(Default)]
+pub(crate) struct NotificationEnv {
+    pub(crate) webhook: Option<String>,
+    /// The webhook came from the `MONITOR_WEBHOOK_URL` alias, which selects only link health.
+    pub(crate) legacy: bool,
+    pub(crate) authorization: Option<String>,
+    pub(crate) events: Option<BTreeSet<EventKind>>,
+    pub(crate) milestones: Option<Vec<i64>>,
+    pub(crate) expiry_hours: Option<u16>,
+    /// Connector infrastructure stays environment-only.
+    pub(crate) connector: Option<Connector>,
 }
 
 /// A notification to record. Each variant has a deterministic identity.
@@ -126,9 +154,29 @@ pub(crate) enum Event {
     },
 }
 
-impl Notifier {
-    /// Reads the notification settings. Returns `None` when no webhook is configured.
-    pub fn from_env(read: impl Fn(&str) -> Option<String>) -> Result<Option<Self>, String> {
+/// A notification event, from its API name.
+pub(crate) fn parse_event(name: &str) -> Option<EventKind> {
+    EventKind::parse(name)
+}
+
+pub(crate) fn event_name(kind: EventKind) -> &'static str {
+    kind.name()
+}
+
+/// The event selection when none is saved or configured.
+pub(crate) fn default_events(legacy: bool, milestones: bool) -> BTreeSet<EventKind> {
+    if legacy {
+        return BTreeSet::from([EventKind::LinkHealth]);
+    }
+    EventKind::ALL
+        .into_iter()
+        .filter(|kind| *kind != EventKind::ClickMilestone || milestones)
+        .collect()
+}
+
+impl NotificationEnv {
+    /// Reads and validates the notification variables.
+    pub(crate) fn from_env(read: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
         let value = |name: &str| read(name).filter(|value| !value.is_empty());
         let file = |name: &str| -> Result<Option<String>, String> {
             match value(name) {
@@ -146,33 +194,19 @@ impl Notifier {
         };
         let notification = exclusive("NOTIFICATION_WEBHOOK_URL", "NOTIFICATION_WEBHOOK_URL_FILE")?;
         let legacy = exclusive("MONITOR_WEBHOOK_URL", "MONITOR_WEBHOOK_URL_FILE")?;
-        let (url, legacy) = match (notification, legacy) {
+        let (webhook, legacy) = match (notification, legacy) {
             (Some(_), Some(_)) => {
                 return Err(
                     "MONITOR_WEBHOOK_URL is an alias; set only NOTIFICATION_WEBHOOK_URL".into(),
                 );
             }
-            (Some(url), None) => (url, false),
-            (None, Some(url)) => (url, true),
-            (None, None) => {
-                let dependent = [
-                    "NOTIFICATION_EVENTS",
-                    "NOTIFICATION_CLICK_MILESTONES",
-                    "NOTIFICATION_EXPIRY_NOTICE_HOURS",
-                    "NOTIFICATION_WEBHOOK_AUTHORIZATION_FILE",
-                    "NOTIFICATION_CONNECTOR_ORIGIN",
-                    "NOTIFICATION_CONNECTOR_NETWORKS",
-                    "NOTIFICATION_CONNECTOR_CA_FILE",
-                ];
-                if let Some(name) = dependent.into_iter().find(|name| value(name).is_some()) {
-                    return Err(format!("{name} requires NOTIFICATION_WEBHOOK_URL"));
-                }
-                return Ok(None);
-            }
+            (Some(url), None) => (Some(url), false),
+            (None, Some(url)) => (Some(url), true),
+            (None, None) => (None, false),
         };
         let milestones = match value("NOTIFICATION_CLICK_MILESTONES") {
-            Some(list) => parse_milestones(&list)?,
-            None => Vec::new(),
+            Some(list) => Some(parse_milestones(&list)?),
+            None => None,
         };
         let events = match value("NOTIFICATION_EVENTS") {
             Some(list) => {
@@ -183,25 +217,27 @@ impl Notifier {
                             format!("unknown NOTIFICATION_EVENTS entry {name:?}")
                         })?);
                 }
-                events
+                Some(events)
             }
-            None if legacy => BTreeSet::from([EventKind::LinkHealth]),
-            None => EventKind::ALL
-                .into_iter()
-                .filter(|kind| *kind != EventKind::ClickMilestone || !milestones.is_empty())
-                .collect(),
+            None => None,
         };
-        if events.contains(&EventKind::ClickMilestone) && milestones.is_empty() {
+        if events
+            .as_ref()
+            .is_some_and(|events| events.contains(&EventKind::ClickMilestone))
+            && milestones.as_ref().is_none_or(Vec::is_empty)
+        {
             return Err("click_milestone requires NOTIFICATION_CLICK_MILESTONES".into());
         }
-        let expiry_notice = match value("NOTIFICATION_EXPIRY_NOTICE_HOURS") {
-            Some(hours) => hours
-                .parse::<i64>()
-                .ok()
-                .filter(|hours| (1..=720).contains(hours))
-                .ok_or("NOTIFICATION_EXPIRY_NOTICE_HOURS must be 1 to 720")?,
-            None => 24,
-        } * 3600;
+        let expiry_hours = match value("NOTIFICATION_EXPIRY_NOTICE_HOURS") {
+            Some(hours) => Some(
+                hours
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|hours| (1..=720).contains(hours))
+                    .ok_or("NOTIFICATION_EXPIRY_NOTICE_HOURS must be 1 to 720")?,
+            ),
+            None => None,
+        };
         let connector = match (
             value("NOTIFICATION_CONNECTOR_ORIGIN"),
             value("NOTIFICATION_CONNECTOR_NETWORKS"),
@@ -225,19 +261,81 @@ impl Notifier {
             }
         };
         let authorization = file("NOTIFICATION_WEBHOOK_AUTHORIZATION_FILE")?;
-        let webhook = Webhook::new(&url, authorization.as_deref(), connector)?;
-        Ok(Some(Self(Arc::new(Inner {
+        // A configured webhook is validated as before, so a broken container value still stops
+        // the start instead of silently disabling notifications.
+        if let Some(url) = &webhook {
+            Webhook::new(url, authorization.as_deref(), connector.clone())?;
+        }
+        Ok(Self {
             webhook,
+            legacy,
+            authorization,
             events,
             milestones,
-            expiry_notice,
-            fetcher: Fetcher::new(),
-            changed: Notify::new(),
-        }))))
+            expiry_hours,
+            connector,
+        })
+    }
+}
+
+impl NotificationConfig {
+    pub(crate) fn new(
+        url: &str,
+        authorization: Option<&str>,
+        connector: Option<Connector>,
+        events: BTreeSet<EventKind>,
+        milestones: Vec<i64>,
+        expiry_hours: u16,
+    ) -> Result<Self, &'static str> {
+        Ok(Self {
+            webhook: Webhook::new(url, authorization, connector)?,
+            events,
+            milestones,
+            expiry_notice: i64::from(expiry_hours) * 3600,
+        })
     }
 
     fn wants(&self, kind: EventKind) -> bool {
-        self.0.events.contains(&kind)
+        self.events.contains(&kind)
+    }
+
+    pub(crate) fn webhook(&self) -> &Webhook {
+        &self.webhook
+    }
+
+    pub(crate) fn origin(&self) -> String {
+        self.webhook.origin()
+    }
+
+    pub(crate) fn uses_connector(&self) -> bool {
+        self.webhook.uses_connector()
+    }
+
+    pub(crate) fn events(&self) -> Vec<EventKind> {
+        self.events.iter().copied().collect()
+    }
+
+    pub(crate) fn milestones(&self) -> &[i64] {
+        &self.milestones
+    }
+
+    pub(crate) fn expiry_notice_hours(&self) -> i64 {
+        self.expiry_notice / 3600
+    }
+}
+
+impl Notifier {
+    pub fn new(settings: &RuntimeSettings) -> Self {
+        Self(Arc::new(Inner {
+            settings: settings.clone(),
+            fetcher: Fetcher::new(),
+            changed: Notify::new(),
+        }))
+    }
+
+    /// The active configuration, or `None` while notifications are off.
+    pub(crate) fn config(&self) -> Option<Arc<NotificationConfig>> {
+        self.0.settings.current().notifications.clone()
     }
 
     /// Records an event if its kind is enabled. Duplicate keys are ignored.
@@ -246,6 +344,10 @@ impl Notifier {
         executor: impl Executor<'e, Database = Sqlite>,
         event: Event,
     ) -> Result<(), sqlx::Error> {
+        // Nothing is recorded while notifications are off.
+        let Some(config) = self.config() else {
+            return Ok(());
+        };
         let (kind, key, occurred_at, payload) = match event {
             Event::Test { nonce } => ("test", format!("test:{nonce:032x}"), None, json!({})),
             Event::LinkHealth {
@@ -254,7 +356,7 @@ impl Notifier {
                 revision,
                 checked_at,
             } => {
-                if !self.wants(EventKind::LinkHealth) {
+                if !config.wants(EventKind::LinkHealth) {
                     return Ok(());
                 }
                 (
@@ -265,7 +367,7 @@ impl Notifier {
                 )
             }
             Event::BackupFailed { at } => {
-                if !self.wants(EventKind::BackupFailed) {
+                if !config.wants(EventKind::BackupFailed) {
                     return Ok(());
                 }
                 (
@@ -281,26 +383,6 @@ impl Notifier {
         Ok(())
     }
 
-    pub(crate) fn origin(&self) -> String {
-        self.0.webhook.origin()
-    }
-
-    pub(crate) fn uses_connector(&self) -> bool {
-        self.0.webhook.uses_connector()
-    }
-
-    pub(crate) fn events(&self) -> Vec<EventKind> {
-        self.0.events.iter().copied().collect()
-    }
-
-    pub(crate) fn milestones(&self) -> &[i64] {
-        &self.0.milestones
-    }
-
-    pub(crate) fn expiry_notice_hours(&self) -> i64 {
-        self.0.expiry_notice / 3600
-    }
-
     /// Runs detection and delivery until shutdown.
     pub async fn run(
         &self,
@@ -309,17 +391,31 @@ impl Notifier {
         dropped_events: Option<DroppedCounter>,
         mut stop: watch::Receiver<bool>,
     ) {
-        if start(&pool).await.is_err() {
-            tracing::warn!("could not initialize notification state");
-        }
+        let mut settings = self.0.settings.subscribe();
+        let mut initialized = false;
         let mut dropped = dropped_events.as_ref().map_or(0, DroppedCounter::get);
         let mut scan = time::interval(SCAN_INTERVAL);
         scan.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         loop {
+            // While notifications are off, wait for a settings change or shutdown.
+            if self.config().is_none() {
+                tokio::select! {
+                    _ = stop.changed() => return,
+                    Ok(()) = settings.changed() => {}
+                }
+                continue;
+            }
+            if !initialized {
+                if start(&pool).await.is_err() {
+                    tracing::warn!("could not initialize notification state");
+                }
+                initialized = true;
+            }
             let scan_due = tokio::select! {
                 _ = stop.changed() => return,
                 _ = scan.tick() => true,
                 _ = self.0.changed.notified() => false,
+                Ok(()) = settings.changed() => continue,
             };
             if scan_due {
                 let current = dropped_events.as_ref().map_or(0, DroppedCounter::get);
@@ -348,6 +444,9 @@ impl Notifier {
         data_directory: &Path,
         newly_dropped: u64,
     ) -> Result<(), sqlx::Error> {
+        let Some(config) = self.config() else {
+            return Ok(());
+        };
         let not_before: i64 =
             sqlx::query_scalar("SELECT coalesce(not_before, unixepoch()) FROM notification_state")
                 .fetch_one(pool)
@@ -355,7 +454,7 @@ impl Notifier {
         let now: i64 = sqlx::query_scalar("SELECT unixepoch()")
             .fetch_one(pool)
             .await?;
-        if self.wants(EventKind::LinkExpiring) {
+        if config.wants(EventKind::LinkExpiring) {
             let rows = sqlx::query_as::<_, (i64, i64)>(
                 "SELECT links.id, policy.expires_at FROM link_redirect_policies AS policy
                  JOIN links ON links.id = policy.link_id
@@ -366,7 +465,7 @@ impl Notifier {
                  ORDER BY policy.expires_at, links.id LIMIT ?4",
             )
             .bind(now)
-            .bind(self.0.expiry_notice)
+            .bind(config.expiry_notice)
             .bind(not_before)
             .bind(SCAN_LIMIT)
             .fetch_all(pool)
@@ -376,13 +475,13 @@ impl Notifier {
                     pool,
                     "link_expiring",
                     &format!("link_expiring:{id}:{expires_at}"),
-                    Some(expires_at - self.0.expiry_notice),
+                    Some(expires_at - config.expiry_notice),
                     &json!({"link_id": id, "expires_at": expires_at}),
                 )
                 .await?;
             }
         }
-        if self.wants(EventKind::LinkExpired) {
+        if config.wants(EventKind::LinkExpired) {
             let rows = sqlx::query_as::<_, (i64, i64)>(
                 "SELECT links.id, policy.expires_at FROM link_redirect_policies AS policy
                  JOIN links ON links.id = policy.link_id
@@ -408,7 +507,7 @@ impl Notifier {
                 .await?;
             }
         }
-        if self.wants(EventKind::ClickMilestone) {
+        if config.wants(EventKind::ClickMilestone) {
             // One query per scan: links with redirects today, their total before today, and
             // their total now. A milestone counts when today's redirects cross it.
             let rows = sqlx::query_as::<_, (i64, i64, i64)>(
@@ -428,8 +527,7 @@ impl Notifier {
             .fetch_all(pool)
             .await?;
             for (id, before, total) in rows {
-                for milestone in self
-                    .0
+                for milestone in config
                     .milestones
                     .iter()
                     .filter(|milestone| before < **milestone && **milestone <= total)
@@ -445,7 +543,7 @@ impl Notifier {
                 }
             }
         }
-        if self.wants(EventKind::StorageLow) {
+        if config.wants(EventKind::StorageLow) {
             let database_bytes: i64 = sqlx::query_scalar(
                 "SELECT (SELECT page_count FROM pragma_page_count()) *
                         (SELECT page_size FROM pragma_page_size())",
@@ -475,7 +573,7 @@ impl Notifier {
                 .await?;
             }
         }
-        if self.wants(EventKind::JobFailed) && newly_dropped > 0 {
+        if config.wants(EventKind::JobFailed) && newly_dropped > 0 {
             insert(
                 pool,
                 "job_failed",
@@ -485,10 +583,14 @@ impl Notifier {
             )
             .await?;
         }
-        self.detect_security(pool).await
+        self.detect_security(pool, &config).await
     }
 
-    async fn detect_security(&self, pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    async fn detect_security(
+        &self,
+        pool: &SqlitePool,
+        config: &NotificationConfig,
+    ) -> Result<(), sqlx::Error> {
         let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
         let cursor: i64 = sqlx::query_scalar("SELECT audit_cursor FROM notification_state")
             .fetch_one(&mut *transaction)
@@ -504,7 +606,7 @@ impl Notifier {
         let Some(last) = rows.last().map(|row| row.0) else {
             return transaction.commit().await;
         };
-        if self.wants(EventKind::Security) {
+        if config.wants(EventKind::Security) {
             for (id, created_at, action, outcome) in &rows {
                 let notable = (outcome == "success" && SECURITY_ACTIONS.contains(&action.as_str()))
                     || (outcome != "success" && action != "login");
@@ -529,6 +631,9 @@ impl Notifier {
 
     /// Sends due rows. Failures back off exponentially and stop after `MAX_ATTEMPTS`.
     pub(crate) async fn deliver_due(&self, pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        let Some(config) = self.config() else {
+            return Ok(());
+        };
         sqlx::query(
             "UPDATE notification_outbox SET status = 'failed', last_error = 'stale'
              WHERE status = 'pending' AND created_at < unixepoch() - ?",
@@ -561,7 +666,7 @@ impl Notifier {
             let result = self
                 .0
                 .fetcher
-                .deliver(&self.0.webhook, body.to_string().into_bytes())
+                .deliver(config.webhook(), body.to_string().into_bytes())
                 .await;
             match result {
                 Ok(()) => {
@@ -663,7 +768,24 @@ pub(crate) async fn after_restore<'e>(
     Ok(())
 }
 
-fn parse_milestones(list: &str) -> Result<Vec<i64>, String> {
+/// Called in the transaction that changes the effective webhook, including turning it on or off.
+/// Pending deliveries were meant for the previous target and are discarded, and only events after
+/// the change are generated, so a new target never receives earlier history.
+pub(crate) async fn target_changed(
+    connection: &mut sqlx::SqliteConnection,
+) -> Result<(), sqlx::Error> {
+    sqlx::raw_sql(
+        "UPDATE notification_outbox SET status = 'discarded', last_error = NULL
+             WHERE status = 'pending';
+         UPDATE notification_state SET not_before = unixepoch(),
+             audit_cursor = (SELECT coalesce(max(id), 0) FROM admin_audit);",
+    )
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+pub(crate) fn parse_milestones(list: &str) -> Result<Vec<i64>, String> {
     let invalid =
         || "NOTIFICATION_CLICK_MILESTONES must list up to 10 positive integers".to_owned();
     let mut milestones = list
@@ -752,7 +874,11 @@ mod tests {
     }
 
     fn notifier(values: &[(&str, &str)]) -> Notifier {
-        Notifier::from_env(settings(values)).unwrap().unwrap()
+        Notifier::new(&RuntimeSettings::detached(settings(values)).unwrap())
+    }
+
+    fn config(values: &[(&str, &str)]) -> Arc<NotificationConfig> {
+        notifier(values).config().unwrap()
     }
 
     async fn database() -> (tempfile::TempDir, SqlitePool) {
@@ -772,12 +898,14 @@ mod tests {
 
     #[test]
     fn notifications_are_off_without_a_webhook_and_settings_are_validated() {
-        assert!(Notifier::from_env(settings(&[])).unwrap().is_none());
+        assert!(notifier(&[]).config().is_none());
+        // Without a webhook, other values are start values for Settings > Operations.
+        assert!(
+            notifier(&[("NOTIFICATION_EVENTS", "security")])
+                .config()
+                .is_none()
+        );
         for (values, message) in [
-            (
-                vec![("NOTIFICATION_EVENTS", "security")],
-                "requires NOTIFICATION_WEBHOOK_URL",
-            ),
             (
                 vec![("NOTIFICATION_WEBHOOK_URL", "http://hooks.example/")],
                 "HTTPS",
@@ -837,24 +965,24 @@ mod tests {
                 "connector origin",
             ),
         ] {
-            let error = Notifier::from_env(settings(&values)).err().unwrap();
+            let error = RuntimeSettings::detached(settings(&values)).err().unwrap();
             assert!(error.contains(message), "{error} / {message}");
         }
 
-        let defaults = notifier(&[("NOTIFICATION_WEBHOOK_URL", "https://hooks.example/notify")]);
+        let defaults = config(&[("NOTIFICATION_WEBHOOK_URL", "https://hooks.example/notify")]);
         assert!(!defaults.events().contains(&EventKind::ClickMilestone));
         assert!(defaults.events().contains(&EventKind::Security));
         assert_eq!(defaults.expiry_notice_hours(), 24);
         assert_eq!(defaults.origin(), "https://hooks.example");
-        let legacy = notifier(&[("MONITOR_WEBHOOK_URL", "https://hooks.example/health")]);
+        let legacy = config(&[("MONITOR_WEBHOOK_URL", "https://hooks.example/health")]);
         assert_eq!(legacy.events(), [EventKind::LinkHealth]);
-        let milestones = notifier(&[
+        let milestones = config(&[
             ("NOTIFICATION_WEBHOOK_URL", "https://hooks.example/"),
             ("NOTIFICATION_CLICK_MILESTONES", "1000, 10,10"),
         ]);
         assert_eq!(milestones.milestones(), [10, 1000]);
         assert!(milestones.events().contains(&EventKind::ClickMilestone));
-        let internal = notifier(&[
+        let internal = config(&[
             ("NOTIFICATION_WEBHOOK_URL", "https://hooks.lan:8443/notify"),
             ("NOTIFICATION_CONNECTOR_ORIGIN", "https://hooks.lan:8443"),
             ("NOTIFICATION_CONNECTOR_NETWORKS", "10.20.0.0/16"),

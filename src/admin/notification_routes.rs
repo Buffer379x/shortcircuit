@@ -37,35 +37,39 @@ async fn status(
     let (counts, items) = notifications::status(&state.pool)
         .await
         .map_err(|_| Problem::unavailable())?;
-    Ok(Json(match notifier {
-        Some(notifier) => Status {
-            enabled: true,
-            origin: Some(notifier.origin()),
-            connector: notifier.uses_connector(),
-            events: notifier.events(),
-            click_milestones: notifier.milestones().to_vec(),
-            expiry_notice_hours: Some(notifier.expiry_notice_hours()),
-            counts,
-            items,
+    Ok(Json(
+        match notifier.and_then(|notifier| notifier.config()) {
+            Some(notifier) => Status {
+                enabled: true,
+                origin: Some(notifier.origin()),
+                connector: notifier.uses_connector(),
+                events: notifier.events(),
+                click_milestones: notifier.milestones().to_vec(),
+                expiry_notice_hours: Some(notifier.expiry_notice_hours()),
+                counts,
+                items,
+            },
+            None => Status {
+                enabled: false,
+                origin: None,
+                connector: false,
+                events: Vec::new(),
+                click_milestones: Vec::new(),
+                expiry_notice_hours: None,
+                counts,
+                items,
+            },
         },
-        None => Status {
-            enabled: false,
-            origin: None,
-            connector: false,
-            events: Vec::new(),
-            click_milestones: Vec::new(),
-            expiry_notice_hours: None,
-            counts,
-            items,
-        },
-    }))
+    ))
 }
 
 async fn send_test(
     State(state): State<AppState>,
     Extension(notifier): Extension<Option<Notifier>>,
 ) -> Result<StatusCode, Problem> {
-    let notifier = notifier.ok_or(Problem(StatusCode::CONFLICT, "notifications_disabled"))?;
+    let notifier = notifier
+        .filter(|notifier| notifier.config().is_some())
+        .ok_or(Problem(StatusCode::CONFLICT, "notifications_disabled"))?;
     let mut nonce = [0; 16];
     getrandom::fill(&mut nonce).map_err(|_| Problem::unavailable())?;
     notifier

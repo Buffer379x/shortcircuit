@@ -11,8 +11,10 @@ mod links;
 mod metrics;
 mod monitoring;
 mod notification_routes;
+mod operation_settings;
 mod operations;
 mod overview;
+mod public_pages;
 mod qr_templates;
 mod titles;
 
@@ -41,6 +43,7 @@ use crate::{
     monitor::Monitor,
     notifications::Notifier,
     rate_limit::AttemptLimiter,
+    runtime_settings::RuntimeSettings,
     titles::TitleLookup,
 };
 
@@ -68,6 +71,8 @@ pub struct AdminServices {
     pub monitor: Option<Monitor>,
     pub titles: Option<TitleLookup>,
     pub notifications: Option<Notifier>,
+    /// Settings > Operations. Its routes also need `operations` for password confirmation.
+    pub runtime_settings: Option<RuntimeSettings>,
 }
 
 pub fn admin_router(pool: SqlitePool, hosts: PublicHosts, config: AdminConfig) -> Router {
@@ -103,6 +108,7 @@ pub fn admin_router_with(
         monitor,
         titles,
         notifications,
+        runtime_settings,
     } = services;
     let state = AppState {
         pool: pool.clone(),
@@ -114,7 +120,12 @@ pub fn admin_router_with(
         config: Arc::new(config),
     };
 
-    let monitoring_enabled = monitor.as_ref().is_some_and(Monitor::enabled);
+    let settings_routes = match (&operations, runtime_settings) {
+        (Some(operations), Some(settings)) => {
+            operation_settings::routes(operations.clone(), settings)
+        }
+        _ => Router::new(),
+    };
     let sign_in = Router::new()
         .route("/api/v1/auth/setup", post(setup))
         .route("/api/v1/auth/login", post(login))
@@ -131,14 +142,16 @@ pub fn admin_router_with(
         .route("/api/v1/keys/{id}", delete(revoke_key))
         .route("/api/v1/keys/{id}/rotate", post(admin_security::rotate_key))
         .route("/api/v1/audit", get(admin_security::list_audit))
-        .merge(overview::routes(monitoring_enabled))
+        .merge(overview::routes(monitor.clone()))
         .merge(operations.map_or_else(Router::new, operations::routes))
+        .merge(settings_routes)
         .merge(monitor.map_or_else(Router::new, monitoring::routes))
         .merge(qr_templates::routes())
         .merge(links::qr_logo_routes())
         .merge(catalog_search::routes())
         .merge(bulk::routes())
         .merge(destination_policy::routes())
+        .merge(public_pages::routes())
         .merge(titles.map_or_else(Router::new, titles::routes))
         .merge(notification_routes::routes(notifications))
         .route_layer(middleware::from_fn_with_state(

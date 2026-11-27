@@ -10,37 +10,37 @@ use sqlx::SqlitePool;
 use tokio::{
     sync::watch,
     task,
-    time::{self, Instant, MissedTickBehavior},
+    time::{self, Instant},
 };
 
+use crate::{notifications::Notifier, runtime_settings::RuntimeSettings};
+
+/// The scheduled backup job. The interval and retention come from the effective settings and
+/// apply without a restart; an interval of 0 turns the schedule off.
 pub struct BackupSchedule {
-    interval: Duration,
-    keep: usize,
-    notifier: Option<crate::notifications::Notifier>,
+    settings: RuntimeSettings,
+    notifier: Notifier,
+    /// The length of one interval hour, shorter only in tests.
+    hour: Duration,
 }
 
 impl BackupSchedule {
-    pub fn new(interval_hours: u64, keep: usize) -> Result<Option<Self>, &'static str> {
-        if interval_hours == 0 {
-            return Ok(None);
+    pub fn new(settings: &RuntimeSettings, notifier: Notifier) -> Self {
+        Self {
+            settings: settings.clone(),
+            notifier,
+            hour: Duration::from_secs(3600),
         }
-        if interval_hours > 720 {
-            return Err("scheduled backup interval must be between 1 and 720 hours");
-        }
-        if !(1..=365).contains(&keep) {
-            return Err("scheduled backup retention must be between 1 and 365 snapshots");
-        }
-        Ok(Some(Self {
-            interval: Duration::from_secs(interval_hours * 3600),
-            keep,
-            notifier: None,
-        }))
     }
 
-    /// Reports failed scheduled backups through the notification outbox.
-    pub fn with_notifier(mut self, notifier: Option<crate::notifications::Notifier>) -> Self {
-        self.notifier = notifier;
-        self
+    /// The interval, or `None` while scheduled backups are off, and the retention count.
+    fn current(&self) -> (Option<Duration>, usize) {
+        let settings = self.settings.current();
+        let hours = u32::from(settings.backup_interval_hours.value);
+        (
+            (hours > 0).then(|| self.hour * hours),
+            usize::from(settings.backup_keep.value),
+        )
     }
 
     pub async fn run(
@@ -50,27 +50,51 @@ impl BackupSchedule {
         mut shutdown: watch::Receiver<bool>,
     ) {
         let scheduled = backup_dir.join("scheduled");
-        // Continue the schedule from the newest scheduled snapshot, so restarts cannot postpone
-        // backups indefinitely. An overdue backup runs shortly after startup.
-        let newest = {
-            let scheduled = scheduled.clone();
-            task::spawn_blocking(move || newest_snapshot(&scheduled))
-                .await
-                .ok()
-                .flatten()
-        };
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs());
-        let first = first_delay(newest, now, self.interval);
-        let mut timer = time::interval_at(Instant::now() + first, self.interval);
-        timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut settings = self.settings.subscribe();
+        // When the schedule became active, and when this process last attempted a backup.
+        let mut active_since: Option<Instant> = None;
+        let mut last_attempt: Option<Instant> = None;
         loop {
+            if *shutdown.borrow() {
+                return;
+            }
+            let (Some(interval), _) = self.current() else {
+                active_since = None;
+                tokio::select! {
+                    biased;
+                    _ = shutdown.wait_for(|stopped| *stopped) => return,
+                    Ok(()) = settings.changed() => {}
+                }
+                continue;
+            };
+            let since = *active_since.get_or_insert_with(Instant::now);
+            // Continue the schedule from the newest scheduled snapshot, so restarts and setting
+            // changes cannot postpone backups indefinitely. An overdue backup runs shortly after
+            // startup. A failed attempt waits a full interval before the next one.
+            let newest = {
+                let scheduled = scheduled.clone();
+                task::spawn_blocking(move || newest_snapshot(&scheduled))
+                    .await
+                    .ok()
+                    .flatten()
+            };
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs());
+            let delay = next_delay(
+                newest,
+                now,
+                interval,
+                since.elapsed(),
+                last_attempt.map(|attempt| attempt.elapsed()),
+            );
             tokio::select! {
                 biased;
                 _ = shutdown.wait_for(|stopped| *stopped) => return,
-                _ = timer.tick() => {}
+                Ok(()) = settings.changed() => continue,
+                _ = time::sleep(delay) => {}
             }
+            last_attempt = Some(Instant::now());
             let result = crate::backup::create_snapshot(&pool, &scheduled).await;
             crate::backup::record_backup_result(&backup_dir, result.is_ok()).await;
             let completed = match result {
@@ -80,19 +104,18 @@ impl BackupSchedule {
                 }
                 Err(_) => {
                     tracing::warn!("scheduled backup creation failed");
-                    if let Some(notifier) = &self.notifier {
-                        let at = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |elapsed| elapsed.as_secs() as i64);
-                        let event = crate::notifications::Event::BackupFailed { at };
-                        if notifier.record(&pool, event).await.is_err() {
-                            tracing::warn!("could not record a backup failure notification");
-                        }
+                    let at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |elapsed| elapsed.as_secs() as i64);
+                    let event = crate::notifications::Event::BackupFailed { at };
+                    if self.notifier.record(&pool, event).await.is_err() {
+                        tracing::warn!("could not record a backup failure notification");
                     }
                     continue;
                 }
             };
-            let keep = self.keep;
+            // Retention reads the current setting, so a changed count applies to the next run.
+            let keep = self.current().1;
             if !matches!(
                 task::spawn_blocking(move || prune(&completed, keep)).await,
                 Ok(Ok(()))
@@ -101,6 +124,23 @@ impl BackupSchedule {
             }
         }
     }
+}
+
+/// Delay before the next scheduled backup. Without any scheduled snapshot, the first one runs
+/// one interval after the schedule became active.
+fn next_delay(
+    newest: Option<u64>,
+    now: u64,
+    interval: Duration,
+    active_for: Duration,
+    since_attempt: Option<Duration>,
+) -> Duration {
+    let scheduled = match newest {
+        Some(_) => first_delay(newest, now, interval),
+        None => interval.saturating_sub(active_for),
+    };
+    let retry = since_attempt.map_or(Duration::ZERO, |elapsed| interval.saturating_sub(elapsed));
+    scheduled.max(retry)
 }
 
 /// Delay before the first scheduled backup after startup.
@@ -207,33 +247,50 @@ mod tests {
         format!("shortcircuit-{seconds}-0123456789abcdef0123456789abcdef.sqlite")
     }
 
+    fn snapshots(directory: &Path) -> usize {
+        fs::read_dir(directory).map_or(0, |names| {
+            names
+                .filter(|entry| {
+                    entry
+                        .as_ref()
+                        .is_ok_and(|entry| backup_timestamp(&entry.file_name()).is_some())
+                })
+                .count()
+        })
+    }
+
     #[tokio::test]
-    async fn scheduled_job_publishes_a_snapshot_and_stops_on_signal() {
+    async fn a_saved_interval_starts_the_schedule_without_a_restart() {
         let work = tempfile::tempdir().unwrap();
         let pool = crate::open_database(&work.path().join("test.db"))
             .await
             .unwrap();
+        let container = crate::runtime_settings::OperationsEnvironment::from_env(|name| {
+            (name == "BACKUP_INTERVAL_HOURS").then(|| "0".to_owned())
+        })
+        .unwrap();
+        let settings = RuntimeSettings::load(&pool, container).await.unwrap();
         let target = work.path().join("backups");
         let (stop, signal) = watch::channel(false);
-        let worker = tokio::spawn(
-            BackupSchedule {
-                interval: Duration::from_millis(400),
-                keep: 2,
-                notifier: None,
-            }
-            .run(pool, target.clone(), signal),
-        );
+        let mut schedule = BackupSchedule::new(&settings, Notifier::new(&settings));
+        schedule.hour = Duration::from_millis(200);
+        let worker = tokio::spawn(schedule.run(pool.clone(), target.clone(), signal));
         let scheduled = target.join("scheduled");
-        assert!(!scheduled.exists());
+        // The container turned scheduled backups off: nothing is written.
+        time::sleep(Duration::from_millis(600)).await;
+        assert_eq!(snapshots(&scheduled), 0);
+
+        // Saving an interval applies at once; the first backup follows one interval later.
+        settings
+            .save(
+                &pool,
+                &serde_json::from_value(serde_json::json!({"backup_interval_hours": 1})).unwrap(),
+                || true,
+            )
+            .await
+            .unwrap();
         time::timeout(Duration::from_secs(5), async {
-            loop {
-                if fs::read_dir(&scheduled).is_ok_and(|mut names| {
-                    names.any(|entry| {
-                        entry.is_ok_and(|entry| backup_timestamp(&entry.file_name()).is_some())
-                    })
-                }) {
-                    break;
-                }
+            while snapshots(&scheduled) == 0 {
                 time::sleep(Duration::from_millis(25)).await;
             }
         })
@@ -244,6 +301,33 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[test]
+    fn failed_attempts_wait_a_full_interval_and_changes_keep_the_schedule() {
+        let hour = Duration::from_secs(3600);
+        let now = 1_800_000_000;
+        // No snapshot: one interval after the schedule became active, not after each change.
+        assert_eq!(next_delay(None, now, hour, Duration::ZERO, None), hour);
+        assert_eq!(
+            next_delay(None, now, hour, Duration::from_secs(600), None),
+            Duration::from_secs(3000)
+        );
+        // An overdue snapshot runs soon, unless this process just failed an attempt.
+        assert_eq!(
+            next_delay(Some(now - 7200), now, hour, Duration::ZERO, None),
+            STARTUP_DELAY
+        );
+        assert_eq!(
+            next_delay(
+                Some(now - 7200),
+                now,
+                hour,
+                Duration::ZERO,
+                Some(Duration::ZERO)
+            ),
+            hour
+        );
     }
 
     #[test]
@@ -269,20 +353,6 @@ mod tests {
         }
         assert_eq!(newest_snapshot(directory.path()), Some(1_700_000_100));
         assert_eq!(newest_snapshot(&directory.path().join("missing")), None);
-    }
-
-    #[test]
-    fn validates_enabled_hours_and_retention_count() {
-        assert!(matches!(BackupSchedule::new(0, 0), Ok(None)));
-        assert!(matches!(BackupSchedule::new(0, 366), Ok(None)));
-        for (hours, keep) in [(1, 1), (720, 365)] {
-            let schedule = BackupSchedule::new(hours, keep).unwrap().unwrap();
-            assert_eq!(schedule.interval, Duration::from_secs(hours * 3600));
-            assert_eq!(schedule.keep, keep);
-        }
-        assert!(BackupSchedule::new(721, 7).is_err());
-        assert!(BackupSchedule::new(1, 0).is_err());
-        assert!(BackupSchedule::new(1, 366).is_err());
     }
 
     #[test]

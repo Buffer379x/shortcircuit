@@ -1,5 +1,6 @@
 use std::{
     error::Error,
+    fmt,
     fs::{self, DirBuilder, File, Metadata, TryLockError},
     io::{self, Read, Seek, SeekFrom},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -10,6 +11,7 @@ use std::{
 
 use sqlx::{
     Connection, SqliteConnection, SqlitePool,
+    migrate::Migrator,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 
@@ -27,6 +29,10 @@ const MARKER_SQL: &str = "CREATE TABLE shortcircuit_backup_metadata (
 ) STRICT";
 const SIDECARS: [&str; 3] = ["-wal", "-shm", "-journal"];
 
+/// Oldest snapshot schema this release restores and upgrades. 0.6.0-preview.1 wrote the first
+/// verified snapshots, at schema 6, in the format still used, and its migrations are unchanged.
+pub(crate) const MIN_RESTORE_SCHEMA: i64 = 6;
+
 type RestoreError = Box<dyn Error + Send + Sync>;
 type SchemaRow = (String, String, String, Option<String>);
 type MigrationRow = (i64, String, i64, Vec<u8>);
@@ -35,9 +41,55 @@ type MigrationRow = (i64, String, i64, Vec<u8>);
 pub struct RestoreOutcome {
     pub rollback: Option<PathBuf>,
     pub rollback_is_snapshot: bool,
+    /// Schema of the snapshot as it was created.
     pub schema_version: i64,
+    /// Schema the restored database was upgraded to, when the snapshot was older.
+    pub upgraded_to: Option<i64>,
     pub created_at: i64,
 }
+
+/// Why this release cannot restore a snapshot's schema.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum SchemaRefusal {
+    /// A later release created the snapshot.
+    Newer { found: i64, current: i64 },
+    /// The snapshot predates the oldest supported schema.
+    Older { found: i64, current: i64 },
+    /// Versions, descriptions, results, or checksums differ from the embedded migrations.
+    Mismatch,
+    /// Applying the remaining migrations to a copy of the snapshot failed.
+    UpgradeFailed { found: i64, current: i64 },
+}
+
+impl fmt::Display for SchemaRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Newer { found, current } => write!(
+                formatter,
+                "snapshot uses schema {found}, but this ShortCircuit version supports schemas up to \
+                 {current}. Restore it with the release that created it or a later one"
+            ),
+            Self::Older { found, current } => write!(
+                formatter,
+                "snapshot uses schema {found}, but this ShortCircuit version restores schemas \
+                 {MIN_RESTORE_SCHEMA} to {current}. Restore it with the release that created it, \
+                 then upgrade"
+            ),
+            Self::Mismatch => formatter.write_str(
+                "snapshot migration versions, descriptions, or checksums do not match this \
+                 ShortCircuit version",
+            ),
+            Self::UpgradeFailed { found, current } => write!(
+                formatter,
+                "snapshot uses schema {found} and could not be upgraded to schema {current}. \
+                 Check free space on the data volume, or restore it with the release that \
+                 created it, then upgrade"
+            ),
+        }
+    }
+}
+
+impl Error for SchemaRefusal {}
 
 /// Hold this file for as long as the process uses the database.
 pub fn data_lock(database: &Path, exclusive: bool) -> io::Result<File> {
@@ -100,6 +152,18 @@ async fn restore_snapshot_locked(
     source: &Path,
     lock: Arc<File>,
 ) -> Result<RestoreOutcome, RestoreError> {
+    restore_with(database, source, lock, crate::store::migrator()).await
+}
+
+/// Validates, upgrades, scrubs, and activates a private copy of `source`. The live database
+/// changes only in the final rename, so a snapshot that fails any step, including its upgrade,
+/// leaves the live database and its rollback state untouched.
+async fn restore_with(
+    database: &Path,
+    source: &Path,
+    lock: Arc<File>,
+    migrator: &Migrator,
+) -> Result<RestoreOutcome, RestoreError> {
     let directory = fs::canonicalize(parent(database))?;
     let filename = database
         .file_name()
@@ -115,15 +179,22 @@ async fn restore_snapshot_locked(
     let staged =
         tokio::task::spawn_blocking(move || Stage::copy_source(&directory, &source)).await??;
 
-    let (schema, migrations) = canonical_schema(&staged.directory.join("canonical.sqlite")).await?;
-    let (schema_version, created_at) =
-        validate_snapshot(&staged.incoming, &schema, &migrations).await?;
+    let mut schemas = Schemas::new(&staged.directory, migrator).await?;
+    let (schema_version, created_at) = validate_snapshot(&staged.incoming, &mut schemas).await?;
+    let current_version = schemas.current_version();
+    // Upgrade the staged copy, never the live database, so a failure cannot leave it half-migrated.
+    let upgraded_to = if schema_version < current_version {
+        upgrade_snapshot(&staged.incoming, schema_version, &schemas).await?;
+        Some(current_version)
+    } else {
+        None
+    };
     scrub_snapshot(&staged.incoming).await?;
     checkpoint_live(&database).await?;
 
     let previous = regular_metadata(&database)?;
     let candidate = if previous.is_some() {
-        rollback_snapshot(&database, &staged.directory, &schema, &migrations)
+        rollback_snapshot(&database, &staged.directory, &mut schemas)
             .await
             .ok()
     } else {
@@ -141,6 +212,7 @@ async fn restore_snapshot_locked(
         rollback,
         rollback_is_snapshot,
         schema_version,
+        upgraded_to,
         created_at,
     })
 }
@@ -281,8 +353,7 @@ fn check_snapshot_header(file: &mut File, metadata: &Metadata) -> io::Result<()>
 async fn rollback_snapshot(
     database: &Path,
     staging_directory: &Path,
-    schema: &[SchemaRow],
-    migrations: &[MigrationRow],
+    schemas: &mut Schemas<'_>,
 ) -> Result<PathBuf, RestoreError> {
     let source = SqlitePoolOptions::new()
         .max_connections(1)
@@ -301,7 +372,7 @@ async fn rollback_snapshot(
     if fs::metadata(&candidate)?.len() > MAX_SNAPSHOT_BYTES {
         return Err(invalid_data("rollback snapshot exceeds the supported size").into());
     }
-    validate_snapshot(&candidate, schema, migrations).await?;
+    validate_snapshot(&candidate, schemas).await?;
     Ok(candidate)
 }
 
@@ -311,18 +382,92 @@ impl Drop for Stage {
     }
 }
 
-async fn canonical_schema(
-    path: &Path,
-) -> Result<(Vec<SchemaRow>, Vec<MigrationRow>), RestoreError> {
-    let pool = crate::open_database(path).await?;
-    let result = read_canonical(&pool).await;
-    pool.close().await;
-    Ok(result?)
+/// The schema and migration rows that the embedded migrations produce in an empty database.
+struct Canonical {
+    schema: Vec<SchemaRow>,
+    migrations: Vec<MigrationRow>,
 }
 
-async fn read_canonical(
-    pool: &SqlitePool,
-) -> Result<(Vec<SchemaRow>, Vec<MigrationRow>), sqlx::Error> {
+/// Reference schemas for validation, built from the embedded migrations in a private directory.
+struct Schemas<'m> {
+    directory: PathBuf,
+    migrator: &'m Migrator,
+    current: Canonical,
+    older: Option<(i64, Canonical)>,
+}
+
+impl<'m> Schemas<'m> {
+    async fn new(directory: &Path, migrator: &'m Migrator) -> Result<Self, RestoreError> {
+        let current = build_canonical(&directory.join("canonical.sqlite"), migrator, None).await?;
+        if current.migrations.is_empty() {
+            return Err(invalid_data("application schema has no migrations").into());
+        }
+        Ok(Self {
+            directory: directory.to_owned(),
+            migrator,
+            current,
+            older: None,
+        })
+    }
+
+    fn current_version(&self) -> i64 {
+        self.current
+            .migrations
+            .last()
+            .map_or(0, |migration| migration.0)
+    }
+
+    async fn at(&mut self, version: i64) -> Result<&Canonical, RestoreError> {
+        if version == self.current_version() {
+            return Ok(&self.current);
+        }
+        if self
+            .older
+            .as_ref()
+            .is_none_or(|(built, _)| *built != version)
+        {
+            let path = self.directory.join(format!("canonical-{version}.sqlite"));
+            let _ = fs::remove_file(&path);
+            let canonical = build_canonical(&path, self.migrator, Some(version)).await?;
+            self.older = Some((version, canonical));
+        }
+        Ok(&self.older.as_ref().expect("built above").1)
+    }
+}
+
+async fn build_canonical(
+    path: &Path,
+    migrator: &Migrator,
+    version: Option<i64>,
+) -> Result<Canonical, RestoreError> {
+    let pool = single_connection(
+        SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Delete)
+            .foreign_keys(true),
+    )
+    .await?;
+    let migrated = match version {
+        Some(version) => migrator.run_to(version, &pool).await,
+        None => migrator.run(&pool).await,
+    };
+    let result = match migrated {
+        Ok(()) => read_canonical(&pool).await.map_err(Into::into),
+        Err(error) => Err(error.into()),
+    };
+    pool.close().await;
+    result
+}
+
+async fn single_connection(options: SqliteConnectOptions) -> Result<SqlitePool, sqlx::Error> {
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+}
+
+async fn read_canonical(pool: &SqlitePool) -> Result<Canonical, sqlx::Error> {
     let schema =
         sqlx::query_as("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
             .fetch_all(pool)
@@ -333,27 +478,95 @@ async fn read_canonical(
     )
     .fetch_all(pool)
     .await?;
-    Ok((schema, migrations))
+    Ok(Canonical { schema, migrations })
 }
 
+fn read_only(path: &Path) -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true)
+        .immutable(true)
+        .pragma("trusted_schema", "OFF")
+}
+
+/// Checks a snapshot at its own schema version: the migration rows must be an exact prefix of the
+/// embedded migrations, from `MIN_RESTORE_SCHEMA` up to the current version, and the schema must
+/// match what those migrations produce. Returns the snapshot's schema version and creation time.
 async fn validate_snapshot(
     incoming: &Path,
-    schema: &[SchemaRow],
-    migrations: &[MigrationRow],
+    schemas: &mut Schemas<'_>,
 ) -> Result<(i64, i64), RestoreError> {
-    let mut snapshot = SqliteConnection::connect_with(
-        &SqliteConnectOptions::new()
-            .filename(incoming)
-            .read_only(true)
-            .immutable(true)
-            .pragma("trusted_schema", "OFF"),
+    let mut snapshot = SqliteConnection::connect_with(&read_only(incoming)).await?;
+    let result = check_snapshot(&mut snapshot, schemas).await;
+    snapshot.close().await?;
+    result
+}
+
+async fn check_snapshot(
+    snapshot: &mut SqliteConnection,
+    schemas: &mut Schemas<'_>,
+) -> Result<(i64, i64), RestoreError> {
+    let current = &schemas.current.migrations;
+    let current_version = schemas.current_version();
+    let actual_migrations = sqlx::query_as::<_, MigrationRow>(
+        "SELECT version, description, CASE WHEN success = 1 THEN 1 ELSE 0 END, checksum
+         FROM _sqlx_migrations ORDER BY version LIMIT ?",
     )
+    .bind((current.len() + 1) as i64)
+    .fetch_all(&mut *snapshot)
+    .await
+    .map_err(|_| invalid_data("snapshot has no readable migration history"))?;
+    // Name both schema versions so an operator knows which release can restore the file.
+    let found = actual_migrations
+        .last()
+        .map(|migration| migration.0)
+        .ok_or_else(|| invalid_data("snapshot has no migration history"))?;
+    if found > current_version {
+        return Err(SchemaRefusal::Newer {
+            found,
+            current: current_version,
+        }
+        .into());
+    }
+    if !current.starts_with(&actual_migrations) {
+        return Err(SchemaRefusal::Mismatch.into());
+    }
+    if found < MIN_RESTORE_SCHEMA {
+        return Err(SchemaRefusal::Older {
+            found,
+            current: current_version,
+        }
+        .into());
+    }
+
+    check_schema(snapshot, &schemas.at(found).await?.schema).await?;
+    let versions: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
+        "SELECT id, format_version, schema_version, created_at
+         FROM shortcircuit_backup_metadata LIMIT 2",
+    )
+    .fetch_all(&mut *snapshot)
     .await?;
+    let [(1, 1, schema_version, created_at)] = versions.as_slice() else {
+        return Err(invalid_data("snapshot metadata does not describe a supported format").into());
+    };
+    if *schema_version != found || *created_at < 0 {
+        return Err(invalid_data("snapshot metadata is incompatible with this schema").into());
+    }
+
+    check_database(snapshot).await?;
+    Ok((*schema_version, *created_at))
+}
+
+/// Requires the snapshot marker plus exactly the reference schema objects.
+async fn check_schema(
+    snapshot: &mut SqliteConnection,
+    schema: &[SchemaRow],
+) -> Result<(), RestoreError> {
     let mut actual_schema = sqlx::query_as::<_, SchemaRow>(
         "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name LIMIT ?",
     )
     .bind((schema.len() + 2) as i64)
-    .fetch_all(&mut snapshot)
+    .fetch_all(&mut *snapshot)
     .await?;
     let marker = actual_schema
         .iter()
@@ -367,62 +580,55 @@ async fn validate_snapshot(
         })
         .ok_or_else(|| invalid_data("snapshot format marker is missing or invalid"))?;
     actual_schema.remove(marker);
-    // Name both schema versions so an operator knows which release can restore the file.
-    let snapshot_version: Option<i64> =
-        sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success = 1")
-            .fetch_one(&mut snapshot)
-            .await
-            .ok()
-            .flatten();
-    let expected_version = migrations.last().map(|migration| migration.0);
-    if let (Some(found), Some(expected)) = (snapshot_version, expected_version)
-        && found != expected
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "snapshot uses schema {found}, but this ShortCircuit version uses schema {expected}. \
-                 Restore it with the release that created it, then upgrade"
-            ),
-        )
-        .into());
-    }
     if actual_schema.as_slice() != schema {
         return Err(
             invalid_data("snapshot schema does not match this ShortCircuit version").into(),
         );
     }
+    Ok(())
+}
 
-    let actual_migrations = sqlx::query_as::<_, MigrationRow>(
-        "SELECT version, description, CASE WHEN success = 1 THEN 1 ELSE 0 END, checksum
-         FROM _sqlx_migrations ORDER BY version LIMIT ?",
+/// Applies the remaining migrations to a private copy of a validated older snapshot, the way
+/// startup upgrades a live database, then requires the current schema and migration rows.
+async fn upgrade_snapshot(
+    path: &Path,
+    found: i64,
+    schemas: &Schemas<'_>,
+) -> Result<(), RestoreError> {
+    let current = schemas.current_version();
+    let refusal = SchemaRefusal::UpgradeFailed { found, current };
+    let pool = single_connection(
+        SqliteConnectOptions::new()
+            .filename(path)
+            .journal_mode(SqliteJournalMode::Delete)
+            .synchronous(SqliteSynchronous::Full)
+            .foreign_keys(true),
     )
-    .bind((migrations.len() + 1) as i64)
-    .fetch_all(&mut snapshot)
     .await?;
-    if actual_migrations.as_slice() != migrations {
-        return Err(invalid_data("snapshot migration checksums or versions do not match").into());
-    }
-    let current_version = migrations
-        .last()
-        .ok_or_else(|| invalid_data("application schema has no migrations"))?
-        .0;
-    let versions: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
-        "SELECT id, format_version, schema_version, created_at
-         FROM shortcircuit_backup_metadata LIMIT 2",
-    )
-    .fetch_all(&mut snapshot)
-    .await?;
-    let [(1, 1, schema_version, created_at)] = versions.as_slice() else {
-        return Err(invalid_data("snapshot metadata does not describe a supported format").into());
-    };
-    if *schema_version != current_version || *created_at < 0 {
-        return Err(invalid_data("snapshot metadata is incompatible with this schema").into());
+    let migrated = schemas.migrator.run(&pool).await;
+    pool.close().await;
+    if migrated.is_err() {
+        return Err(refusal.into());
     }
 
-    check_database(&mut snapshot).await?;
-    snapshot.close().await?;
-    Ok((*schema_version, *created_at))
+    let mut upgraded = SqliteConnection::connect_with(&read_only(path)).await?;
+    let result = async {
+        let migrations = sqlx::query_as::<_, MigrationRow>(
+            "SELECT version, description, CASE WHEN success = 1 THEN 1 ELSE 0 END, checksum
+             FROM _sqlx_migrations ORDER BY version LIMIT ?",
+        )
+        .bind((schemas.current.migrations.len() + 1) as i64)
+        .fetch_all(&mut upgraded)
+        .await?;
+        if migrations != schemas.current.migrations {
+            return Err(RestoreError::from(refusal));
+        }
+        check_schema(&mut upgraded, &schemas.current.schema).await?;
+        check_database(&mut upgraded).await
+    }
+    .await;
+    upgraded.close().await?;
+    result
 }
 
 async fn scrub_snapshot(path: &Path) -> Result<(), RestoreError> {
@@ -594,6 +800,11 @@ fn invalid_data(message: &'static str) -> io::Error {
 mod tests {
     use super::*;
 
+    use sqlx::{
+        SqlSafeStr,
+        migrate::{Migration, MigrationType},
+    };
+
     async fn database(path: &Path, slug: &str) -> SqlitePool {
         let pool = crate::open_database(path).await.unwrap();
         sqlx::query(
@@ -614,6 +825,202 @@ mod tests {
             .unwrap();
         pool.close().await;
         result
+    }
+
+    /// Writes a verified snapshot of a database that stops at `version`, with one link.
+    pub(super) async fn snapshot_at(directory: &Path, version: i64, slug: &str) -> PathBuf {
+        let source = directory.join(format!("schema-{version}-{slug}.sqlite"));
+        let pool = crate::store::open_database_at_version(&source, version).await;
+        sqlx::query(
+            "INSERT INTO links (host, slug, target) VALUES ('go.example', ?, 'https://target.example')",
+        )
+        .bind(slug)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let snapshot = crate::backup::create_snapshot(&pool, &directory.join("snapshots"))
+            .await
+            .unwrap();
+        pool.close().await;
+        snapshot
+    }
+
+    pub(super) fn current_version() -> i64 {
+        crate::store::migrator()
+            .iter()
+            .map(|m| m.version)
+            .max()
+            .unwrap()
+    }
+
+    /// The embedded migrations plus one that fails once any link exists. It succeeds on the
+    /// empty reference database, so only the upgrade of a snapshot with data fails.
+    pub(super) fn failing_upgrade() -> Migrator {
+        let mut migrations: Vec<Migration> = crate::store::migrator().iter().cloned().collect();
+        migrations.push(Migration::new(
+            current_version() + 1,
+            "upgrade guard".into(),
+            MigrationType::Simple,
+            "CREATE TABLE upgrade_guard (id INTEGER PRIMARY KEY CHECK (id < 0)) STRICT;
+             INSERT INTO upgrade_guard SELECT id FROM links;"
+                .into_sql_str(),
+            false,
+        ));
+        Migrator::with_migrations(migrations)
+    }
+
+    fn refusal(error: &RestoreError) -> Option<SchemaRefusal> {
+        error.downcast_ref::<SchemaRefusal>().copied()
+    }
+
+    fn leftovers(directory: &Path) -> Vec<String> {
+        fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".rollback-") || name.starts_with(".restore-"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn older_supported_snapshots_restore_and_upgrade_before_activation() {
+        let current = current_version();
+        for version in [MIN_RESTORE_SCHEMA, 11, 24] {
+            let directory = tempfile::tempdir().unwrap();
+            let live = directory.path().join("data").join("live.sqlite");
+            database(&live, "live").await.close().await;
+            let snapshot = snapshot_at(directory.path(), version, "restored").await;
+            let mut source =
+                SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&snapshot))
+                    .await
+                    .unwrap();
+            sqlx::raw_sql(
+                "INSERT INTO admin_accounts (username, password_hash) VALUES ('owner', '$argon2id$test-hash');
+                 INSERT INTO admin_sessions (token_hash, account_id, created_at, last_seen_at)
+                     VALUES (zeroblob(32), 1, unixepoch(), unixepoch());",
+            )
+            .execute(&mut source)
+            .await
+            .unwrap();
+            source.close().await.unwrap();
+
+            let outcome = restore_snapshot(&live, &snapshot).await.unwrap();
+            assert_eq!(outcome.schema_version, version);
+            assert_eq!(
+                outcome.upgraded_to,
+                (version < current).then_some(current),
+                "schema {version}"
+            );
+            assert!(outcome.rollback_is_snapshot);
+            assert_eq!(link_slug(&outcome.rollback.unwrap()).await, "live");
+
+            // Startup finds nothing left to migrate, so it writes no pre-upgrade snapshot.
+            let pool = crate::open_database(&live).await.unwrap();
+            let state: (i64, i64, i64, String) = sqlx::query_as(
+                "SELECT (SELECT max(version) FROM _sqlx_migrations WHERE success = 1),
+                        (SELECT count(*) FROM admin_sessions),
+                        (SELECT count(*) FROM sqlite_schema WHERE name = 'shortcircuit_backup_metadata'),
+                        (SELECT slug FROM links)",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            pool.close().await;
+            assert_eq!(state, (current, 0, 0, "restored".to_owned()));
+            assert!(!live.with_file_name("backups").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn unsupported_snapshot_schemas_are_refused_and_leave_live_bytes_unchanged() {
+        let current = current_version();
+        let directory = tempfile::tempdir().unwrap();
+        let live = directory.path().join("data").join("live.sqlite");
+        database(&live, "live").await.close().await;
+        let original = fs::read(&live).unwrap();
+
+        let tamper = |path: PathBuf, sql: String| async move {
+            let mut snapshot =
+                SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
+                    .await
+                    .unwrap();
+            sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                .execute(&mut snapshot)
+                .await
+                .unwrap();
+            snapshot.close().await.unwrap();
+            path
+        };
+        let newer = tamper(
+            snapshot_at(directory.path(), current, "newer").await,
+            format!(
+                "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+                 VALUES ({}, 'future', 1, zeroblob(48), 0)",
+                current + 1
+            ),
+        )
+        .await;
+        let checksum = tamper(
+            snapshot_at(directory.path(), 11, "checksum").await,
+            "UPDATE _sqlx_migrations SET checksum = zeroblob(48) WHERE version = 5".to_owned(),
+        )
+        .await;
+        let description = tamper(
+            snapshot_at(directory.path(), current, "description").await,
+            "UPDATE _sqlx_migrations SET description = 'renamed' WHERE version = 1".to_owned(),
+        )
+        .await;
+        let too_old = snapshot_at(directory.path(), MIN_RESTORE_SCHEMA - 1, "old").await;
+
+        for (snapshot, expected) in [
+            (
+                newer,
+                SchemaRefusal::Newer {
+                    found: current + 1,
+                    current,
+                },
+            ),
+            (checksum, SchemaRefusal::Mismatch),
+            (description, SchemaRefusal::Mismatch),
+            (
+                too_old,
+                SchemaRefusal::Older {
+                    found: MIN_RESTORE_SCHEMA - 1,
+                    current,
+                },
+            ),
+        ] {
+            let error = restore_snapshot(&live, &snapshot).await.unwrap_err();
+            assert_eq!(refusal(&error), Some(expected), "{error}");
+            assert_eq!(fs::read(&live).unwrap(), original);
+            assert!(leftovers(live.parent().unwrap()).is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_upgrade_leaves_the_live_database_and_rollback_state_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        let live = directory.path().join("data").join("live.sqlite");
+        database(&live, "live").await.close().await;
+        let original = fs::read(&live).unwrap();
+        let snapshot = snapshot_at(directory.path(), current_version(), "restored").await;
+        let snapshot_bytes = fs::read(&snapshot).unwrap();
+
+        let migrator = failing_upgrade();
+        let lock = Arc::new(data_lock(&live, true).unwrap());
+        let error = restore_with(&live, &snapshot, lock, &migrator)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refusal(&error),
+            Some(SchemaRefusal::UpgradeFailed {
+                found: current_version(),
+                current: current_version() + 1,
+            })
+        );
+        assert_eq!(fs::read(&live).unwrap(), original);
+        assert_eq!(fs::read(&snapshot).unwrap(), snapshot_bytes);
+        assert!(leftovers(live.parent().unwrap()).is_empty());
+        assert_eq!(link_slug(&live).await, "live");
     }
 
     #[tokio::test]

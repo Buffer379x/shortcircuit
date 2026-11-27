@@ -16,11 +16,13 @@ mod monitor;
 mod notifications;
 mod outbound;
 mod protection;
+mod public_pages;
 mod qr;
 mod rate_limit;
 mod redirect;
 mod resources;
 mod restore;
+mod runtime_settings;
 mod store;
 mod titles;
 
@@ -41,6 +43,7 @@ pub use monitor::Monitor;
 pub use notifications::Notifier;
 pub use rate_limit::{RateLimit, TrustedProxies};
 pub use restore::{apply_pending_restore, data_lock, restore_snapshot};
+pub use runtime_settings::{OperationsEnvironment, RuntimeSettings};
 pub use store::{open_database, open_database_with_timeout};
 pub use titles::TitleLookup;
 

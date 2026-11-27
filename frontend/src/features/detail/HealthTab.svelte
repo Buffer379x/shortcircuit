@@ -11,6 +11,7 @@
   import { app } from '../../lib/app.svelte';
   import { ago, num, when } from '../../lib/fmt';
   import { tr } from '../../lib/locale.svelte';
+  import { href } from '../../lib/router.svelte';
   import { health, healthState } from '../../lib/status';
   import { toast } from '../../lib/toast.svelte';
 
@@ -136,7 +137,7 @@
     {#if loading && item === undefined}
       <p class="muted" role="status">{tr('loading')}</p>
     {:else if enabled === false}
-      <div class="notice" data-tone="neutral"><Icon name="info" /><p>{tr('monitorOff')}</p></div>
+      <div class="notice" data-tone="neutral"><Icon name="info" /><p>{tr('monitorOff')} {tr('opsOffInSettings')} <a href={href('settings', undefined, { section: 'operations' })}>{tr('opsOpenSettings')}</a>.</p></div>
     {/if}
     {#if item === null && enabled}
       <div><button type="button" class="btn" disabled={working} onclick={() => enroll(true)}><Icon name="activity" />{tr('detMonitorStart')}</button></div>

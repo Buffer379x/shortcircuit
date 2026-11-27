@@ -13,10 +13,11 @@ use sqlx::SqlitePool;
 use crate::{
     analytics::{Analytics, Kind},
     auth::{Auth, AuthError},
-    confirmation::{Action, Home, Notice, notice},
+    confirmation::{Action, Home, Notice, public_notice},
     destinations::Guard,
     domains,
     input::{PublicHosts, request_host, valid_slug},
+    public_pages,
     rate_limit::{AttemptLimiter, RateLimit, TrustedProxies},
     redirect::{self, Outcome, RedirectRequest, Resolution},
 };
@@ -34,6 +35,7 @@ struct AppState {
     public_limit: Option<Arc<AttemptLimiter>>,
     proxies: TrustedProxies,
     destinations: Guard,
+    pages: public_pages::Cache,
 }
 
 pub struct PublicControls {
@@ -107,6 +109,7 @@ pub fn public_router_with_controls(
                 .map(Arc::new),
             proxies: controls.proxies,
             destinations: Guard::default(),
+            pages: public_pages::Cache::default(),
         })
         .layer(middleware::from_fn(response_headers))
 }
@@ -154,22 +157,19 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         return StatusCode::URI_TOO_LONG.into_response();
     }
     let Some(host) = request_host(uri, &parts.headers) else {
-        return notice(
-            &parts.method,
-            StatusCode::NOT_FOUND,
-            Notice::UnknownHost,
-            language,
-        );
+        return not_found(&state, &parts.method, Notice::UnknownHost, language, None).await;
     };
     let domain = match domains::lookup(&state.pool, &state.hosts, &host, state.public_port).await {
         Ok(Some(domain)) if domain.enabled => domain,
         Ok(_) => {
-            return notice(
+            return not_found(
+                &state,
                 &parts.method,
-                StatusCode::NOT_FOUND,
                 Notice::UnknownHost,
                 language,
-            );
+                Some(&host),
+            )
+            .await;
         }
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
@@ -198,12 +198,14 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         };
     }
     let Some(slug) = uri.path().strip_prefix('/') else {
-        return notice(
+        return not_found(
+            &state,
             &parts.method,
-            StatusCode::NOT_FOUND,
             Notice::Missing { home: None },
             language,
-        );
+            Some(&host),
+        )
+        .await;
     };
     if slug.is_empty() {
         if post {
@@ -213,14 +215,19 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         else {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         };
-        let response = fallback(&host, "/", root_target).unwrap_or_else(|| {
-            notice(
-                &parts.method,
-                StatusCode::NOT_FOUND,
-                Notice::Missing { home: None },
-                language,
-            )
-        });
+        let response = match fallback(&host, "/", root_target) {
+            Some(response) => response,
+            None => {
+                not_found(
+                    &state,
+                    &parts.method,
+                    Notice::Missing { home: None },
+                    language,
+                    Some(&host),
+                )
+                .await
+            }
+        };
         // Root requests use the same counting rule as unmatched slugs: GET only.
         if parts.method == Method::GET
             && !response.status().is_server_error()
@@ -290,7 +297,10 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         if post && let Some(peer) = peer {
             result = match confirm(&state, action, lookup, &parts.headers, body, peer).await {
                 Ok(confirmed) => confirmed,
-                Err(StatusCode::UNAUTHORIZED) => return action.page(lookup.language, true),
+                Err(StatusCode::UNAUTHORIZED) => {
+                    let pages = state.pages.current(&state.pool).await;
+                    return action.page(lookup.language, true, Some(&pages));
+                }
                 Err(StatusCode::TOO_MANY_REQUESTS) => {
                     return (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "60")])
                         .into_response();
@@ -300,7 +310,8 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         } else if parts.method == Method::HEAD {
             return StatusCode::OK.into_response();
         } else {
-            return action.page(lookup.language, false);
+            let pages = state.pages.current(&state.pool).await;
+            return action.page(lookup.language, false, Some(&pages));
         }
     } else if post {
         return match result.outcome {
@@ -481,11 +492,35 @@ async fn missing(
                 })
             })
     };
-    notice(
+    not_found(
+        state,
         method,
-        StatusCode::NOT_FOUND,
         Notice::Missing { home },
         language,
+        Some(host),
+    )
+    .await
+}
+
+/// A public `404` page. HEAD keeps the bare status and never reads the page templates.
+async fn not_found(
+    state: &AppState,
+    method: &Method,
+    notice: Notice,
+    language: Option<&str>,
+    host: Option<&str>,
+) -> Response {
+    if method == Method::HEAD {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let pages = state.pages.current(&state.pool).await;
+    public_notice(
+        method,
+        StatusCode::NOT_FOUND,
+        notice,
+        language,
+        host,
+        &pages,
     )
 }
 

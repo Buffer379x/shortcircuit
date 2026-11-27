@@ -23,6 +23,27 @@ export interface Domain {
   block_crawlers: boolean;
 }
 
+/** `GET /catalog/domains/deletion`: what deleting a domain affects. */
+export interface DomainDeletionPreview {
+  host: string;
+  managed: boolean;
+  environment: boolean;
+  links: number;
+  api_keys: number;
+  targets: string[];
+  move?: { target: string; conflicts: number; conflicting_slugs: string[] };
+}
+
+/** `DELETE /catalog/domains` result. */
+export interface DomainDeletion {
+  host: string;
+  links: 'move' | 'delete' | 'none';
+  target?: string;
+  moved: number;
+  deleted: number;
+  environment: boolean;
+}
+
 export interface Tag {
   name: string;
   link_count: number;
@@ -283,4 +304,43 @@ export function shortUrl(link: Pick<Link, 'host' | 'slug'>, domains: Domains): s
 
 export function linkName(link: Link): string {
   return link.title || `/${link.slug}`;
+}
+
+/** Where an operational setting's effective value comes from. */
+export type SettingSource = 'saved' | 'container' | 'default';
+
+export type NotificationEvent =
+  | 'link_health' | 'link_expiring' | 'link_expired' | 'click_milestone'
+  | 'backup_failed' | 'job_failed' | 'storage_low' | 'security';
+
+export interface OperationsSetting<T> {
+  value: T;
+  source: SettingSource;
+  /** The container value a reset returns to, or null when no container variable is set. */
+  container: T | null;
+}
+
+/** A write-only setting: only whether it is set, and for the webhook its origin. */
+export interface OperationsSecret {
+  configured: boolean;
+  origin?: string;
+  source: SettingSource;
+  container_configured: boolean;
+}
+
+/** `GET /settings/operations`. */
+export interface OperationsSettings {
+  monitor_enabled: OperationsSetting<boolean>;
+  monitor_interval_hours: OperationsSetting<number>;
+  monitor_priority_hours: OperationsSetting<number>;
+  title_lookup_enabled: OperationsSetting<boolean>;
+  backup_interval_hours: OperationsSetting<number>;
+  backup_keep: OperationsSetting<number>;
+  notification_webhook: OperationsSecret;
+  notification_authorization: OperationsSecret;
+  notification_events: OperationsSetting<NotificationEvent[]>;
+  notification_click_milestones: OperationsSetting<number[]>;
+  notification_expiry_notice_hours: OperationsSetting<number>;
+  notifications_active: boolean;
+  connector: boolean;
 }

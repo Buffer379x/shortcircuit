@@ -15,6 +15,8 @@ use crate::{
 
 use super::{Problem, json_payload};
 
+mod domain_removal;
+
 #[derive(Clone)]
 struct CatalogState {
     pool: SqlitePool,
@@ -26,7 +28,13 @@ pub(super) fn routes(pool: SqlitePool, hosts: PublicHosts, local_port: u16) -> R
     Router::new()
         .route(
             "/api/v1/catalog/domains",
-            get(list_domains).post(save_domain),
+            get(list_domains)
+                .post(save_domain)
+                .delete(domain_removal::delete),
+        )
+        .route(
+            "/api/v1/catalog/domains/deletion",
+            get(domain_removal::preview),
         )
         .route(
             "/api/v1/catalog/tags",

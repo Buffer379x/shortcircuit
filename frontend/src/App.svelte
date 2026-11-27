@@ -7,7 +7,7 @@
   import Icon from './lib/Icon.svelte';
   import Menu from './lib/ui/Menu.svelte';
   import Logo from './lib/ui/Logo.svelte';
-  import { NAV, pageTitle } from './lib/nav';
+  import { NAV } from './lib/nav';
   import { route, href } from './lib/router.svelte';
   import { theme, setTheme } from './lib/theme.svelte';
   import { toasts, dismiss } from './lib/toast.svelte';
@@ -93,11 +93,6 @@
       setLanguage('en');
     }
     void refreshSession();
-  });
-
-  $effect(() => {
-    const title = detailId != null ? tr('navLinks') : pageTitle(route.page);
-    document.title = app.user ? `${title} – ShortCircuit` : 'ShortCircuit';
   });
 
   $effect(() => {

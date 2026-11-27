@@ -10,6 +10,7 @@ use tokio::{
 use crate::{
     notifications::{Event, Notifier},
     outbound::{Failure, Fetcher, Probe},
+    runtime_settings::RuntimeSettings,
 };
 
 const MIN_RECHECK: i64 = 60;
@@ -19,10 +20,9 @@ const MAX_DUE: i64 = 16;
 pub struct Monitor(Arc<Service>);
 
 struct Service {
-    enabled: bool,
-    notifier: Option<Notifier>,
-    interval: i64,
-    priority_interval: i64,
+    /// Whether checks are allowed and their intervals, read on every use.
+    settings: RuntimeSettings,
+    notifier: Notifier,
     fetcher: Fetcher,
     job: Semaphore,
     changed: Notify,
@@ -72,28 +72,28 @@ impl From<sqlx::Error> for CheckError {
 }
 
 impl Monitor {
-    pub fn new(
-        enabled: bool,
-        notifier: Option<Notifier>,
-        interval_hours: u16,
-        priority_hours: u16,
-    ) -> Result<Self, &'static str> {
-        if !(1..=720).contains(&interval_hours) || !(1..=interval_hours).contains(&priority_hours) {
-            return Err("monitor intervals require 1 <= priority hours <= regular hours <= 720");
-        }
-        Ok(Self(Arc::new(Service {
-            enabled,
+    pub fn new(settings: &RuntimeSettings, notifier: Notifier) -> Self {
+        Self(Arc::new(Service {
+            settings: settings.clone(),
             notifier,
-            interval: i64::from(interval_hours) * 3_600,
-            priority_interval: i64::from(priority_hours) * 3_600,
             fetcher: Fetcher::new(),
             job: Semaphore::new(1),
             changed: Notify::new(),
-        })))
+        }))
     }
 
+    /// Whether health checks are on. Settings > Operations can change it at any time.
     pub fn enabled(&self) -> bool {
-        self.0.enabled
+        self.0.settings.current().monitor_enabled.value
+    }
+
+    /// The regular and priority intervals in seconds.
+    fn intervals(&self) -> (i64, i64) {
+        let settings = self.0.settings.current();
+        (
+            i64::from(settings.monitor_interval_hours.value) * 3_600,
+            i64::from(settings.monitor_priority_hours.value) * 3_600,
+        )
     }
 
     pub(crate) fn changed(&self) {
@@ -196,13 +196,21 @@ impl Monitor {
         self.0.job.try_acquire().map_err(|_| CheckError::Busy)
     }
 
+    /// Runs scheduled checks until shutdown. While health checks are off it only waits for a
+    /// settings change, so turning them off stops new probes. A probe that already started
+    /// finishes, and its result is stored only if the enrollment and destination are unchanged.
     pub async fn run(&self, pool: SqlitePool, mut stop: watch::Receiver<bool>) {
-        if !self.enabled() {
-            return;
-        }
+        let mut settings = self.0.settings.subscribe();
         loop {
             if *stop.borrow() {
                 return;
+            }
+            if !self.enabled() {
+                tokio::select! {
+                    _ = stop.changed() => return,
+                    Ok(()) = settings.changed() => {}
+                }
+                continue;
             }
             let wait = tokio::select! {
                 result = self.run_due(&pool) => match result {
@@ -217,6 +225,7 @@ impl Monitor {
             tokio::select! {
                 _ = stop.changed() => return,
                 _ = self.0.changed.notified() => {},
+                Ok(()) = settings.changed() => {},
                 _ = time::sleep(wait) => {},
             }
         }
@@ -300,10 +309,8 @@ impl Monitor {
             .bind(&row.target)
             .execute(&mut *transaction)
             .await?;
-            if updated.rows_affected() != 0
-                && changed_health(&row.status, status)
-                && let Some(notifier) = &self.0.notifier
-            {
+            if updated.rows_affected() != 0 && changed_health(&row.status, status) {
+                let notifier = &self.0.notifier;
                 let event = Event::LinkHealth {
                     link_id: row.id,
                     status,
@@ -319,14 +326,15 @@ impl Monitor {
 
     fn interval(&self, row: &DueLink, failures: u8, status: &str) -> i64 {
         let jitter = row.id % 301;
+        let (regular, priority) = self.intervals();
         let seconds = if status == "unknown" {
-            self.0.interval
+            regular
         } else if failures > 0 {
             1_800 * (1 << (failures - 1).min(5))
         } else if row.priority {
-            self.0.priority_interval
+            priority
         } else {
-            self.0.interval
+            regular
         };
         seconds + jitter
     }
@@ -410,13 +418,18 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let disabled = Monitor::new(false, None, 24, 6).unwrap();
+        let off = RuntimeSettings::detached(|_| None).unwrap();
+        let disabled = Monitor::new(&off, Notifier::new(&off));
         assert!(matches!(
             disabled.check(&pool, 1).await,
             Err(CheckError::Disabled)
         ));
 
-        let active = Monitor::new(true, None, 24, 6).unwrap();
+        let on = RuntimeSettings::detached(|name| {
+            (name == "MONITOR_ENABLED").then(|| "true".to_owned())
+        })
+        .unwrap();
+        let active = Monitor::new(&on, Notifier::new(&on));
         assert_eq!(active.queue_checks(&pool).await.unwrap(), 1);
         assert_eq!(active.queue_checks(&pool).await.unwrap(), 0);
         active.run_due(&pool).await.unwrap();

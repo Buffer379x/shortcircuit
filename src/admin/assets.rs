@@ -153,11 +153,15 @@ pub(super) async fn security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     // A response with its own, stricter policy keeps it: the address notice allows only its
-    // inline stylesheet by hash and no scripts.
+    // inline stylesheet by hash and no scripts. The public page preview sets its own policy
+    // and `SAMEORIGIN`, so only the admin interface can frame it. `frame-src 'self'` lets the
+    // interface show that preview in a sandboxed frame.
     headers
         .entry(header::CONTENT_SECURITY_POLICY)
-        .or_insert(HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; manifest-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
-    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+        .or_insert(HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; manifest-src 'self'; connect-src 'self'; frame-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
+    headers
+        .entry(header::X_FRAME_OPTIONS)
+        .or_insert(HeaderValue::from_static("DENY"));
     headers.insert(
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),

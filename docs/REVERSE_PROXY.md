@@ -15,6 +15,28 @@ Configure independent TLS proxy hosts for the public and admin listeners. Use yo
 4. Apply client-level limits at the proxy as needed. Configure `TRUSTED_PROXIES` only for the explicitly trusted addresses that can reach the backends. Configure each trusted ingress to overwrite `X-Forwarded-For` with the observed client address or append the observed sender when preserving a trusted chain. Review the proxy log format and retention to keep credentials and query values out of operational logs.
 5. Sign in through the admin hostname from your LAN or VPN. Test access from outside and confirm that public redirects remain available. Add required aliases in **Domains** or `PUBLIC_HOSTS`.
 
+## Unraid with a fixed container IP
+
+On Unraid the container often has its own address on a custom network such as `br0`. NPM then cannot resolve the name `shortcircuit`. Enter the container address instead:
+
+| Proxy host | Forward scheme | Forward hostname / IP | Forward port |
+| --- | --- | --- | --- |
+| `go.example.com` | `http` | `192.168.1.50` | `8080` |
+| `shortcircuit.example.com` | `http` | `192.168.1.50` | `8081` |
+
+The **Details** tab is all ShortCircuit needs. NPM already sends `Host`, `X-Real-IP`, `X-Forwarded-For`, and `X-Forwarded-Proto` for every proxy host. A custom `location /` block in the **Advanced** tab replaces NPM's own location and also works, but it is not required, and it hides settings from the NPM interface.
+
+Set `TRUSTED_PROXIES` in the container to the address ShortCircuit sees for NPM: the NPM container's fixed IP, or the Unraid host address when NPM runs in bridge or host mode. Without it, every visitor shares NPM's address. Visitors then share one budget for password attempts and sign-in, and analytics cannot tell clients apart.
+
+| Symptom | Likely cause |
+| --- | --- |
+| NPM shows `502 Bad Gateway` | Wrong IP or port, or NPM cannot reach the custom network. A container on `br0` (macvlan) is not reachable from the Unraid host or from bridge-mode containers unless **Settings › Docker › Host access to custom networks** is enabled. Alternatively, put NPM on the same custom network. |
+| ShortCircuit's unknown-domain page | The hostname is not in **Domains** or `PUBLIC_HOSTS`, or a custom rewrite changed the `Host` header. |
+| ShortCircuit's missing-link page | The host is known but the slug does not exist, is inactive, or the path was rewritten. Check the exact path with `curl --head`. |
+| The admin address shows a page asking to open the configured administration address | The hostname in the browser differs from the host in `ADMIN_ORIGIN`. |
+| Sign-in and saving fail with `403` (`invalid_origin`) | The scheme or port in the browser differs from `ADMIN_ORIGIN`, for example `http://` in `ADMIN_ORIGIN` while the proxy serves `https://`. |
+| Many visitors hit "Too many attempts" together | `TRUSTED_PROXIES` is missing or does not contain NPM's address. |
+
 ## Verify redirects
 
 Use HEAD to read the redirect status and exact `Location` without consuming a visit limit. Test a saved short link, an invalid path, and any configured fallback from the real client networks.

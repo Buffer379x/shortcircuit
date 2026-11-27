@@ -241,6 +241,7 @@ pub(super) async fn browser_access(
             "/api/v1/auth/password"
                 | "/api/v1/system/backup/authorize"
                 | "/api/v1/system/restore/authorize"
+                | "/api/v1/settings/operations/authorize"
         ) || (path.starts_with("/api/v1/keys/") && path.ends_with("/rotate")))
     {
         state

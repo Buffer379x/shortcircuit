@@ -280,6 +280,65 @@ class AnalyticsSchemaTests(unittest.TestCase):
                 plan = self.db.execute("EXPLAIN QUERY PLAN " + query, bound).fetchall()
                 self.assertTrue(any(index in row[3] for row in plan), plan)
 
+    def upgrade_to_visits_index(self):
+        for number in range(7, 26):
+            (migration,) = MIGRATIONS.glob(f"{number:04d}_*.sql")
+            self.db.executescript(migration.read_text())
+
+    def test_visits_index_covers_per_link_redirect_totals(self):
+        self.record(7, "go.example", TODAY, increment=3)
+        self.upgrade_to_visits_index()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT sql FROM sqlite_schema WHERE name = 'analytics_daily_by_link_kind'"
+            ).fetchone(),
+            ("CREATE INDEX analytics_daily_by_link_kind ON analytics_daily (link_id, kind, day, total)",),
+        )
+        queries = [
+            # The catalog's visit sort sums each link's redirects in the visit window.
+            (
+                "SELECT l.id, (SELECT sum(d.total) FROM analytics_daily d WHERE d.link_id = l.id "
+                "AND d.kind = 'redirect' AND d.day BETWEEN ? AND ?) FROM links l",
+                (TODAY - 29, TODAY),
+            ),
+            # Visit totals and trends of one catalog page.
+            (
+                "SELECT link_id, day, sum(total) FROM analytics_daily "
+                "WHERE link_id IN (SELECT value FROM json_each(?)) AND kind = 'redirect' "
+                "AND day BETWEEN ? AND ? GROUP BY link_id, day",
+                ("[7, 8]", TODAY - 29, TODAY),
+            ),
+        ]
+        for query, bound in queries:
+            with self.subTest(query=query[:40]):
+                plan = self.db.execute("EXPLAIN QUERY PLAN " + query, bound).fetchall()
+                self.assertTrue(
+                    any("COVERING INDEX analytics_daily_by_link_kind" in row[3] for row in plan),
+                    plan,
+                )
+                self.assertFalse(any(row[3].startswith("SCAN d") or row[3] == "SCAN analytics_daily"
+                                     for row in plan), plan)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT sum(total) FROM analytics_daily WHERE link_id = 7 AND kind = 'redirect'"
+            ).fetchone(),
+            (3,),
+        )
+        # Writes still merge into one rollup row, and link deletion still removes it.
+        self.db.execute(
+            """INSERT INTO analytics_daily (day, host, link_id, kind, visit_class, total)
+               VALUES (?, 'go.example', 7, 'redirect', 'human', 2)
+               ON CONFLICT (day, host, link_id, kind, visit_class, browser, os, device, traffic_source)
+               DO UPDATE SET total = total + excluded.total""",
+            (TODAY,),
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*), sum(total) FROM analytics_daily").fetchone(), (1, 5)
+        )
+        self.db.execute("DELETE FROM links WHERE id = 7")
+        self.assertEqual(self.db.execute("SELECT count(*) FROM analytics_daily").fetchone(), (0,))
+        self.assertEqual(self.db.execute("PRAGMA integrity_check").fetchone(), ("ok",))
+
 
 if __name__ == "__main__":
     unittest.main()

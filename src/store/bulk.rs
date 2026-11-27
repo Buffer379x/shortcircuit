@@ -64,3 +64,18 @@ pub(crate) async fn delete_selected(
     ids.push_unseparated(")");
     Ok(query.build().execute(connection).await?.rows_affected())
 }
+
+/// Deletes every link on one host, archived ones included. This is the same row deletion as
+/// [`delete_selected`]: foreign keys remove protection, policies, rules, tags, history,
+/// monitoring, title lookups, and per-link visit events, and the `delete_link_analytics_daily`
+/// trigger removes the link's daily totals. Domain-level rows without a link stay.
+pub(crate) async fn delete_on_host(
+    connection: &mut SqliteConnection,
+    host: &str,
+) -> Result<u64, sqlx::Error> {
+    Ok(sqlx::query("DELETE FROM links WHERE host = ?")
+        .bind(host)
+        .execute(connection)
+        .await?
+        .rows_affected())
+}
