@@ -36,7 +36,7 @@ LABEL org.opencontainers.image.title="ShortCircuit" \
       org.opencontainers.image.description="Self-hosted URL shortener and link management" \
       org.opencontainers.image.source="https://github.com/Buffer379x/shortcircuit" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="0.8.0-preview.3"
+      org.opencontainers.image.version="0.9.0-preview.1"
 # The pinned base can lag behind Debian security updates, so apply them at build time.
 RUN apt-get update && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends ca-certificates \
