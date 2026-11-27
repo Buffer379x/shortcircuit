@@ -173,7 +173,7 @@ impl Action<'_> {
         let content = format!(
             "<h1>{title}</h1>{content}<button class=\"btn primary\" type=\"submit\">{button}</button></form>"
         );
-        let mut response = html(status, copy, title, &content);
+        let mut response = html(status, copy, title, &content, true);
         response.headers_mut().insert(
             header::REFERRER_POLICY,
             HeaderValue::from_static("strict-origin"),
@@ -188,6 +188,9 @@ pub(crate) enum Notice {
     Missing { home: Option<Home> },
     /// The host is not an enabled public domain.
     UnknownHost,
+    /// The admin listener received an address other than `ADMIN_ORIGIN`. The page names neither
+    /// the configured address nor the product, so it reveals nothing about the installation.
+    AdminAddress,
 }
 
 pub(crate) struct Home {
@@ -209,9 +212,10 @@ pub(crate) fn notice(
     }
     let copy = Strings::for_language(language);
     let code = status.as_u16();
-    let (title, text, home) = match notice {
-        Notice::Missing { home } => (copy.missing_title, copy.missing_text, home),
-        Notice::UnknownHost => (copy.unknown_title, copy.unknown_text, None),
+    let (title, text, home, footer) = match notice {
+        Notice::Missing { home } => (copy.missing_title, copy.missing_text, home, true),
+        Notice::UnknownHost => (copy.unknown_title, copy.unknown_text, None, true),
+        Notice::AdminAddress => (copy.admin_title, copy.admin_text, None, false),
     };
     let link = home.map_or_else(String::new, |home| {
         format!(
@@ -223,7 +227,7 @@ pub(crate) fn notice(
     });
     let content =
         format!("<p class=\"code\">{code}</p><h1>{title}</h1><p class=\"muted\">{text}</p>{link}");
-    html(status, copy, title, &content)
+    html(status, copy, title, &content, footer)
 }
 
 /// Visitor-facing strings. English is the default; a first preferred language of `de` selects German.
@@ -242,6 +246,8 @@ struct Strings {
     home: &'static str,
     unknown_title: &'static str,
     unknown_text: &'static str,
+    admin_title: &'static str,
+    admin_text: &'static str,
     footer: &'static str,
 }
 
@@ -260,6 +266,8 @@ const ENGLISH: Strings = Strings {
     home: "Go to ",
     unknown_title: "Nothing is served here",
     unknown_text: "This domain is not set up for short links.",
+    admin_title: "The administration isn’t available at this address",
+    admin_text: "Open the address that is configured for the administration.",
     footer: "Served by ShortCircuit",
 };
 
@@ -278,6 +286,8 @@ const GERMAN: Strings = Strings {
     home: "Weiter zu ",
     unknown_title: "Hier wird nichts bereitgestellt",
     unknown_text: "Diese Domain ist nicht für Kurzlinks eingerichtet.",
+    admin_title: "Die Verwaltung ist unter dieser Adresse nicht erreichbar",
+    admin_text: "Öffne die Adresse, die für die Verwaltung eingerichtet ist.",
     footer: "Bereitgestellt von ShortCircuit",
 };
 
@@ -362,9 +372,13 @@ fn content_security_policy() -> HeaderValue {
         .clone()
 }
 
-fn html(status: StatusCode, copy: &Strings, title: &str, content: &str) -> Response {
+fn html(status: StatusCode, copy: &Strings, title: &str, content: &str, footer: bool) -> Response {
     let lang = copy.lang;
-    let footer = copy.footer;
+    let footer = if footer {
+        format!("<p class=\"foot\">{}</p>", copy.footer)
+    } else {
+        String::new()
+    };
     (
         status,
         [
@@ -376,7 +390,7 @@ fn html(status: StatusCode, copy: &Strings, title: &str, content: &str) -> Respo
              <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
              <meta name=\"robots\" content=\"noindex,nofollow\"><title>{title}</title>\
              <style>{STYLE}</style></head><body><main><section class=\"card\">{MARK}{content}</section>\
-             <p class=\"foot\">{footer}</p></main></body></html>"
+             {footer}</main></body></html>"
         )),
     )
         .into_response()
@@ -491,6 +505,33 @@ mod tests {
             )
         );
         assert_eq!(missing.matches("<style>").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_admin_address_notice_names_nothing_about_the_installation() {
+        for (language, title) in [
+            (None, ENGLISH.admin_title),
+            (Some("de-AT"), GERMAN.admin_title),
+        ] {
+            let page = notice(
+                &Method::GET,
+                StatusCode::NOT_FOUND,
+                Notice::AdminAddress,
+                language,
+            );
+            assert_eq!(page.status(), StatusCode::NOT_FOUND);
+            let page = body(page).await;
+            assert!(page.contains(&format!("<h1>{title}</h1>")));
+            assert!(!page.contains("ShortCircuit") && !page.contains("class=\"foot\""));
+            assert!(!page.contains("<script") && !page.contains("href="));
+        }
+        let head = notice(
+            &Method::HEAD,
+            StatusCode::NOT_FOUND,
+            Notice::AdminAddress,
+            None,
+        );
+        assert!(body(head).await.is_empty());
     }
 
     #[test]

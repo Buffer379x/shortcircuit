@@ -34,8 +34,8 @@ The Stage 1 benchmark reported 448 dropped analytics events, which were first re
 | DEV-07 | P3 | A pending title lookup still fetches a destination after password or one-time protection is added. Same as SEC-03. | **Verified** live. | Fixed |
 | DEV-08 | P3 | A link-health status update and its outbox row are separate statements, so a notification can be lost. | **Verified** in code. | Fixed (one transaction; no failure-injection test) |
 | DEV-09 | P3 | The notification task holds an `Analytics` clone, so on shutdown the writer can be aborted while the notifier delivers. | **Hypothesis**: an idle stop finished in 0.64 s. | Fixed |
-| DEV-10 | P4 | `GET /api/v1/system` waits for a fixed 250 ms CPU sample and counts all raw events. | **Verified**. The sample window is documented and the endpoint is browser-only. | Accepted |
-| DEV-11 | P4 | Hourly retention runs inside the analytics writer task, about 630 ms per run on the seeded volume. | **Verified**. Events queue during the run, bounded by the queue. | Deferred |
+| DEV-10 | P4 | `GET /api/v1/system` waits for a fixed 250 ms CPU sample and counts all raw events. | **Verified**. The sample window is documented and the endpoint is browser-only. | Fixed (background sampler every 15 s with sample age, raw count reused for 30 s) |
+| DEV-11 | P4 | Hourly retention runs inside the analytics writer task, about 630 ms per run on the seeded volume. | **Verified**. Events queue during the run, bounded by the queue. | Fixed (own retention task, 512-row chunks with pauses; test writes an event mid-run) |
 | DEV-12 | P4 | The public listener binds before migrations finish, so early connections wait. | **Verified** in code. | Fixed |
 | OWN-1 | P1 | Migrations ran through the request pool, so its 2-second acquire timeout failed `open_database` under load (`PoolTimedOut` in 8 to 24 tests per cold run, and the same risk at startup on a busy host). | **Verified** in three cold runs before and after. | Fixed in Stage 1 |
 | OWN-4 | P3 | Diagnostics reported `build_revision: null` in a locally built image. Cause: `compose.yaml` uses `pull_policy: build`, so `docker compose up` rebuilt the image without the variable. Not a product defect. | **Verified**: with the variable exported for `up`, the image reports it. | Hardened: `build.rs` passes the revision explicitly, `--version` prints it, and CI checks it |
@@ -56,11 +56,11 @@ Query plans: the redirect lookup uses the `(host, slug)` index (about 0.05 ms). 
 | UX-06 | P2 | Destination policy and API key errors are not tied to the rule or fieldset that caused them. | **Verified**. | Fixed |
 | UX-07 | P2 | Pages have no URL, so reload, Back, and bookmarks lose the location. The design system documents hash routes. | **Verified** in code. | Fixed |
 | UX-08 | P2 | On phones all 11 navigation items wrap inline and take about 295 px at 320 × 568. The design system specifies a menu. | **Verified** in screenshots. | Fixed |
-| UX-09 | P3 | Terminology varies within each language: Clicks, Redirects, and visits, and in German Klicks, Weiterleitungen, Aufrufe, and Zugriffe. German uses both Link-Monitor and Link-Überwachung. Title lookup reuses "Checks scheduled". Hours use a hard-coded unit. | **Verified** in the catalog. | Partly fixed |
-| UX-10 | P3 | Native file inputs show browser-language text in the German UI. | **Verified**. | Deferred |
+| UX-09 | P3 | Terminology varies within each language: Clicks, Redirects, and visits, and in German Klicks, Weiterleitungen, Aufrufe, and Zugriffe. German uses both Link-Monitor and Link-Überwachung. Title lookup reuses "Checks scheduled". Hours use a hard-coded unit. | **Verified** in the catalog. | Fixed in source after 0.8.0-preview.2: one count term per language (English "visits", German "Aufrufe" and "Aufruflimit"), and "Health"/"Zustand" for link checks in both languages |
+| UX-10 | P3 | Native file inputs show browser-language text in the German UI. | **Verified**. | Fixed with Polar Signal (0.8.0-preview.1): file inputs are hidden behind localized buttons |
 | UX-11 | P3 | `h3` has no type token, and the Unusual traffic header lays out differently from other panels. | **Verified**. | Fixed |
 | UX-12 | P3 | Dialogs put initial focus on Close instead of the first field. | **Verified**. | Fixed |
-| UX-13 | P3 | Row action buttons repeat the same accessible names on every row. | **Verified**. | Deferred |
+| UX-13 | P3 | Row action buttons repeat the same accessible names on every row. | **Verified**. | Fixed with Polar Signal (0.8.0-preview.1): row actions name their link, for example "More actions for go.example/docs" |
 | UX-14 | P4 | A few targets are below the 44 px project target but meet WCAG 2.5.8. Overview and Analytics share a navigation icon. | **Verified**. | Partly fixed |
 | OWN-5 | P2 | The Destination policy enforce checkbox stretched across the row, the panel touched the domain list, and container memory read "of no limit". | **Verified** in screenshots. | Fixed during review |
 
@@ -71,16 +71,16 @@ Verified strengths: text tokens pass AA in both themes (lowest 4.93:1), focus ou
 | ID | Priority | Finding | Evidence | Status |
 |---|---|---|---|---|
 | OPS-01 | P1 | With the Unraid template defaults, the database, rollback copies, and every backup live in one named volume inside `docker.img`, scheduled backups are off, and API keys cannot pull a backup. Recreating `docker.img` loses everything. | **Verified** from the template and code. | Owner decision |
-| OPS-02 | P2 | An admin address that differs from `ADMIN_ORIGIN` returns a bare 404, an unknown public host returns an empty 404, and nothing is logged. | **Verified**. | Partly fixed: the first mismatch is logged with the expected origin, and the Unraid guide has a troubleshooting note. The response body is unchanged. |
+| OPS-02 | P2 | An admin address that differs from `ADMIN_ORIGIN` returns a bare 404, an unknown public host returns an empty 404, and nothing is logged. | **Verified**. | Fixed for the admin listener: the first mismatch is logged with the expected origin, the Unraid guide has a troubleshooting note, and non-API paths return a static English or German page that names no address. API paths keep their problem response. Unknown public hosts show the generic public page. |
 | OPS-03 | P2 | The scheduled backup timer restarts on every container start, so frequent restarts can prevent any scheduled backup. | **Verified** in code. Not run with a real schedule. | Fixed |
 | OPS-04 | P2 | There is no automatic snapshot before migrations, and a pre-upgrade backup cannot be restored by the newer image. The error does not say why. | **Verified**. Same root cause as DEV-02 for the first part. | Fixed (snapshot and message) |
 | OPS-05 | P2 | The documented rollback command fails with a bare "Permission denied" when the snapshot was copied out with `docker cp`, and errors never name the path or UID 10001. | **Verified**. | Fixed |
 | OPS-06 | P2 | The install guide lists settings that the published preview.2 image does not have, the template ReadMe link points to `main`, the upgrade text describes preview.1, and the candidate reports the same version as the published image. | **Verified**. | Partly fixed (docs). Version and template need owner approval. |
 | OPS-07 | P2 | The template has no `TRUSTED_PROXIES` field, so behind Nginx Proxy Manager all clients share one rate-limit bucket. | **Verified**. | Owner decision |
-| OPS-08 | P3 | An import with one invalid row fails with a generic `invalid_exchange` and no row number. | **Verified**. | Deferred |
+| OPS-08 | P3 | An import with one invalid row fails with a generic `invalid_exchange` and no row number. | **Verified**. | Fixed (`row` and `field` problem extensions for JSON and CSV, shown in the UI) |
 | OPS-09 | P3 | CLI and startup errors print Rust debug output such as `Error: Conflict`. | **Verified**. | Fixed |
 | OPS-10 | P3 | The WebUI link and loopback short URLs assume the default ports. | **Verified**. | Documented |
-| OPS-11 | P3 | Restore rollback copies accumulate unseen, and every browser backup has the same file name. | **Verified**. | Partly fixed |
+| OPS-11 | P3 | Restore rollback copies accumulate unseen, and every browser backup has the same file name. | **Verified**. | Fixed (download names; read-only stored snapshot list in System, no stored-file download) |
 | OPS-12 | P3 | Analytics loss is visible only as a bare counter, with no log line. | **Verified**. Mostly caused by DEV-01. | Fixed with DEV-03 |
 | OPS-13 | P3 | The "Enabled" badge wraps mid-word at 1360 px. | **Verified**. | Fixed |
 | OPS-14 | P4 | The notification acceptance check does not say that "Failed" takes about two hours. | **Verified**. | Fixed |
@@ -97,9 +97,9 @@ Security findings describe the class of problem and the affected path. None is i
 | SEC-02 | P2 | The release job runs the third-party scanner action with a `contents: write` token. | **Verified** in the workflow. Exploitability is a hypothesis. | Fixed |
 | SEC-03 | P3 | The title worker does not recheck protection when it fetches, and monitor enrollment accepts protected links. | **Verified** live. | Fixed (title lookup). Monitor documented. |
 | SEC-04 | P3 | Destination block rules for an IPv4 address miss its IPv4-mapped IPv6 spelling, and hosts with an empty label pass a block rule. Allow lists fail closed. | **Verified** in tests and browsers. Unreleased feature. | Fixed |
-| SEC-05 | P3 | Protected-link password attempts share one per-address and one global budget across all links, the public 429 lacks `Retry-After`, and IPv6 clients are keyed by full address. | **Verified** live. | Partly fixed (`Retry-After`, IPv6 /64). Per-link budget deferred. |
+| SEC-05 | P3 | Protected-link password attempts share one per-address and one global budget across all links, the public 429 lacks `Retry-After`, and IPv6 clients are keyed by full address. | **Verified** live. | Fixed: `Retry-After`, IPv6 /64, and a per-link budget per client and across clients (`RATE_LIMIT_PUBLIC_PASSWORD_LINK`, default `5,30`). |
 | SEC-06 | P3 | Restoring a snapshot restores the API keys and the administrator password that were valid when it was taken. | **Verified** in code. Documented behavior. | Documented, owner decision |
-| SEC-07 | P3 | The Debian runtime base carries 39 unfixed HIGH or CRITICAL findings in packages the binary never loads (it links only libc, libm, and libgcc_s). | **Verified** with Trivy and `ldd`. | Owner decision |
+| SEC-07 | P3 | The Debian runtime base carries 39 unfixed HIGH or CRITICAL findings in packages the binary never loads (it links only libc, libm, and libgcc_s). | **Verified** with Trivy and `ldd`. | Evaluated on November 27, 2026: a `debian:trixie-slim` runtime base runs the image (readyz, CLI backup) but has 53 HIGH or CRITICAL findings with 1 fixable, against 39 with none fixable on bookworm. Keep bookworm; re-evaluate when trixie has fewer findings |
 | SEC-08 | P4 | A host-bound write key can learn whether a link on another host has a destination that the policy refuses, through a 404 versus 422 difference. | **Verified** live. | Fixed |
 | SEC-09 | P4 | HEAD on a visit-limited link returns its destination without counting a visit. This is documented but not stated in the editor. | **Verified**. | Documented |
 | SEC-10 | P4 | The CI upgrade test pulls the previous image by mutable tag. | **Verified**. | Fixed |

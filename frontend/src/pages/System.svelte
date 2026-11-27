@@ -86,6 +86,7 @@
       window_ms: number; available_cores: number | null;
       process: 'measured' | 'unavailable'; process_percent: number | null;
       container: 'measured' | 'unavailable'; container_percent: number | null;
+      sampled_at: number | null; age_seconds: number | null;
     };
     container_memory: { status: 'measured' | 'unavailable'; current_bytes: number | null; limit_bytes: number | null };
   }
@@ -136,10 +137,20 @@
 
   function cpu(percent: number | null, windowMs: number) {
     if (percent === null) return tr('systemUnknown');
+    const window = windowMs >= 1000
+      ? new Intl.NumberFormat(locale.language, { style: 'unit', unit: 'second', maximumFractionDigits: 1 }).format(windowMs / 1000)
+      : new Intl.NumberFormat(locale.language, { style: 'unit', unit: 'millisecond' }).format(windowMs);
     return tr('systemCpuValue', {
       percent: new Intl.NumberFormat(locale.language, { style: 'percent', maximumFractionDigits: 1 }).format(percent / 100),
-      window: new Intl.NumberFormat(locale.language, { style: 'unit', unit: 'millisecond' }).format(windowMs),
+      window,
     });
+  }
+
+  // The background sampler reports the age of its latest sample.
+  function sampleAge(value: Diagnostics['cpu']) {
+    if (value.age_seconds === null) return tr('admCpuSamplePending');
+    const relative = new Intl.RelativeTimeFormat(locale.language, { numeric: 'auto' });
+    return value.age_seconds >= 60 ? relative.format(-Math.floor(value.age_seconds / 60), 'minute') : relative.format(-value.age_seconds, 'second');
   }
 
   function storageValue(storage: Diagnostics['storage']) {
@@ -259,6 +270,31 @@
     if (failed) {
       await tick();
       document.getElementById(passwordInvalid ? 'sys-password' : 'sys-op-error')?.focus();
+    }
+  }
+
+  // ---------- Stored snapshots ----------
+  type StoredKind = 'manual' | 'scheduled' | 'pre_upgrade' | 'rollback';
+  interface StoredBackup { kind: StoredKind; file_name: string; size_bytes: number; created_at: number | null; schema_version: number | null }
+  interface StoredBackups { items: StoredBackup[]; truncated: boolean }
+  const storedKinds: Record<StoredKind, [StateView['tone'], IconName, keyof Messages]> = {
+    scheduled: ['neutral', 'calendar-clock', 'admKindScheduled'], pre_upgrade: ['info', 'shield-check', 'admKindPreUpgrade'],
+    manual: ['neutral', 'database', 'admKindManual'], rollback: ['warning', 'rotate-ccw', 'admKindRollback'],
+  };
+  let stored = $state.raw<StoredBackups | null>(null);
+  let storedError = $state<keyof Messages | null>(null);
+  let storedLoading = $state(false);
+
+  async function loadStored() {
+    if (storedLoading) return;
+    storedLoading = true;
+    storedError = null;
+    try {
+      stored = await app.api<StoredBackups>('/system/backups', 'GET', undefined, 'json', request.signal);
+    } catch (error) {
+      if (!request.signal.aborted) storedError = problemMessage(error);
+    } finally {
+      storedLoading = false;
     }
   }
 
@@ -428,19 +464,22 @@
 
   // Load each tab's data the first time it is shown.
   $effect(() => {
+    if (tab === 'backups' && !stored && !storedLoading && !storedError) void loadStored();
     if (tab === 'notifications' && !notifications && !notificationsLoading && !notificationsError) void loadNotifications();
     if (tab === 'jobs' && !lookups && !lookupsLoading && !lookupsError) void loadLookups();
     if (tab === 'audit' && !auditLoaded && !auditLoading && !auditError) void loadAudit();
   });
 
   function refresh() {
-    if (tab === 'status' || tab === 'backups') void loadDiagnostics();
+    if (tab === 'status') void loadDiagnostics();
+    else if (tab === 'backups') { void loadDiagnostics(); void loadStored(); }
     else if (tab === 'notifications') void loadNotifications();
     else if (tab === 'jobs') void loadLookups();
     else void loadAudit();
   }
   const refreshBusy = $derived(
-    tab === 'notifications' ? notificationsLoading : tab === 'jobs' ? lookupsLoading : tab === 'audit' ? auditLoading : refreshing,
+    tab === 'notifications' ? notificationsLoading : tab === 'jobs' ? lookupsLoading : tab === 'audit' ? auditLoading
+      : tab === 'backups' ? refreshing || storedLoading : refreshing,
   );
 
   function view(tone: StateView['tone'], icon: IconName, label: string): StateView {
@@ -548,6 +587,7 @@
           <dt>{tr('systemStorageStatus')}</dt><dd>{d.storage.status === 'healthy' ? tr('systemStorageHealthy') : d.storage.status === 'low' ? tr('systemStorageLow') : tr('systemUnknown')}</dd>
           <dt>{tr('systemCpuProcess')}</dt><dd>{cpu(d.cpu.process_percent, d.cpu.window_ms)}</dd>
           <dt>{tr('systemCpuContainer')}</dt><dd>{cpu(d.cpu.container_percent, d.cpu.window_ms)}</dd>
+          <dt>{tr('admCpuSample')}</dt><dd>{sampleAge(d.cpu)}</dd>
           <dt>{tr('systemCores')}</dt><dd>{d.cpu.available_cores === null ? tr('systemUnknown') : num(d.cpu.available_cores)}</dd>
           <dt>{tr('systemResidentMemory')}</dt><dd>{d.process_rss_bytes === null ? tr('systemUnknown') : bytes(d.process_rss_bytes)}</dd>
           <dt>{tr('systemContainerMemory')}</dt><dd>{containerMemory(d.container_memory)}</dd>
@@ -556,27 +596,65 @@
     {:else if tab === 'backups' && diagnostics}
       {@const d = diagnostics}
       <div class="grid-main-side">
-        <section class="panel" aria-labelledby="sys-backup">
-          <header class="panel-head">
-            <div class="panel-title"><h2 id="sys-backup">{tr('systemBackup')}</h2><p>{tr('systemBackupHint')}</p></div>
-            <span class="spacer"></span>
-            <button class="btn" data-variant="primary" disabled={d.system_operation_in_progress} onclick={() => choose('backup')}><Icon name="download" />{tr('systemDownload')}</button>
-          </header>
-          <dl class="facts panel-body">
-            <dt>{tr('systemBackupStatus')}</dt>
-            <dd>
-              {#if d.last_backup_status === 'verified'}<Badge state={view('success', 'shield-check', tr('systemBackupVerified'))} />
-              {:else if d.last_backup_status === 'failed'}<Badge state={view('error', 'circle-x', tr('systemBackupFailed'))} />
-              {:else}<span class="muted">{tr('admNoBackupYet')}</span>{/if}
-            </dd>
-            <dt>{tr('systemLastVerifiedBackup')}</dt><dd>{d.last_verified_backup_at === null ? tr('instanceNoBackup') : dateTime(d.last_verified_backup_at)}</dd>
-            <dt>{tr('systemDatabaseSize')}</dt><dd>{bytes(d.database_bytes)}</dd>
-            <dt>{tr('systemOperationStatus')}</dt><dd>{d.system_operation_in_progress ? tr('systemOperationActive') : tr('systemOperationIdle')}</dd>
-          </dl>
-          {#if d.system_operation_in_progress}
-            <div class="panel-body tight"><div class="notice" data-tone="info"><Icon name="info" /><div><p>{tr('systemSystemBusy')}</p></div></div></div>
-          {/if}
-        </section>
+        <div class="stack">
+          <section class="panel" aria-labelledby="sys-backup">
+            <header class="panel-head">
+              <div class="panel-title"><h2 id="sys-backup">{tr('systemBackup')}</h2><p>{tr('systemBackupHint')}</p></div>
+              <span class="spacer"></span>
+              <button class="btn" data-variant="primary" disabled={d.system_operation_in_progress} onclick={() => choose('backup')}><Icon name="download" />{tr('systemDownload')}</button>
+            </header>
+            <dl class="facts panel-body">
+              <dt>{tr('systemBackupStatus')}</dt>
+              <dd>
+                {#if d.last_backup_status === 'verified'}<Badge state={view('success', 'shield-check', tr('systemBackupVerified'))} />
+                {:else if d.last_backup_status === 'failed'}<Badge state={view('error', 'circle-x', tr('systemBackupFailed'))} />
+                {:else}<span class="muted">{tr('admNoBackupYet')}</span>{/if}
+              </dd>
+              <dt>{tr('systemLastVerifiedBackup')}</dt><dd>{d.last_verified_backup_at === null ? tr('instanceNoBackup') : dateTime(d.last_verified_backup_at)}</dd>
+              <dt>{tr('systemDatabaseSize')}</dt><dd>{bytes(d.database_bytes)}</dd>
+              <dt>{tr('systemOperationStatus')}</dt><dd>{d.system_operation_in_progress ? tr('systemOperationActive') : tr('systemOperationIdle')}</dd>
+            </dl>
+            {#if d.system_operation_in_progress}
+              <div class="panel-body tight"><div class="notice" data-tone="info"><Icon name="info" /><div><p>{tr('systemSystemBusy')}</p></div></div></div>
+            {/if}
+          </section>
+          <section class="panel" aria-labelledby="sys-stored" aria-busy={storedLoading}>
+            <header class="panel-head">
+              <div class="panel-title"><h2 id="sys-stored">{tr('admStoredBackups')}</h2><p>{tr('admStoredBackupsHint')}</p></div>
+            </header>
+            {#if storedError}
+              <div class="panel-body tight">{@render failure(tr(storedError), loadStored)}</div>
+            {/if}
+            {#if stored?.items.length}
+              <div class="table-wrap">
+                <table class="table" data-density="compact">
+                  <thead><tr><th scope="col">{tr('systemFile')}</th><th scope="col">{tr('admStoredCreated')}</th><th scope="col">{tr('admStoredKind')}</th><th scope="col">{tr('systemSchema')}</th><th scope="col" class="r">{tr('admStoredSize')}</th></tr></thead>
+                  <tbody>
+                    {#each stored.items as item (item.kind + item.file_name)}
+                      {@const [tone, icon, label] = storedKinds[item.kind] ?? ['muted', 'database', 'systemUnknown']}
+                      <tr>
+                        <td class="mono xs file">{item.file_name}</td>
+                        <td class="muted nowrap">{#if item.created_at === null}{tr('systemUnknown')}{:else}<time datetime={new Date(item.created_at * 1000).toISOString()}>{stamp(item.created_at)}</time>{/if}</td>
+                        <td><Badge state={view(tone, icon, tr(label))} /></td>
+                        <td class="num">{item.schema_version ?? tr('systemUnknown')}</td>
+                        <td class="r num nowrap">{bytes(item.size_bytes)}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {:else if stored}
+              <Empty icon="database" title={tr('admStoredEmpty')} />
+            {:else if storedLoading}
+              <p class="panel-body muted" role="status">{tr('loadingPage')}</p>
+            {/if}
+            {#if stored}
+              <footer class="panel-foot">
+                <span class="field-hint">{stored.truncated ? tr('admStoredTruncated', { count: stored.items.length }) + ' ' : ''}{tr('admStoredDownloadHint')}</span>
+              </footer>
+            {/if}
+          </section>
+        </div>
         <div class="stack">
           <section class="panel" aria-labelledby="sys-schedule">
             <header class="panel-head"><div class="panel-title"><h2 id="sys-schedule">{tr('admSchedule')}</h2></div></header>
@@ -898,6 +976,9 @@
   }
   .nowrap {
     white-space: nowrap;
+  }
+  .file {
+    overflow-wrap: anywhere;
   }
   .strong {
     font-weight: var(--weight-medium);

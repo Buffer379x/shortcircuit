@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- API v1, additive: monitoring list items include the link `title` and `target`. Health no longer requests each link separately, which kept it within the admin request budget.
+- Links: filter the list by live status (active, scheduled, expired, disabled, limit reached) and sort it by 30-day visits or last visit from the column headers. API v1, additive: `POST /api/v1/links/search` accepts `state` and the sorts `visits_desc`, `visits_asc`, `last_visit_desc`, and `last_visit_asc`; links without a value come last. [API](docs/API.md#catalog-search)
+- Protected-link passwords also have a budget per link: 5 attempts per client and 30 across all clients per minute by default (`RATE_LIMIT_PUBLIC_PASSWORD_LINK`). Guessing one link's password no longer exhausts the attempts for every other link. [Security](docs/SECURITY.md#client-addresses-and-request-limits)
+- The admin listener answers another address with a static English or German page that says to open the configured administration address without naming it. The status stays `404`, and API paths, HEAD, and the probes are unchanged.
+- `GET /api/v1/system` no longer waits 250 ms for a CPU sample. A background sampler reads the CPU counters every 15 seconds from startup until shutdown, and `cpu` adds `sampled_at` and `age_seconds` (API v1, additive). Before the first sample, and after 60 seconds without one, CPU use is reported as unavailable. `raw_event_count` is counted at most once every 30 seconds.
+- Analytics retention runs in its own task beside the event writer and deletes at most 512 rows per short transaction with a pause between chunks, so a long cleanup no longer holds up event ingestion. Retention periods and the hourly schedule are unchanged.
+- System, Backups: a read-only **Stored snapshots** table lists command-line, scheduled, and pre-upgrade snapshots and restore rollback copies with type, time, schema, and size, from the new browser-only `GET /api/v1/system/backups`. It returns file names only and lists up to 100 files. Stored files are not downloadable; Download backup still creates a new verified snapshot.
+- Imports name the first failing row: a rejected JSON or CSV import adds `row` and, when known, `field` to the `invalid_exchange` or `destination_not_allowed` problem (API v1, additive), and Import and export shows them next to the error.
+
 ## 0.8.0-preview.2
 
 - Health: on phones and narrow containers each monitored link is a card with its result, last check, response time, and priority switch.

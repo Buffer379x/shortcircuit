@@ -19,6 +19,27 @@ const HEADER: [&str; 8] = [
 #[derive(Debug)]
 pub(super) struct CsvError;
 
+/// A rejected import file. `row` is the 1-based data row after the header, and `field` the
+/// exchange field that failed in it, when known.
+#[derive(Debug, Default)]
+pub(super) struct RowError {
+    pub(super) row: Option<usize>,
+    pub(super) field: Option<&'static str>,
+}
+
+impl From<CsvError> for RowError {
+    fn from(_: CsvError) -> Self {
+        Self::default()
+    }
+}
+
+/// A rejected record, with the field that failed when known.
+struct FieldError(Option<&'static str>);
+
+fn field(name: &'static str) -> impl FnOnce(CsvError) -> FieldError {
+    move |_| FieldError(Some(name))
+}
+
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ImportQuery {
@@ -59,7 +80,7 @@ pub(super) struct Columns {
     native: bool,
 }
 
-pub(super) fn inspect(input: &[u8]) -> Result<Columns, CsvError> {
+pub(super) fn inspect(input: &[u8]) -> Result<Columns, RowError> {
     let (mut reader, header) = open(input)?;
     read_records(&mut reader, |_| Ok(()))?;
     Ok(Columns {
@@ -68,15 +89,15 @@ pub(super) fn inspect(input: &[u8]) -> Result<Columns, CsvError> {
     })
 }
 
-pub(super) fn parse(input: &[u8]) -> Result<Vec<LinkMetadata>, CsvError> {
+pub(super) fn parse(input: &[u8]) -> Result<Vec<LinkMetadata>, RowError> {
     let (mut reader, header) = open(input)?;
     if !is_native(&header) {
-        return Err(CsvError);
+        return Err(RowError::default());
     }
     let version = EXCHANGE_VERSION.to_string();
     read_records(&mut reader, |record| {
         if record.get(0) != Some(version.as_str()) {
-            return Err(CsvError);
+            return Err(FieldError(Some("version")));
         }
         Ok(LinkMetadata {
             host: unprotect(&record[1]).to_owned(),
@@ -84,9 +105,10 @@ pub(super) fn parse(input: &[u8]) -> Result<Vec<LinkMetadata>, CsvError> {
             target: unprotect(&record[3]).to_owned(),
             title: unprotect(&record[4]).to_owned(),
             description: record.get(8).map(unprotect).unwrap_or_default().to_owned(),
-            tags: serde_json::from_str(unprotect(&record[5])).map_err(|_| CsvError)?,
-            enabled: parse_bool(&record[6])?,
-            analytics_enabled: parse_bool(&record[7])?,
+            tags: serde_json::from_str(unprotect(&record[5]))
+                .map_err(|_| FieldError(Some("tags")))?,
+            enabled: parse_bool(&record[6]).map_err(field("enabled"))?,
+            analytics_enabled: parse_bool(&record[7]).map_err(field("analytics_enabled"))?,
         })
     })
 }
@@ -94,18 +116,18 @@ pub(super) fn parse(input: &[u8]) -> Result<Vec<LinkMetadata>, CsvError> {
 pub(super) fn parse_mapped(
     input: &[u8],
     mapping: &ImportQuery,
-) -> Result<Vec<LinkMetadata>, CsvError> {
+) -> Result<Vec<LinkMetadata>, RowError> {
     let (mut reader, header) = open(input)?;
     let (Some(slug), Some(target)) = (mapping.slug_column, mapping.target_column) else {
-        return Err(CsvError);
+        return Err(RowError::default());
     };
     if mapping.host.is_some() == mapping.host_column.is_some() {
-        return Err(CsvError);
+        return Err(RowError::default());
     }
     let mut used = [false; MAX_COLUMNS];
     for column in mapping.columns().into_iter().flatten() {
         if column >= header.len() || used[column] {
-            return Err(CsvError);
+            return Err(RowError::default());
         }
         used[column] = true;
     }
@@ -123,9 +145,10 @@ pub(super) fn parse_mapped(
             target: record[target].to_owned(),
             title: value(mapping.title_column).to_owned(),
             description: description.replace('\r', "\n"),
-            tags: mapped_tags(value(mapping.tags_column))?,
-            enabled: mapped_bool(value(mapping.enabled_column))?,
-            analytics_enabled: mapped_bool(value(mapping.analytics_enabled_column))?,
+            tags: mapped_tags(value(mapping.tags_column)).map_err(field("tags"))?,
+            enabled: mapped_bool(value(mapping.enabled_column)).map_err(field("enabled"))?,
+            analytics_enabled: mapped_bool(value(mapping.analytics_enabled_column))
+                .map_err(field("analytics_enabled"))?,
         })
     })
 }
@@ -151,17 +174,21 @@ fn is_native(header: &csv::StringRecord) -> bool {
 
 fn read_records<T>(
     reader: &mut csv::Reader<&[u8]>,
-    mut parse_record: impl FnMut(csv::StringRecord) -> Result<T, CsvError>,
-) -> Result<Vec<T>, CsvError> {
+    mut parse_record: impl FnMut(csv::StringRecord) -> Result<T, FieldError>,
+) -> Result<Vec<T>, RowError> {
     let mut records = Vec::new();
     for record in reader.records() {
         if records.len() == MAX_ITEMS {
-            return Err(CsvError);
+            return Err(RowError::default());
         }
-        records.push(parse_record(record.map_err(|_| CsvError)?)?);
+        let row = Some(records.len() + 1);
+        // A malformed record, for example one with a different number of fields, has no field.
+        let record = record.map_err(|_| RowError { row, field: None })?;
+        let parsed = parse_record(record).map_err(|FieldError(field)| RowError { row, field })?;
+        records.push(parsed);
     }
     if records.is_empty() {
-        return Err(CsvError);
+        return Err(RowError::default());
     }
     Ok(records)
 }

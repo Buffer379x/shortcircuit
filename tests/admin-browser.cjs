@@ -685,6 +685,28 @@ async function verify() {
     assert.equal(csvRedirect.headers().location, 'https://example.test/csv-check');
     await importAnother.click();
 
+    // A rejected import names its first failing row and field.
+    await chooseFile(dropZone, {
+      name: 'invalid.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from(
+        'version,host,slug,target,title,tags,enabled,analytics_enabled\n' +
+        '1,localhost,row-one,https://example.test/row-one,One,[],true,true\n' +
+        '1,localhost,row-two,https://example.test/row-two,Two,[],maybe,true\n',
+      ),
+    });
+    await page.getByText('Row 2 after the header, field “Enabled”', { exact: true }).waitFor();
+    await chooseFile(dropZone, {
+      name: 'invalid.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify({ version: 1, items: [
+        { host: 'localhost', slug: 'item-one', target: 'https://example.test/one', title: '', tags: [], enabled: true, analytics_enabled: true },
+        { host: 'localhost', slug: 'item two', target: 'https://example.test/two', title: '', tags: [], enabled: true, analytics_enabled: true },
+      ] })),
+    });
+    await page.getByText(/^Item 2, field “Slug/).waitFor();
+    assert.equal((await page.request.get(publicOrigin + '/row-one', { maxRedirects: 0 })).status(), 404);
+
     // ---------- Catalog search, filters, views, and organization ----------
     await page.setViewportSize({ width: 768, height: 1024 });
     await navigate('Links');
@@ -695,6 +717,40 @@ async function verify() {
     for (const column of ['Link', 'Destination', 'Tags', 'Visits, 30 days', 'Status', 'Health', 'Last visit']) {
       await linkTable.getByRole('columnheader', { name: column, exact: true }).waitFor();
     }
+    // The traffic headers sort through the search API, highest first, and keep the sort in the URL.
+    // Few requests here: the whole run stays within the default per-client admin API budget.
+    const searched = (match) => page.waitForResponse(response => response.url() === admin + '/api/v1/links/search'
+      && match(response.request().postDataJSON() ?? {}));
+    const visitsHeader = linkTable.getByRole('columnheader', { name: 'Visits, 30 days', exact: true });
+    const lastHeader = linkTable.getByRole('columnheader', { name: 'Last visit', exact: true });
+    const sortedSearch = searched(body => body.sort === 'visits_desc');
+    await visitsHeader.getByRole('button').click();
+    const byVisits = await sortedSearch;
+    assert.equal(byVisits.status(), 200);
+    await page.waitForURL(/sort=visits_desc/);
+    assert.equal(await visitsHeader.getAttribute('aria-sort'), 'descending');
+    const visitCounts = (await byVisits.json()).items.map(item => item.visits_30d);
+    const counted = visitCounts.filter(count => count !== null);
+    assert.ok(counted.length > 0 && visitCounts.slice(0, counted.length).every(count => count !== null));
+    assert.deepEqual(counted, [...counted].sort((a, b) => b - a));
+    assert.equal(await lastHeader.getAttribute('aria-sort'), null);
+    // The status filter uses the live state: the guide link has reached its visit limit.
+    const statusFilter = page.getByRole('combobox', { name: 'Filter by status', exact: true });
+    assert.deepEqual(await statusFilter.locator('option').allTextContents(),
+      ['Any status', 'Active', 'Scheduled', 'Expired', 'Disabled', 'Limit reached']);
+    const stateSearch = searched(body => body.state === 'exhausted' && body.sort === 'visits_desc');
+    await statusFilter.selectOption({ label: 'Limit reached' });
+    const exhaustedPage = await stateSearch;
+    assert.equal(exhaustedPage.status(), 200);
+    assert.ok((await exhaustedPage.json()).items.every(item => item.state === 'exhausted'));
+    await page.waitForURL(/status=exhausted/);
+    await row('localhost/test/guide').getByText('Limit reached', { exact: true }).waitFor();
+    await row('localhost/csv-check').waitFor({ state: 'detached' });
+    await statusFilter.selectOption({ label: 'Any status' });
+    await row('localhost/csv-check').waitFor();
+    await page.getByRole('button', { name: 'Most visits, 30 days', exact: true }).click();
+    await page.getByRole('menu', { name: 'Sort links', exact: true }).getByRole('menuitemradio', { name: 'Newest first', exact: true }).click();
+    await page.waitForURL(url => !/sort=|status=/.test(url.hash));
     await page.setViewportSize({ width: 390, height: 844 });
     const filtersToggle = page.getByRole('button', { name: 'Filters', exact: true });
     await filtersToggle.click();
@@ -947,8 +1003,20 @@ async function verify() {
     // ---------- Browser backup, staged restore, and the audit log ----------
     await navigate('System');
     await heading('System').waitFor();
+    await page.getByText('CPU sample', { exact: true }).waitFor();
     await page.getByRole('tab', { name: 'Backups', exact: true }).click();
     await page.waitForURL(/#\/system\?tab=backups$/);
+    // Stored snapshots are listed read-only by file name, without paths.
+    const storedPanel = page.getByRole('region', { name: 'Stored snapshots', exact: true });
+    const storedTable = storedPanel.getByRole('table');
+    await storedPanel.getByText('No stored snapshots', { exact: true }).or(storedTable).waitFor();
+    const storedList = await (await page.request.get(admin + '/api/v1/system/backups')).json();
+    assert.ok(Array.isArray(storedList.items));
+    assert.equal(JSON.stringify(storedList).includes('/data'), false);
+    if (storedList.items.length) {
+      await storedTable.getByRole('columnheader', { name: 'Type', exact: true }).waitFor();
+      await storedTable.getByText(storedList.items[0].file_name, { exact: true }).waitFor();
+    }
     await page.getByRole('button', { name: 'Download backup', exact: true }).click();
     const operations = page.getByRole('dialog', { name: 'Download backup', exact: true });
     await operations.getByLabel('Current password', { exact: true }).fill(adminPassword);

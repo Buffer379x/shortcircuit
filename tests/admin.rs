@@ -1739,3 +1739,137 @@ async fn unsafe_configuration_and_repeated_login_attempts_are_bounded() {
     assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(limited.headers()[header::RETRY_AFTER], "60");
 }
+
+async fn text_body(response: Response) -> String {
+    String::from_utf8(
+        to_bytes(response.into_body(), 64_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn another_admin_address_explains_the_404_without_revealing_the_installation() {
+    let app = App::start().await;
+    for (host, path) in [
+        ("wrong.example", "/"),
+        ("admin.example:8443", "/"),
+        ("wrong.example", "/links/7"),
+        ("wrong.example", "/assets/admin.js"),
+    ] {
+        let page = request(&app.admin, Method::GET, path, &[("host", host)], None).await;
+        assert_eq!(page.status(), StatusCode::NOT_FOUND, "{host}{path}");
+        let headers = page.headers();
+        assert_eq!(headers[header::CONTENT_TYPE], "text/html; charset=utf-8");
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+        assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY");
+        let policy = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+        assert!(policy.starts_with("default-src 'none'; style-src 'sha256-"));
+        assert!(!policy.contains("script-src") && !policy.contains("unsafe"));
+        let body = text_body(page).await;
+        assert!(body.contains("<html lang=\"en\">"));
+        assert!(body.contains("The administration isn’t available at this address"));
+        for secret in [
+            HOST,
+            ORIGIN,
+            "8080",
+            "ShortCircuit",
+            env!("CARGO_PKG_VERSION"),
+            "<script",
+        ] {
+            assert!(!body.contains(secret), "{secret} in {host}{path}");
+        }
+    }
+
+    let german = request(
+        &app.admin,
+        Method::POST,
+        "/",
+        &[
+            ("host", "wrong.example"),
+            ("accept-language", "de-DE,en;q=0.5"),
+        ],
+        None,
+    )
+    .await;
+    assert_eq!(german.status(), StatusCode::NOT_FOUND);
+    let german = text_body(german).await;
+    assert!(german.contains("<html lang=\"de\">"));
+    assert!(german.contains("Die Verwaltung ist unter dieser Adresse nicht erreichbar"));
+
+    let head = request(
+        &app.admin,
+        Method::HEAD,
+        "/",
+        &[("host", "wrong.example")],
+        None,
+    )
+    .await;
+    assert_eq!(head.status(), StatusCode::NOT_FOUND);
+    assert!(text_body(head).await.is_empty());
+
+    // API clients keep the problem document for routes and the bare 404 for unknown paths.
+    let api = request(
+        &app.admin,
+        Method::GET,
+        "/api/v1/auth/session",
+        &[("host", "wrong.example")],
+        None,
+    )
+    .await;
+    assert_eq!(api.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        api.headers()[header::CONTENT_TYPE],
+        "application/problem+json"
+    );
+    assert_eq!(response_body(api).await["code"], "not_found");
+    let unknown_api = request(
+        &app.admin,
+        Method::GET,
+        "/api/v1/unknown",
+        &[("host", "wrong.example")],
+        None,
+    )
+    .await;
+    assert_eq!(unknown_api.status(), StatusCode::NOT_FOUND);
+    assert!(text_body(unknown_api).await.is_empty());
+
+    // Probes ignore the address, and the configured address keeps its bare 404 and admin page.
+    for probe in ["/healthz", "/readyz"] {
+        let response = request(
+            &app.admin,
+            Method::GET,
+            probe,
+            &[("host", "wrong.example")],
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{probe}");
+        assert!(text_body(response).await.is_empty());
+    }
+    let unknown = request(&app.admin, Method::GET, "/unknown", &[], None).await;
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    assert!(text_body(unknown).await.is_empty());
+    let index = request(&app.admin, Method::GET, "/", &[], None).await;
+    let policy = index.headers()[header::CONTENT_SECURITY_POLICY]
+        .to_str()
+        .unwrap();
+    assert!(policy.contains("script-src 'self'"));
+    // Forwarded host headers cannot select the configured address.
+    let forwarded = request(
+        &app.admin,
+        Method::GET,
+        "/",
+        &[("host", "wrong.example"), ("x-forwarded-host", HOST)],
+        None,
+    )
+    .await;
+    assert_eq!(forwarded.status(), StatusCode::NOT_FOUND);
+    assert!(
+        text_body(forwarded)
+            .await
+            .contains("isn’t available at this address")
+    );
+}

@@ -22,7 +22,7 @@ use crate::{
     store::Link,
 };
 
-use super::{BODY_LIMIT, Problem, catalog::tag_name};
+use super::{BODY_LIMIT, Problem, RowProblem, catalog::tag_name};
 
 const EXCHANGE_VERSION: u8 = 1;
 const MAX_ITEMS: usize = 100;
@@ -248,9 +248,9 @@ async fn export_csv(
 async fn csv_columns(
     headers: HeaderMap,
     bytes: Result<Bytes, BytesRejection>,
-) -> Result<Json<csv_format::Columns>, Problem> {
+) -> Result<Json<csv_format::Columns>, RowProblem> {
     let bytes = csv_body(&headers, bytes)?;
-    csv_format::inspect(&bytes).map(Json).map_err(|_| invalid())
+    csv_format::inspect(&bytes).map(Json).map_err(row_problem)
 }
 
 async fn import_csv(
@@ -258,7 +258,7 @@ async fn import_csv(
     headers: HeaderMap,
     query: Result<Query<csv_format::ImportQuery>, QueryRejection>,
     bytes: Result<Bytes, BytesRejection>,
-) -> Result<(StatusCode, Json<ImportReport>), Problem> {
+) -> Result<(StatusCode, Json<ImportReport>), RowProblem> {
     let Query(query) = query.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
     let bytes = csv_body(&headers, bytes)?;
     let items = if query.is_mapped() {
@@ -266,7 +266,7 @@ async fn import_csv(
     } else {
         csv_format::parse(&bytes)
     }
-    .map_err(|_| invalid())?;
+    .map_err(row_problem)?;
     apply_import(
         &state,
         ImportPage {
@@ -327,7 +327,7 @@ struct ImportReport {
 async fn import_links(
     State(state): State<ExchangeState>,
     body: Result<Json<ImportPage>, JsonRejection>,
-) -> Result<(StatusCode, Json<ImportReport>), Problem> {
+) -> Result<(StatusCode, Json<ImportReport>), RowProblem> {
     let Json(input) = body.map_err(|error| Problem(error.status(), "invalid_exchange"))?;
     apply_import(&state, input).await
 }
@@ -335,7 +335,7 @@ async fn import_links(
 async fn apply_import(
     state: &ExchangeState,
     mut input: ImportPage,
-) -> Result<(StatusCode, Json<ImportReport>), Problem> {
+) -> Result<(StatusCode, Json<ImportReport>), RowProblem> {
     validate(&mut input)?;
 
     let statement = if input.preview {
@@ -351,24 +351,38 @@ async fn apply_import(
     let active = domains::active_hosts(&mut *transaction, &state.hosts)
         .await
         .map_err(|_| Problem::unavailable())?;
-    if input.items.iter().any(|item| !active.contains(&item.host)) {
-        return Err(invalid());
+    if let Some(row) = input
+        .items
+        .iter()
+        .position(|item| !active.contains(&item.host))
+    {
+        return Err(RowProblem::at(invalid(), row + 1, Some("host")));
     }
     let outcomes = compare_existing(&mut transaction, &input.items)
         .await
         .map_err(|_| Problem::unavailable())?;
+    // The policy check stops at the first refused destination, which is the last one yielded.
+    let checked = std::sync::atomic::AtomicUsize::new(0);
     let created = input
         .items
         .iter()
         .zip(&outcomes)
-        .filter(|(_, outcome)| **outcome == ImportOutcome::Create)
-        .map(|(item, _)| item.target.as_str());
+        .enumerate()
+        .filter(|(_, (_, outcome))| **outcome == ImportOutcome::Create)
+        .map(|(index, (item, _))| {
+            checked.store(index + 1, std::sync::atomic::Ordering::Relaxed);
+            item.target.as_str()
+        });
     if crate::destinations::check_writes(&mut *transaction, created, &[])
         .await
         .map_err(|_| Problem::unavailable())?
         .is_err()
     {
-        return Err(Problem::invalid("destination_not_allowed"));
+        return Err(RowProblem::at(
+            Problem::invalid("destination_not_allowed"),
+            checked.load(std::sync::atomic::Ordering::Relaxed),
+            Some("target"),
+        ));
     }
     let conflict = outcomes.contains(&ImportOutcome::Conflict);
     let applied = !input.preview && !conflict;
@@ -416,36 +430,51 @@ fn invalid() -> Problem {
     Problem::invalid("invalid_exchange")
 }
 
-fn validate(input: &mut ImportPage) -> Result<(), Problem> {
-    if input.version != EXCHANGE_VERSION || !(1..=MAX_ITEMS).contains(&input.items.len()) {
-        return Err(invalid());
+fn row_problem(error: csv_format::RowError) -> RowProblem {
+    match error.row {
+        Some(row) => RowProblem::at(invalid(), row, error.field),
+        None => invalid().into(),
     }
-    for item in &mut input.items {
-        item.host = normalize_host(item.host.trim()).ok_or_else(invalid)?;
-        if !valid_slug(&item.slug)
-            || !valid_target(&item.target)
-            || item.title.chars().count() > 160
-            || item.title.chars().any(char::is_control)
-            || item.tags.len() > 20
-        {
-            return Err(invalid());
+}
+
+/// Validates and normalizes every item. The first invalid item is reported by its 1-based
+/// position and the field that failed, without echoing its value.
+fn validate(input: &mut ImportPage) -> Result<(), RowProblem> {
+    if input.version != EXCHANGE_VERSION || !(1..=MAX_ITEMS).contains(&input.items.len()) {
+        return Err(invalid().into());
+    }
+    for (index, item) in input.items.iter_mut().enumerate() {
+        let failed = |field| RowProblem::at(invalid(), index + 1, Some(field));
+        item.host = normalize_host(item.host.trim()).ok_or_else(|| failed("host"))?;
+        if !valid_slug(&item.slug) {
+            return Err(failed("slug"));
+        }
+        if !valid_target(&item.target) {
+            return Err(failed("target"));
+        }
+        if item.title.chars().count() > 160 || item.title.chars().any(char::is_control) {
+            return Err(failed("title"));
+        }
+        if item.tags.len() > 20 {
+            return Err(failed("tags"));
         }
         for tag in &mut item.tags {
-            *tag = tag_name(tag).ok_or_else(invalid)?.to_owned();
+            *tag = tag_name(tag).ok_or_else(|| failed("tags"))?.to_owned();
         }
         item.description = plain_description(&item.description)
-            .ok_or_else(invalid)?
+            .ok_or_else(|| failed("description"))?
             .to_owned();
         item.tags.sort_unstable();
         item.tags.dedup();
     }
     let mut seen = HashSet::with_capacity(input.items.len());
-    if input
+    if let Some(row) = input
         .items
         .iter()
-        .any(|item| !seen.insert((item.host.as_str(), item.slug.as_str())))
+        .position(|item| !seen.insert((item.host.as_str(), item.slug.as_str())))
     {
-        return Err(invalid());
+        // A repeated host and slug is reported at its second occurrence.
+        return Err(RowProblem::at(invalid(), row + 1, Some("slug")));
     }
     Ok(())
 }
@@ -724,10 +753,17 @@ mod tests {
         invalid_url["host"] = json!("go.example");
         invalid_url["target"] = json!("https://secret@example.test/private");
 
-        for rejected in [duplicate, inactive, invalid_url] {
+        for (rejected, field) in [
+            (duplicate, "slug"),
+            (inactive, "host"),
+            (invalid_url, "target"),
+        ] {
             let (status, body) = import(&router, false, vec![valid.clone(), rejected]).await;
             assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
             assert_eq!(body["code"], "invalid_exchange");
+            // The first failing item is named by position and field, never by its values.
+            assert_eq!(body["row"], 2, "{field}");
+            assert_eq!(body["field"], field);
             let body = body.to_string();
             assert!(!body.contains("private"));
             assert!(!body.contains("secret"));
@@ -742,6 +778,149 @@ mod tests {
         let (status, body) = import(&router, true, vec![valid]).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(body["code"], "invalid_exchange");
+        assert_eq!(
+            (body["row"].as_u64(), body["field"].as_str()),
+            (Some(1), Some("host"))
+        );
+        assert_eq!(link_count(&pool).await, 0);
+    }
+
+    #[tokio::test]
+    async fn every_rejected_import_field_is_reported_with_its_item() {
+        let (_directory, pool, router) = app().await;
+        let valid = item("one", "https://example.test/a");
+        for (key, value, field) in [
+            ("slug", json!("../escape"), "slug"),
+            ("title", json!("line\u{7}"), "title"),
+            ("title", json!("x".repeat(161)), "title"),
+            ("tags", json!(["", "team"]), "tags"),
+            ("description", json!("<b>markup</b>\u{0}"), "description"),
+            ("host", json!("not a host"), "host"),
+        ] {
+            let mut rejected = item("three", "https://example.test/three");
+            rejected[key] = value;
+            let items = vec![
+                valid.clone(),
+                item("two", "https://example.test/two"),
+                rejected,
+            ];
+            let (status, body) = import(&router, true, items).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{key}");
+            assert_eq!(body["code"], "invalid_exchange");
+            assert_eq!(body["row"], 3, "{key}");
+            assert_eq!(body["field"], field, "{key}");
+        }
+        // Whole-document problems name no row.
+        let (status, body) = request(
+            &router,
+            Method::POST,
+            PATH,
+            json!({"version": 2, "preview": true, "items": [valid]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(body.get("row").is_none() && body.get("field").is_none());
+        assert_eq!(link_count(&pool).await, 0);
+    }
+
+    #[tokio::test]
+    async fn csv_imports_report_the_first_failing_data_row() {
+        let (_directory, pool, router) = app().await;
+        let header = "version,host,slug,target,title,tags,enabled,analytics_enabled\n";
+        let good = "1,go.example,one,https://example.test/one,One,[],true,false\n";
+        let cases: [(&'static str, Value, Value); 5] = [
+            // Native rows: a bad boolean, an unknown version, and an invalid destination.
+            (
+                "1,go.example,two,https://example.test/two,Two,[],maybe,false\n",
+                json!(2),
+                json!("enabled"),
+            ),
+            (
+                "2,go.example,two,https://example.test/two,Two,[],true,false\n",
+                json!(2),
+                json!("version"),
+            ),
+            (
+                "1,go.example,two,https://user@example.test/two,Two,[],true,false\n",
+                json!(2),
+                json!("target"),
+            ),
+            // A record with a different number of fields has no field.
+            ("1,go.example,two\n", json!(2), Value::Null),
+            (
+                "1,go.example,two,https://example.test/two,Two,not-json,true,false\n",
+                json!(2),
+                json!("tags"),
+            ),
+        ];
+        for (row, expected_row, expected_field) in cases {
+            let file: &'static str = Box::leak(format!("{header}{good}{row}").into_boxed_str());
+            let (status, body) = post_csv(&router, "/api/v1/exchange/links.csv", file).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{row}");
+            assert_eq!(body["code"], "invalid_exchange");
+            assert_eq!(body["row"], expected_row, "{row}");
+            assert_eq!(
+                body.get("field").cloned().unwrap_or(Value::Null),
+                expected_field,
+                "{row}"
+            );
+            assert!(!body.to_string().contains("user@"));
+        }
+
+        // Mapped files use the same 1-based data row, not counting the header.
+        let mapped = "Code,Address\nfirst,https://example.test/1\nsecond,https://example.test/2\nbad slug,https://example.test/3\n";
+        let path = "/api/v1/exchange/links.csv?slug_column=0&target_column=1&host=go.example";
+        let (status, body) = post_csv(&router, path, mapped).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            (body["row"].as_u64(), body["field"].as_str()),
+            (Some(3), Some("slug"))
+        );
+        let flags = "Code,Address,On\nfirst,https://example.test/1,yes\n";
+        let path = "/api/v1/exchange/links.csv?slug_column=0&target_column=1&enabled_column=2&host=go.example";
+        let (status, body) = post_csv(&router, path, flags).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            (body["row"].as_u64(), body["field"].as_str()),
+            (Some(1), Some("enabled"))
+        );
+        // Column inspection reports malformed records by row as well.
+        let (status, body) = post_csv(
+            &router,
+            "/api/v1/exchange/links.csv/columns",
+            "Code,Address\nfirst,https://example.test/1\nshort\n",
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["row"], 2);
+        assert!(body.get("field").is_none());
+        assert_eq!(link_count(&pool).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_refused_destination_names_its_item() {
+        let (_directory, pool, router) = app().await;
+        sqlx::raw_sql(
+            "INSERT INTO destination_rules (host, subdomains, action)
+                 VALUES ('blocked.example', 0, 'block');
+             UPDATE destination_policy SET enabled = 1, generation = generation + 1 WHERE id = 1;",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let items = vec![
+            item("one", "https://example.test/one"),
+            item("two", "https://example.test/two"),
+            item("three", "https://blocked.example/three"),
+        ];
+        let (status, body) = import(&router, true, items).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["code"], "destination_not_allowed");
+        assert_eq!(
+            (body["row"].as_u64(), body["field"].as_str()),
+            (Some(3), Some("target"))
+        );
+        assert!(!body.to_string().contains("blocked.example"));
         assert_eq!(link_count(&pool).await, 0);
     }
 

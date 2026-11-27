@@ -2,12 +2,13 @@ use axum::{
     extract::{Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use subtle::ConstantTimeEq;
 use url::{Host, Url};
 
 use crate::{
+    confirmation::{Notice, notice},
     history::Actor,
     input::{normalize_host, request_host_port},
     rate_limit::{RateLimit, TrustedProxies},
@@ -136,23 +137,62 @@ pub(super) async fn admin_host(
     request: Request,
     next: Next,
 ) -> Result<Response, Problem> {
-    let matches =
-        request_host_port(request.uri(), request.headers()).is_some_and(|(host, port)| {
-            host == state.config.host
-                && port.unwrap_or(state.config.default_port) == state.config.port
-        });
-    if !matches {
-        // Explain the most common installation mistake once per process.
-        static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            tracing::info!(
-                expected = %state.config.origin,
-                "a request used an address other than ADMIN_ORIGIN; open the configured address"
-            );
+    if !is_admin_host(&state, &request) {
+        report_other_address(&state);
+        // API clients keep the JSON problem; browsers get a page that explains the 404.
+        if is_api_path(&request) {
+            return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
         }
-        return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
+        return Ok(other_address(&request));
     }
     Ok(next.run(request).await)
+}
+
+/// Unrouted paths stay a bare `404` on the configured address and for API paths. Other paths
+/// at another address get the same explanation as routed ones.
+pub(super) async fn unrouted(state: AppState, request: Request) -> Response {
+    if is_admin_host(&state, &request) || is_api_path(&request) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    report_other_address(&state);
+    other_address(&request)
+}
+
+fn is_admin_host(state: &AppState, request: &Request) -> bool {
+    request_host_port(request.uri(), request.headers()).is_some_and(|(host, port)| {
+        host == state.config.host && port.unwrap_or(state.config.default_port) == state.config.port
+    })
+}
+
+fn is_api_path(request: &Request) -> bool {
+    let path = request.uri().path();
+    path == "/api" || path.starts_with("/api/")
+}
+
+/// Explains the most common installation mistake once per process. Only the log names the
+/// expected origin; the response never does.
+fn report_other_address(state: &AppState) {
+    static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::info!(
+            expected = %state.config.origin,
+            "a request used an address other than ADMIN_ORIGIN; open the configured address"
+        );
+    }
+}
+
+/// A static page without scripts that names no address, host, or version. HEAD stays bodiless.
+fn other_address(request: &Request) -> Response {
+    let language = request
+        .headers()
+        .get(header::ACCEPT_LANGUAGE)
+        .and_then(|value| value.to_str().ok());
+    notice(
+        request.method(),
+        StatusCode::NOT_FOUND,
+        Notice::AdminAddress,
+        language,
+    )
 }
 
 pub(super) async fn entry_access(
