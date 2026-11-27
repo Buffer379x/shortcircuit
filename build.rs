@@ -16,8 +16,14 @@ fn main() -> io::Result<()> {
         ("assets/admin.css", "admin.css"),
         // Local Geist fonts (SIL Open Font License), named by frontend/vite.config.ts.
         ("assets/geist-latin-wght-normal.woff2", "geist-latin.woff2"),
-        ("assets/geist-latin-ext-wght-normal.woff2", "geist-latin-ext.woff2"),
-        ("assets/geist-mono-latin-wght-normal.woff2", "geist-mono-latin.woff2"),
+        (
+            "assets/geist-latin-ext-wght-normal.woff2",
+            "geist-latin-ext.woff2",
+        ),
+        (
+            "assets/geist-mono-latin-wght-normal.woff2",
+            "geist-mono-latin.woff2",
+        ),
     ] {
         let bytes = if ready {
             fs::read(format!("frontend/dist/{source}"))?

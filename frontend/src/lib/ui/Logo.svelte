@@ -11,7 +11,7 @@
   <svg class="logo" class:tagline viewBox="0 0 {tagline ? WORDMARK.taglineWidth : WORDMARK.width} {tagline ? 67 : 48}" role="img" aria-label={tagline ? 'ShortCircuit, take the shorter route.' : 'ShortCircuit'}>
     <g class="mark" transform="translate(-10 -8)">{@html WORDMARK.mark}</g>
     <path class="word" transform="translate(60 4.6) scale(0.436)" d={WORDMARK.name} />
-    {#if tagline}<path class="tag" transform="translate(60 50) scale(0.17)" d={WORDMARK.tagline} />{/if}
+    {#if tagline}<path class="tagline-path" transform="translate(60 50) scale(0.17)" d={WORDMARK.tagline} />{/if}
   </svg>
 {/if}
 
@@ -35,7 +35,7 @@
   .word {
     fill: var(--text);
   }
-  .tag {
+  .tagline-path {
     fill: var(--text-secondary);
   }
 </style>
