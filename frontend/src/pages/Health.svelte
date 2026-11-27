@@ -335,8 +335,8 @@
         </div>
       </header>
       {#if rows.length}
-        <div class="table-wrap">
-          <table class="table">
+        <div class="table-wrap monitor-wrap">
+          <table class="table monitor-table">
             <thead>
               <tr>
                 <th scope="col" class="c-link">{tr('insColLink')}</th>
@@ -362,22 +362,24 @@
                   <td class="c-dest">
                     {#if link}{@const d = splitUrl(link.target)}<span class="dest dest-cell"><b>{d.host}</b>{d.rest}</span>{:else}<span class="muted">—</span>{/if}
                   </td>
-                  <td>
+                  <td class="c-result">
                     <div class="res">
                       <Badge state={healthState(health(item.status))} quiet />
                       {#if info}<span class="muted">{info}</span>{/if}
                     </div>
                   </td>
-                  <td class="r num c-resp">{item.elapsed_ms === null ? '—' : `${num(item.elapsed_ms)} ms`}</td>
+                  <td class="r num c-resp" data-empty={item.elapsed_ms === null || undefined}>{item.elapsed_ms === null ? '—' : `${num(item.elapsed_ms)} ms`}</td>
                   <td class="r muted c-checked nowrap">
+                    <span class="card-label">{tr('insColChecked')}</span>
                     {#if item.last_checked !== null}
                       <time datetime={new Date(item.last_checked * 1000).toISOString()} title={when(item.last_checked)}>{ago(item.last_checked)}</time>
                     {:else}{tr('never')}{/if}
                   </td>
-                  <td>
+                  <td class="c-priority">
                     <label class="check" use:tip={tr('monitorPriority')}>
                       <input class="switch" type="checkbox" checked={item.priority} disabled={!enabled || !!working}
                         aria-label={tr('insPriorityFor', { name })} onchange={(event) => setPriority(item, event.currentTarget)} />
+                      <span class="card-label" aria-hidden="true">{tr('insColPriority')}</span>
                     </label>
                   </td>
                   <td class="c-actions">
@@ -637,6 +639,97 @@
       display: none;
     }
   }
+  .monitor-wrap {
+    container: monitor / inline-size;
+  }
+  .card-label {
+    display: none;
+  }
+  /* Narrow containers: each monitored link becomes a card with the result on its own line. */
+  @container monitor (max-width: 760px) {
+    .monitor-wrap {
+      overflow: visible;
+    }
+    .monitor-table thead {
+      display: none;
+    }
+    .monitor-table,
+    .monitor-table tbody {
+      display: block;
+    }
+    .monitor-table tr {
+      display: grid;
+      grid-template-columns: auto auto minmax(0, 1fr) auto;
+      grid-template-areas:
+        'link link link actions'
+        'result result result result'
+        'checked resp . priority';
+      align-items: center;
+      gap: 8px var(--space-3);
+      padding: var(--space-3) var(--space-4);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .monitor-table tbody tr:last-child {
+      border-bottom: 0;
+    }
+    .monitor-table td {
+      display: block;
+      height: auto;
+      padding: 0 !important;
+      border: 0;
+      text-align: left;
+    }
+    .monitor-table .c-link {
+      grid-area: link;
+      min-width: 0;
+    }
+    .monitor-table .c-link .cell-link {
+      max-width: none;
+    }
+    .monitor-table .c-actions {
+      grid-area: actions;
+      align-self: start;
+    }
+    .monitor-table .c-result {
+      grid-area: result;
+    }
+    .monitor-table .c-result .res {
+      white-space: normal;
+      flex-wrap: wrap;
+    }
+    .monitor-table .c-dest {
+      display: none;
+    }
+    .monitor-table .c-checked {
+      display: inline-flex;
+      gap: 6px;
+      grid-area: checked;
+      font-size: var(--text-xs);
+    }
+    .monitor-table .c-resp {
+      display: block;
+      grid-area: resp;
+      color: var(--text-muted);
+      font-size: var(--text-xs);
+    }
+    .monitor-table .c-resp[data-empty] {
+      display: none;
+    }
+    .monitor-table .c-priority {
+      grid-area: priority;
+    }
+    .monitor-table .card-label {
+      display: inline;
+      color: var(--text-secondary);
+      font-size: var(--text-xs);
+    }
+    .monitor-table .c-priority .check {
+      align-items: center;
+    }
+    .monitor-table tbody tr .row-actions .reveal {
+      opacity: 1;
+    }
+  }
   @media (max-width: 900px) {
     .summary {
       grid-auto-flow: row;
@@ -649,9 +742,6 @@
   @media (max-width: 640px) {
     .summary {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .c-checked {
-      display: none;
     }
     .c-link {
       min-width: 150px;
