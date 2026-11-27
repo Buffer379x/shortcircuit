@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Container version="2">
   <Name>shortcircuit</Name>
-  <Repository>ghcr.io/buffer379x/shortcircuit:0.8.0-preview.2</Repository>
+  <Repository>ghcr.io/buffer379x/shortcircuit:0.8.0-preview.3</Repository>
   <Registry>https://github.com/users/Buffer379x/packages/container/package/shortcircuit</Registry>
   <Network>bridge</Network>
   <Shell>sh</Shell>
@@ -9,7 +9,7 @@
   <Support>https://github.com/Buffer379x/shortcircuit/issues</Support>
   <Project>https://github.com/Buffer379x/shortcircuit</Project>
   <TemplateURL>https://raw.githubusercontent.com/Buffer379x/shortcircuit/main/unraid/shortcircuit.xml</TemplateURL>
-  <ReadMe>https://raw.githubusercontent.com/Buffer379x/shortcircuit/v0.8.0-preview.2/docs/UNRAID_INSTALLATION.md</ReadMe>
+  <ReadMe>https://raw.githubusercontent.com/Buffer379x/shortcircuit/v0.8.0-preview.3/docs/UNRAID_INSTALLATION.md</ReadMe>
   <Overview>Self-hosted URL shortener and link management. Docker Manager downloads the versioned preview image. Use an SSH tunnel for the default loopback ports or configure a private reverse proxy.</Overview>
   <Category>Network:Web</Category>
   <WebUI>http://localhost:8081</WebUI>
