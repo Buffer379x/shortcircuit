@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Admin interface redesigned with Polar Signal:
+  - Near-monochrome dark and light themes with pink as the signal color, local Geist fonts, and Lucide icons.
+  - A grouped sidebar with a command palette (Ctrl/Cmd+K), and a link details page with a route map, rules, access, health, and history.
+  - One link form for creating and editing, charts in Analytics and Overview, QR Studio, and Settings with privacy and analytics controls.
+  - The new logo and brand package (favicon, app and touch icons, web manifest, Unraid icon, README banner).
+  - Old hash addresses redirect to the new pages. No function was removed. [Design system](docs/DESIGN_SYSTEM.md)
+- Public missing, inactive, and unknown-domain responses and the password and one-time pages show small branded pages in English or German. Inactive links answer exactly like missing ones. Status codes and headers are unchanged.
+- The admin listener serves its script and stylesheet with Brotli or gzip when the browser accepts it, and serves fonts, icons, and a web manifest. The admin Content Security Policy adds `font-src 'self'` and `manifest-src 'self'`.
 - API v1, additive: catalog search items and the new `GET /api/v1/links/{id}` report the live `state`, policy window and visit limit, `protection`, `rule_count`, 30-day redirects, a 14-day trend, and the last health check. Keys without the `analytics` scope receive no traffic fields. The analytics summary and download accept `link=<id>`, and the Overview lists up to eight links that need attention.
 
 ## 0.7.0-preview.1

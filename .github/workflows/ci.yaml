@@ -76,15 +76,16 @@ jobs:
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Host: localhost:8081' http://127.0.0.1:8081/api/v1/links)" = "401"
           test "$(docker inspect --format '{{.Config.User}}' "$(docker compose ps -q shortcircuit)")" = "10001:10001"
           docker compose exec -T shortcircuit shortcircuit --version | grep -F "($SHORTCIRCUIT_BUILD_REVISION)"
-      - name: Exercise authenticated workflows in Chromium
+      - name: Exercise authenticated workflows and accessibility in Chromium
         run: |
           browser_deps="$RUNNER_TEMP/shortcircuit-browser"
-          npm install --prefix "$browser_deps" --no-save --no-audit --no-fund playwright@1.65.0
+          npm install --prefix "$browser_deps" --no-save --no-audit --no-fund playwright@1.65.0 axe-core@4.14.1
           # GitHub's Ubuntu runners already include Chromium's system libraries.
           "$browser_deps/node_modules/.bin/playwright" install --only-shell chromium
           setup_token=$(docker compose exec -T shortcircuit shortcircuit setup-token)
           printf '::add-mask::%s\n' "$setup_token"
-          SHORTCIRCUIT_SETUP_TOKEN="$setup_token" SHORTCIRCUIT_PLAYWRIGHT="$browser_deps/node_modules/playwright" node tests/admin-browser.cjs
+          SHORTCIRCUIT_SETUP_TOKEN="$setup_token" SHORTCIRCUIT_PLAYWRIGHT="$browser_deps/node_modules/playwright" \
+            SHORTCIRCUIT_AXE_CORE="$browser_deps/node_modules/axe-core" node tests/admin-browser.cjs
       - name: Exercise backup and offline restore
         id: smoke
         run: |
