@@ -20,6 +20,7 @@ The admin listener exposes `GET /healthz` and `GET /readyz` with status-only res
 | `POST /api/v1/links/bulk` | Applies one action atomically to 1 to 50 selected links. Requires a browser session, Origin, and CSRF. |
 | `POST /api/v1/links/bulk/export` | Downloads the selected links as native JSON or CSV. Requires a browser session, Origin, and CSRF. |
 | `POST /api/v1/links` | Accepts `target` and optional `host`, `slug`, `title`, `description`, `tags`, `enabled`, `analytics_enabled`, and `protection`. The protection object takes `one_time` and optional `password`. Both the link and protection commit together. Returns `201`, or `409` for a duplicate slug on the same host. |
+| `GET /api/v1/links/{id}` | Returns one link with the same fields as a catalog search item. Requires a browser session or a key with the `read` scope. A link outside a key's host restriction returns `404`. Without the `analytics` scope, a key receives no traffic fields. |
 | `PATCH /api/v1/links/{id}` | Accepts any of `target`, `title`, `description`, `enabled`, `tags`, and `analytics_enabled`. A supplied tag list replaces the previous list. The published host and slug remain fixed. |
 | `DELETE /api/v1/links/{id}` | Deletes a link and returns `204`. |
 | `GET` and `POST /api/v1/keys` | Require a browser session. Listing returns key metadata. Creation accepts `name`, `scopes`, optional `host`, and optional `expires_at` in Unix seconds. The response contains `key` and the one-time `token`. |
@@ -57,6 +58,21 @@ Use `tags` for up to 20 exact tag names. The `tag_match` value is `all` by defau
 The `view` value is `all` by default. The browser uses `unarchived` for its main list. Use `archived` for the archive or `favorites` for unarchived favorites. Search items include the `favorite` and `archived` flags and a `selection_key`.
 
 Search items also report `recorded_redirects` from retained daily analytics, `last_redirect_date` as a UTC date, and `last_redirect_at` in Unix seconds if detail is available for that date. A link with no recorded redirects has a count of zero and null dates. Tracking preferences, retention, and deletion apply to these values.
+
+Each item also describes the link's live behavior and recent traffic:
+
+| Field | Meaning |
+|---|---|
+| `state` | `active`, `scheduled`, `expired`, `disabled`, or `exhausted`, using the same classification as the Overview. A disabled link or domain is `disabled`. A consumed one-time link or a reached visit limit is `exhausted`. Archiving is reported by `archived` and does not change the state. |
+| `starts_at`, `expires_at` | The policy window in Unix seconds, or null. |
+| `max_visits`, `visits_used` | The visit limit or null, and the visits counted against it (zero without a policy). |
+| `protection` | `password` when a password is set, even if access is also one-time, `one_time` for one-time access without a password, otherwise null. |
+| `rule_count` | Number of dynamic redirect rules. |
+| `visits_30d` | Successful redirects of every visitor class in the last 30 UTC days, including today. Null when analytics is off for the link or the installation. |
+| `trend` | 14 daily redirect counts for the last 14 UTC days, oldest first and ending today. Empty when analytics is off for the link or the installation. |
+| `monitor` | `status`, `priority`, `last_checked`, `http_status`, `elapsed_ms`, and `failure` from the last health check, or null when the link is not enrolled. |
+
+Each search page reads these values with a fixed number of indexed queries, independent of the number of items.
 
 `PATCH /api/v1/links/{id}/organization` accepts a browser administrator session, the `key` from the search item's `selection_key`, and one or both Boolean flags. The response returns both flags. A missing or replaced row returns `409`. Archived links continue to resolve according to their current redirect policy. A full SQLite backup preserves the organization flags.
 
@@ -105,9 +121,11 @@ The summary and report download accept a browser administrator session or an API
 
 A host-bound analytics key always reports on its own host. Omitting `host` selects that host, and naming another host returns `403`. Totals, the previous period, the daily series, rankings, and breakdowns all use the same restriction. The process-wide `dropped` count has no host and is `null` for a host-bound key.
 
+The summary and report download accept `link=<id>`. The link must exist within the report's host, which is the key's host restriction or the requested `host`. An unknown link, or one on another host, returns `404`. A per-link report includes the link's blocked requests, has no root path requests or missing paths, and keeps the process-wide `dropped` count.
+
 | Operation | Request and response |
 |---|---|
-| `GET /api/v1/analytics/summary?days=30` | Accepts 1 to 365 UTC days. Returns successful redirects, blocked links, missing links, root path requests with and without a root destination, visitor classes for redirects, the preceding period's redirect count, a daily series, up to ten top links, and a process-local dropped-events count. |
+| `GET /api/v1/analytics/summary?days=30` | Accepts 1 to 365 UTC days. Returns successful redirects, blocked links, missing links, root path requests with and without a root destination, visitor classes for redirects, the preceding period's redirect count, a daily series, up to ten top links, and a process-local dropped-events count. The optional `link` parameter restricts every part of the report to one link ID and is echoed as `link`. |
 | `GET` and `PATCH /api/v1/analytics/settings` | Reads or replaces the settings `enabled`, `referrers`, `classify`, `honor_dnt`, `detail_days`, and `aggregate_days`. Retention is between 1 and 3650 days. The aggregate period must cover at least the detail period. |
 | `GET /api/v1/analytics/events` | Lists up to 100 retained events newest first. Accepts the optional `before_id` cursor. Returns `items` and `next_before_id`. |
 | `DELETE /api/v1/analytics/events/{id}` | Deletes one retained event and adjusts its daily count atomically. Returns `204`. |
@@ -166,7 +184,7 @@ CSV uses the columns `version,host,slug,target,title,tags,enabled,analytics_enab
 
 ### Public redirect behavior
 
-An exact path takes precedence. When the exact path is missing, the longest stored prefix that allows extra paths can handle the request. Disabled or out-of-window links and exhausted visit limits return `404`. Unknown paths and the root path can use their configured domain fallback and otherwise return `404`. Analytics counts a GET for the root path as `root_fallback` or `root_missing` according to the response it received. Neither outcome changes the redirect, blocked, or missing totals, the visitor classes, or the rankings, which describe short-link paths. Disabled domains return `404` and remain editable on the admin listener.
+An exact path takes precedence. When the exact path is missing, the longest stored prefix that allows extra paths can handle the request. Disabled or out-of-window links and exhausted visit limits return `404`. Unknown paths and the root path can use their configured domain fallback and otherwise return `404`. Analytics counts a GET for the root path as `root_fallback` or `root_missing` according to the response it received. Neither outcome changes the redirect, blocked, or missing totals, the visitor classes, or the rankings, which describe short-link paths. Disabled domains return `404` and remain editable on the admin listener. A public `404` to GET or POST carries a small HTML page. An unknown path and an inactive link (disabled, outside its window, used up, or refused by policy) get the same page, so the response does not reveal whether a slug exists. Unknown and disabled hosts get a separate generic page. The missing-link page links to the domain root only while the root destination redirects. The page uses German when the first preferred `Accept-Language` tag is `de` and English otherwise, contains no scripts or external resources, and allows its one inline stylesheet through a `sha256` hash in its Content Security Policy. HEAD responses keep no body.
 
 A policy supports `301`, `302`, `307`, or `308`. Start and expiration are inclusive and exclusive respectively, expressed as UTC Unix seconds. Time windows and visit limits require a temporary status. Browsers or intermediaries can retain permanent redirects. A limited link increments its counter atomically for each successful GET while the limit is active. HEAD checks the same conditions without incrementing it and returns the same `Location`. A visit limit counts uses and is not access control. Use password or one-time protection to restrict access. Editing or pausing a limit preserves its counter.
 
@@ -212,6 +230,8 @@ The JSON API under `/api/v1` runs on the admin listener. Same-origin browser cli
 
 
 ## Reports and operations
+
+`GET /api/v1/overview` requires a browser session. Besides the lifecycle counts, active domains, recent links, and monitor counts, it returns `attention`: up to eight unarchived links with `id`, `host`, `slug`, `title`, `reason`, `expires_at`, `max_visits`, and `visits_used`. Each link appears once, with the first reason that applies. Links whose health check reports `unreachable` or `broken` come first with reason `unreachable`. Links that expire within the next 14 days follow with reason `expiring`, soonest first. Links that have used at least 80 percent of their visit limit come last with reason `limit`, highest share first.
 
 The authenticated analytics summary accepts `days` or a paired `start` and `end` using inclusive UTC dates. Add `host` to restrict the report to a configured public host. `GET /api/v1/analytics/export` downloads the matching versioned JSON report.
 

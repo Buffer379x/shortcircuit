@@ -13,7 +13,7 @@ use sqlx::SqlitePool;
 use crate::{
     analytics::{Analytics, Kind},
     auth::{Auth, AuthError},
-    confirmation::Action,
+    confirmation::{Action, Home, Notice, notice},
     destinations::Guard,
     domains,
     input::{PublicHosts, request_host, valid_slug},
@@ -137,6 +137,10 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
     }
     let (parts, body) = request.into_parts();
     let uri = &parts.uri;
+    let language = parts
+        .headers
+        .get(header::ACCEPT_LANGUAGE)
+        .and_then(|value| value.to_str().ok());
     if uri
         .path_and_query()
         .is_some_and(|value| value.as_str().len() > MAX_REQUEST_URI)
@@ -144,11 +148,23 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         return StatusCode::URI_TOO_LONG.into_response();
     }
     let Some(host) = request_host(uri, &parts.headers) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return notice(
+            &parts.method,
+            StatusCode::NOT_FOUND,
+            Notice::UnknownHost,
+            language,
+        );
     };
     let domain = match domains::lookup(&state.pool, &state.hosts, &host, state.public_port).await {
         Ok(Some(domain)) if domain.enabled => domain,
-        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => {
+            return notice(
+                &parts.method,
+                StatusCode::NOT_FOUND,
+                Notice::UnknownHost,
+                language,
+            );
+        }
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     if uri.path() == "/robots.txt" {
@@ -176,7 +192,12 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         };
     }
     let Some(slug) = uri.path().strip_prefix('/') else {
-        return StatusCode::NOT_FOUND.into_response();
+        return notice(
+            &parts.method,
+            StatusCode::NOT_FOUND,
+            Notice::Missing { home: None },
+            language,
+        );
     };
     if slug.is_empty() {
         if post {
@@ -186,7 +207,14 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         else {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         };
-        let response = fallback(&host, "/", root_target);
+        let response = fallback(&host, "/", root_target).unwrap_or_else(|| {
+            notice(
+                &parts.method,
+                StatusCode::NOT_FOUND,
+                Notice::Missing { home: None },
+                language,
+            )
+        });
         // Root requests use the same counting rule as unmatched slugs: GET only.
         if parts.method == Method::GET
             && !response.status().is_server_error()
@@ -207,7 +235,15 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         {
             analytics.record(&host, None, Kind::Missing, &parts.headers);
         }
-        return StatusCode::NOT_FOUND.into_response();
+        return missing(
+            &state,
+            &host,
+            &domain.origin,
+            domain.root_target.as_deref(),
+            &parts.method,
+            language,
+        )
+        .await;
     }
     let value = |name| {
         parts
@@ -262,7 +298,19 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
         }
     } else if post {
         return match result.outcome {
-            Outcome::Blocked => StatusCode::NOT_FOUND.into_response(),
+            // A blocked link answers exactly like a missing one, so visitors cannot tell that
+            // a disabled, scheduled, or used-up slug exists.
+            Outcome::Blocked => {
+                missing(
+                    &state,
+                    &host,
+                    &domain.origin,
+                    domain.root_target.as_deref(),
+                    &parts.method,
+                    language,
+                )
+                .await
+            }
             _ => method_not_allowed(),
         };
     }
@@ -274,9 +322,34 @@ async fn resolve(State(state): State<AppState>, request: Request) -> Response {
             else {
                 return StatusCode::SERVICE_UNAVAILABLE.into_response();
             };
-            (Kind::Missing, fallback(&host, uri.path(), missing_target))
+            let response = match fallback(&host, uri.path(), missing_target) {
+                Some(response) => response,
+                None => {
+                    missing(
+                        &state,
+                        &host,
+                        &domain.origin,
+                        domain.root_target.as_deref(),
+                        &parts.method,
+                        language,
+                    )
+                    .await
+                }
+            };
+            (Kind::Missing, response)
         }
-        Outcome::Blocked => (Kind::Blocked, StatusCode::NOT_FOUND.into_response()),
+        Outcome::Blocked => (
+            Kind::Blocked,
+            missing(
+                &state,
+                &host,
+                &domain.origin,
+                domain.root_target.as_deref(),
+                &parts.method,
+                language,
+            )
+            .await,
+        ),
         Outcome::Challenge(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     if response.status().is_redirection()
@@ -368,11 +441,46 @@ async fn permitted_fallback<'a>(
     Ok(policy.permits(target).then_some(target))
 }
 
-fn fallback(host: &str, path: &str, target: Option<&str>) -> Response {
+/// Redirects to a usable fallback, or returns `None` when the request ends with `404`.
+fn fallback(host: &str, path: &str, target: Option<&str>) -> Option<Response> {
     match target {
-        Some(target) if !domains::fallback_loops(host, path, target) => respond(target, 302),
-        _ => StatusCode::NOT_FOUND.into_response(),
+        Some(target) if !domains::fallback_loops(host, path, target) => Some(respond(target, 302)),
+        _ => None,
     }
+}
+
+/// The `404` page for an unmatched path. It links to the domain root only when the root path
+/// redirects to a permitted destination; a policy lookup error omits the link.
+async fn missing(
+    state: &AppState,
+    host: &str,
+    origin: &str,
+    root_target: Option<&str>,
+    method: &Method,
+    language: Option<&str>,
+) -> Response {
+    let home = if method == Method::HEAD {
+        None
+    } else {
+        permitted_fallback(state, root_target)
+            .await
+            .ok()
+            .flatten()
+            .filter(|target| !domains::fallback_loops(host, "/", target))
+            .and_then(|target| {
+                let label = url::Url::parse(target).ok()?.host_str()?.to_owned();
+                Some(Home {
+                    href: format!("{origin}/"),
+                    label,
+                })
+            })
+    };
+    notice(
+        method,
+        StatusCode::NOT_FOUND,
+        Notice::Missing { home },
+        language,
+    )
 }
 
 fn respond(target: &str, status: u16) -> Response {

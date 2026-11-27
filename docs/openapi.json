@@ -244,9 +244,19 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "The requested link is absent or outside the report's host.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
-        "description": "Supply days or both start and end. Inclusive UTC dates span at most 365 days and end by the current UTC date. Tag rankings use current link assignments. Bearer API keys require the analytics scope. A host-bound key reports only on its host: an omitted host uses the key's host and another host returns 403.",
+        "description": "Supply days or both start and end. Inclusive UTC dates span at most 365 days and end by the current UTC date. Tag rankings use current link assignments. Bearer API keys require the analytics scope. A host-bound key reports only on its host: an omitted host uses the key's host and another host returns 403. With link, every total, series, and ranking covers only that link; an unknown link or one outside the report's host returns 404.",
         "parameters": [
           {
             "in": "query",
@@ -279,6 +289,16 @@
             "name": "host",
             "schema": {
               "$ref": "#/components/schemas/CatalogHost"
+            }
+          },
+          {
+            "in": "query",
+            "name": "link",
+            "description": "Restricts the report to one link ID. The link must be visible within the report's host.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
             }
           }
         ]
@@ -439,6 +459,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "The requested link is absent or outside the report's host.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -474,9 +504,19 @@
             "schema": {
               "$ref": "#/components/schemas/CatalogHost"
             }
+          },
+          {
+            "in": "query",
+            "name": "link",
+            "description": "Restricts the report to one link ID. The link must be visible within the report's host.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
           }
         ],
-        "description": "Supply days or both start and end. Inclusive UTC dates span at most 365 days and end by the current UTC date. Tag rankings use current link assignments. Bearer API keys require the analytics scope. A host-bound key reports only on its host: an omitted host uses the key's host and another host returns 403."
+        "description": "Supply days or both start and end. Inclusive UTC dates span at most 365 days and end by the current UTC date. Tag rankings use current link assignments. Bearer API keys require the analytics scope. A host-bound key reports only on its host: an omitted host uses the key's host and another host returns 403. With link, every total, series, and ranking covers only that link; an unknown link or one outside the report's host returns 404."
       }
     },
     "/api/v1/audit": {
@@ -3509,7 +3549,7 @@
       "post": {
         "operationId": "searchLinkCatalog",
         "summary": "Search, filter, and sort all links",
-        "description": "Read-only, browser-session search. Reuse the response cursor with the same filters and sort. The cursor stores the sort key so paging can continue after the anchor is deleted. Search matches link descriptions and the result includes retained redirect counts.",
+        "description": "Read-only, browser-session search. Reuse the response cursor with the same filters and sort. The cursor stores the sort key so paging can continue after the anchor is deleted. Search matches link descriptions and the result includes retained redirect counts. Each item also reports its live state, policy limits, protection kind, rule count, 30-day redirects, a 14-day trend, and its last health check.",
         "tags": [
           "Links"
         ],
@@ -3650,6 +3690,77 @@
           }
         }
       ],
+      "get": {
+        "operationId": "readLink",
+        "summary": "Read one link with its live state",
+        "description": "Returns the same fields as a catalog search item. Bearer API keys require the read scope and honor any configured host restriction. Traffic fields also require the analytics scope and are omitted otherwise.",
+        "tags": [
+          "Links"
+        ],
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "browserSession": []
+          },
+          {
+            "localSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogLinkView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A browser session or a valid, unexpired API key is required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key lacks the read scope.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Link ID is invalid, absent, or outside the caller's visible hosts.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
       "patch": {
         "operationId": "updateLink",
         "summary": "Update link metadata and destination",
@@ -5662,7 +5773,7 @@
     "/api/v1/overview": {
       "get": {
         "summary": "Read the operational overview",
-        "description": "Includes current link lifecycle counts, links expiring within seven days, and up to five recent links.",
+        "description": "Includes current link lifecycle counts, links expiring within seven days, and up to five recent links. Lists up to eight unarchived links that need attention.",
         "tags": [
           "System"
         ],
@@ -5789,6 +5900,70 @@
                         "additionalProperties": false
                       }
                     },
+                    "attention": {
+                      "type": "array",
+                      "maxItems": 8,
+                      "description": "Unarchived links that need attention, each listed once. Destinations that health checks report as unreachable or broken come first, then links that expire within 14 days in order of expiry, then links that have used at least 80 percent of their visit limit, highest share first.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "format": "int64",
+                            "minimum": 1
+                          },
+                          "host": {
+                            "type": "string"
+                          },
+                          "slug": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "enum": [
+                              "unreachable",
+                              "expiring",
+                              "limit"
+                            ]
+                          },
+                          "expires_at": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "format": "int64",
+                            "minimum": 0
+                          },
+                          "max_visits": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "format": "int64",
+                            "minimum": 1
+                          },
+                          "visits_used": {
+                            "type": "integer",
+                            "format": "int64",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "host",
+                          "slug",
+                          "title",
+                          "reason",
+                          "expires_at",
+                          "max_visits",
+                          "visits_used"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "monitoring": {
                       "type": "object",
                       "properties": {
@@ -5839,6 +6014,7 @@
                     "links",
                     "active_domains",
                     "recent_links",
+                    "attention",
                     "monitoring"
                   ],
                   "additionalProperties": false
@@ -7858,6 +8034,15 @@
               "traffic_source"
             ],
             "additionalProperties": false
+          },
+          "link": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 1,
+            "description": "The link the report is restricted to, or null."
           }
         },
         "required": [
@@ -7873,7 +8058,8 @@
           "host",
           "top_domains",
           "top_tags",
-          "breakdowns"
+          "breakdowns",
+          "link"
         ],
         "additionalProperties": false
       },
@@ -9638,6 +9824,173 @@
             "format": "int64",
             "minimum": 0,
             "description": "Unix seconds when detail for the latest date is available."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "scheduled",
+              "expired",
+              "disabled",
+              "exhausted"
+            ],
+            "description": "Live redirect state from the enabled flag, the domain, the policy window, the visit limit, and one-time access. It uses the same classification as the Overview. Archiving is reported by `archived` and does not change this value."
+          },
+          "starts_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0,
+            "description": "Policy start in Unix seconds, inclusive."
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0,
+            "description": "Policy expiry in Unix seconds, exclusive."
+          },
+          "max_visits": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 1,
+            "description": "Visit limit of the redirect policy."
+          },
+          "visits_used": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Visits counted against the limit. Zero without a policy."
+          },
+          "protection": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "password",
+                  "one_time"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`password` when a password is set, even if access is also one-time; `one_time` for one-time access without a password; otherwise null."
+          },
+          "rule_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Number of dynamic redirect rules."
+          },
+          "visits_30d": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0,
+            "description": "Successful redirects of every visitor class in the last 30 UTC days, including today, from the retained daily analytics. Null when analytics is off for the link or the installation."
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Successful redirects per UTC day for the last 14 days, oldest first and ending today. Empty when analytics is off for the link or the installation.",
+            "anyOf": [
+              {
+                "minItems": 14,
+                "maxItems": 14
+              },
+              {
+                "maxItems": 0
+              }
+            ]
+          },
+          "monitor": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Last health check of an enrolled link, or null when the link is not enrolled.",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "not_checked",
+                  "healthy",
+                  "redirected",
+                  "warning",
+                  "unreachable",
+                  "broken",
+                  "unknown"
+                ]
+              },
+              "priority": {
+                "type": "boolean"
+              },
+              "last_checked": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 0
+              },
+              "http_status": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 1
+              },
+              "elapsed_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 0
+              },
+              "failure": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "blocked",
+                      "busy",
+                      "dns",
+                      "timeout",
+                      "connection",
+                      "protocol"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "priority",
+              "last_checked",
+              "http_status",
+              "elapsed_ms",
+              "failure"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -9656,7 +10009,17 @@
           "description",
           "recorded_redirects",
           "last_redirect_date",
-          "last_redirect_at"
+          "last_redirect_at",
+          "state",
+          "starts_at",
+          "expires_at",
+          "max_visits",
+          "visits_used",
+          "protection",
+          "rule_count",
+          "visits_30d",
+          "trend",
+          "monitor"
         ]
       },
       "CatalogSearchPage": {
@@ -10852,6 +11215,277 @@
             }
           }
         }
+      },
+      "CatalogLinkView": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "host": {
+            "$ref": "#/components/schemas/CatalogHost"
+          },
+          "slug": {
+            "$ref": "#/components/schemas/CatalogSlug"
+          },
+          "target": {
+            "$ref": "#/components/schemas/CatalogTarget"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 160,
+            "description": "Title with no control characters."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Nonempty tag up to 40 Unicode characters after trimming, with no commas or control characters."
+            },
+            "maxItems": 20
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "analytics_enabled": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "selection_key": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "description": "Opaque row identity for organization updates and explicit bulk selection."
+          },
+          "favorite": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "description": {
+            "$ref": "#/components/schemas/CatalogDescription"
+          },
+          "recorded_redirects": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Successful redirects in the retained daily analytics."
+          },
+          "last_redirect_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "UTC date of the latest retained successful redirect."
+          },
+          "last_redirect_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0,
+            "description": "Unix seconds when detail for the latest date is available."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "scheduled",
+              "expired",
+              "disabled",
+              "exhausted"
+            ],
+            "description": "Live redirect state from the enabled flag, the domain, the policy window, the visit limit, and one-time access. It uses the same classification as the Overview. Archiving is reported by `archived` and does not change this value."
+          },
+          "starts_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0,
+            "description": "Policy start in Unix seconds, inclusive."
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0,
+            "description": "Policy expiry in Unix seconds, exclusive."
+          },
+          "max_visits": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 1,
+            "description": "Visit limit of the redirect policy."
+          },
+          "visits_used": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Visits counted against the limit. Zero without a policy."
+          },
+          "protection": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "password",
+                  "one_time"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`password` when a password is set, even if access is also one-time; `one_time` for one-time access without a password; otherwise null."
+          },
+          "rule_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Number of dynamic redirect rules."
+          },
+          "visits_30d": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0,
+            "description": "Successful redirects of every visitor class in the last 30 UTC days, including today, from the retained daily analytics. Null when analytics is off for the link or the installation."
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Successful redirects per UTC day for the last 14 days, oldest first and ending today. Empty when analytics is off for the link or the installation.",
+            "anyOf": [
+              {
+                "minItems": 14,
+                "maxItems": 14
+              },
+              {
+                "maxItems": 0
+              }
+            ]
+          },
+          "monitor": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Last health check of an enrolled link, or null when the link is not enrolled.",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "not_checked",
+                  "healthy",
+                  "redirected",
+                  "warning",
+                  "unreachable",
+                  "broken",
+                  "unknown"
+                ]
+              },
+              "priority": {
+                "type": "boolean"
+              },
+              "last_checked": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 0
+              },
+              "http_status": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 1
+              },
+              "elapsed_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 0
+              },
+              "failure": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "blocked",
+                      "busy",
+                      "dns",
+                      "timeout",
+                      "connection",
+                      "protocol"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "priority",
+              "last_checked",
+              "http_status",
+              "elapsed_ms",
+              "failure"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "host",
+          "slug",
+          "target",
+          "title",
+          "tags",
+          "enabled",
+          "analytics_enabled",
+          "created_at",
+          "selection_key",
+          "favorite",
+          "archived",
+          "description",
+          "state",
+          "starts_at",
+          "expires_at",
+          "max_visits",
+          "visits_used",
+          "protection",
+          "rule_count",
+          "monitor"
+        ],
+        "description": "One catalog link with the fields of a search item. A bearer key without the analytics scope receives no recorded_redirects, last_redirect_date, last_redirect_at, visits_30d, or trend."
       }
     }
   }

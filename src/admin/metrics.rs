@@ -171,6 +171,7 @@ struct Period {
     start: Option<String>,
     end: Option<String>,
     host: Option<String>,
+    link: Option<i64>,
 }
 
 #[derive(Serialize, sqlx::FromRow, Default)]
@@ -233,6 +234,8 @@ struct Summary {
     start_day: i64,
     end_day: i64,
     host: Option<String>,
+    /// The link that the report is restricted to, if any.
+    link: Option<i64>,
     totals: Totals,
     previous_redirects: i64,
     daily: Vec<Day>,
@@ -352,7 +355,27 @@ async fn read_summary(
         return Err(invalid_period());
     }
 
-    let report = query_summary(&mut transaction, first, last, today, host, dropped)
+    if let Some(link) = period.link {
+        // Resolve the link within the report's host, so a host-bound key cannot probe other hosts.
+        let visible: Option<String> = if link > 0 {
+            sqlx::query_scalar("SELECT host FROM links WHERE id = ?")
+                .bind(link)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|_| Problem::unavailable())?
+        } else {
+            None
+        };
+        if visible.is_none_or(|found| host.as_deref().is_some_and(|host| host != found)) {
+            return Err(Problem(StatusCode::NOT_FOUND, "not_found"));
+        }
+    }
+
+    let filter = Filter {
+        host,
+        link: period.link,
+    };
+    let report = query_summary(&mut transaction, first, last, today, filter, dropped)
         .await
         .map_err(|_| Problem::unavailable())?;
     transaction
@@ -362,14 +385,21 @@ async fn read_summary(
     Ok(report)
 }
 
+/// Restricts every part of a summary to a host, a link, or both.
+struct Filter {
+    host: Option<String>,
+    link: Option<i64>,
+}
+
 async fn query_summary(
     connection: &mut SqliteConnection,
     first: i64,
     last: i64,
     today: i64,
-    host: Option<String>,
+    filter: Filter,
     dropped: Option<u64>,
 ) -> Result<Summary, sqlx::Error> {
+    let Filter { host, link } = filter;
     let days = (last - first + 1) as u16;
     let totals = sqlx::query_as(
         "SELECT COALESCE(SUM(total) FILTER (WHERE kind = 'redirect'), 0) AS redirect,
@@ -380,20 +410,24 @@ async fn query_summary(
                 COALESCE(SUM(total) FILTER (WHERE kind = 'redirect' AND visit_class = 'human'), 0) AS human,
                 COALESCE(SUM(total) FILTER (WHERE kind = 'redirect' AND visit_class = 'bot'), 0) AS bot,
                 COALESCE(SUM(total) FILTER (WHERE kind = 'redirect' AND visit_class = 'unknown'), 0) AS unknown
-         FROM analytics_daily WHERE day BETWEEN ?1 AND ?2 AND (?3 IS NULL OR host = ?3)",
+         FROM analytics_daily WHERE day BETWEEN ?1 AND ?2 AND (?3 IS NULL OR host = ?3)
+           AND (?4 IS NULL OR link_id = ?4)",
     )
     .bind(first)
     .bind(last)
     .bind(host.as_deref())
+    .bind(link)
     .fetch_one(&mut *connection)
     .await?;
     let previous_redirects = sqlx::query_scalar(
         "SELECT COALESCE(SUM(total), 0) FROM analytics_daily
-         WHERE day >= ?1 AND day < ?2 AND kind = 'redirect' AND (?3 IS NULL OR host = ?3)",
+         WHERE day >= ?1 AND day < ?2 AND kind = 'redirect' AND (?3 IS NULL OR host = ?3)
+           AND (?4 IS NULL OR link_id = ?4)",
     )
     .bind(first - i64::from(days))
     .bind(first)
     .bind(host.as_deref())
+    .bind(link)
     .fetch_one(&mut *connection)
     .await?;
     let daily = sqlx::query_as(
@@ -402,6 +436,7 @@ async fn query_summary(
          ), counts AS (
             SELECT day, SUM(total) AS total FROM analytics_daily
             WHERE day BETWEEN ?1 AND ?2 AND kind = 'redirect' AND (?3 IS NULL OR host = ?3)
+              AND (?4 IS NULL OR link_id = ?4)
             GROUP BY day
          )
          SELECT days.day, COALESCE(counts.total, 0) AS redirect
@@ -410,6 +445,7 @@ async fn query_summary(
     .bind(first)
     .bind(last)
     .bind(host.as_deref())
+    .bind(link)
     .fetch_all(&mut *connection)
     .await?;
     let top_links = sqlx::query_as(
@@ -417,7 +453,7 @@ async fn query_summary(
          FROM (
             SELECT link_id, SUM(total) AS total FROM analytics_daily
             WHERE day BETWEEN ?1 AND ?2 AND kind = 'redirect' AND link_id > 0
-              AND (?3 IS NULL OR host = ?3)
+              AND (?3 IS NULL OR host = ?3) AND (?4 IS NULL OR link_id = ?4)
             GROUP BY link_id ORDER BY total DESC, link_id ASC LIMIT 10
          ) AS counts
          JOIN links ON links.id = counts.link_id
@@ -426,23 +462,26 @@ async fn query_summary(
     .bind(first)
     .bind(last)
     .bind(host.as_deref())
+    .bind(link)
     .fetch_all(&mut *connection)
     .await?;
     let top_domains = sqlx::query_as(
         "SELECT host, SUM(total) AS total FROM analytics_daily
          WHERE day BETWEEN ?1 AND ?2 AND kind = 'redirect' AND (?3 IS NULL OR host = ?3)
+           AND (?4 IS NULL OR link_id = ?4)
          GROUP BY host ORDER BY total DESC, host ASC LIMIT 10",
     )
     .bind(first)
     .bind(last)
     .bind(host.as_deref())
+    .bind(link)
     .fetch_all(&mut *connection)
     .await?;
     let top_tags = sqlx::query_as(
         "WITH counts AS (
             SELECT link_id, SUM(total) AS total FROM analytics_daily
             WHERE day BETWEEN ?1 AND ?2 AND kind = 'redirect' AND link_id > 0
-              AND (?3 IS NULL OR host = ?3)
+              AND (?3 IS NULL OR host = ?3) AND (?4 IS NULL OR link_id = ?4)
             GROUP BY link_id
          )
          SELECT link_tags.tag, SUM(counts.total) AS total
@@ -452,16 +491,19 @@ async fn query_summary(
     .bind(first)
     .bind(last)
     .bind(host.as_deref())
+    .bind(link)
     .fetch_all(&mut *connection)
     .await?;
     let dimension_rows = sqlx::query_as::<_, (String, String, String, String, i64)>(
         "SELECT browser, os, device, traffic_source, SUM(total) AS total FROM analytics_daily
          WHERE day BETWEEN ?1 AND ?2 AND kind = 'redirect' AND (?3 IS NULL OR host = ?3)
+           AND (?4 IS NULL OR link_id = ?4)
          GROUP BY browser, os, device, traffic_source",
     )
     .bind(first)
     .bind(last)
     .bind(host.as_deref())
+    .bind(link)
     .fetch_all(&mut *connection)
     .await?;
 
@@ -490,6 +532,7 @@ async fn query_summary(
         start_day: first,
         end_day: last,
         host,
+        link,
         totals,
         previous_redirects,
         daily,

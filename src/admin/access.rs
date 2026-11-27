@@ -127,6 +127,8 @@ pub(super) struct BrowserToken(pub(super) String);
 pub(super) struct LinkAccess {
     pub(super) host: Option<String>,
     pub(super) actor: Actor,
+    /// Browser sessions and keys with the analytics scope may read link traffic.
+    pub(super) analytics: bool,
 }
 
 pub(super) async fn admin_host(
@@ -221,11 +223,11 @@ pub(super) async fn link_access(
     let cookie = session_token(request.headers(), &state.config)?;
     let bearer =
         single_header(request.headers(), header::AUTHORIZATION.as_str())?.map(str::to_owned);
-    let (host, actor) = match (cookie, bearer) {
+    let (host, actor, analytics) = match (cookie, bearer) {
         (Some(token), None) => {
             let session = state.auth.session(&token).await?;
             require_csrf(&request, &state.config, &session.csrf)?;
-            (None, Actor::Admin(session.username))
+            (None, Actor::Admin(session.username), true)
         }
         (None, Some(value)) => {
             let key = bearer_key(&state, &value).await?;
@@ -243,11 +245,16 @@ pub(super) async fn link_access(
             if !key.allows(scope) {
                 return Err(Problem(StatusCode::FORBIDDEN, "insufficient_scope"));
             }
-            (key.host, Actor::ApiKey(key.id))
+            let analytics = key.allows("analytics");
+            (key.host, Actor::ApiKey(key.id), analytics)
         }
         _ => return Err(Problem::unauthorized()),
     };
-    request.extensions_mut().insert(LinkAccess { host, actor });
+    request.extensions_mut().insert(LinkAccess {
+        host,
+        actor,
+        analytics,
+    });
     Ok(next.run(request).await)
 }
 

@@ -10,17 +10,11 @@ macro_rules! lifecycle_sql {
     ($columns:literal, $source:literal, $output:literal) => {
         concat!(
             $columns,
-            "CASE
-                WHEN l.archived = 1 THEN 'archived'
-                WHEN l.enabled = 0 OR l.host NOT IN (SELECT value FROM json_each(?2)) THEN 'disabled'
-                WHEN p.starts_at > ?1 THEN 'scheduled'
-                WHEN p.expires_at <= ?1 THEN 'expired'
-                WHEN protection.consumed = 1 OR p.visits_used >= p.max_visits THEN 'exhausted'
-                ELSE 'active'
-             END AS state ",
+            "CASE WHEN l.archived = 1 THEN 'archived' ELSE ",
+            crate::store::link_state_sql!(),
+            " END AS state ",
             $source,
-            " LEFT JOIN link_redirect_policies p ON p.link_id = l.id
-              LEFT JOIN link_protection protection ON protection.link_id = l.id ",
+            crate::store::link_state_joins!(),
             $output
         )
     };
@@ -49,6 +43,37 @@ const RECENT_LINKS: &str = lifecycle_sql!(
     "FROM recent l",
     "ORDER BY l.id DESC"
 );
+
+/// Days before expiry when an unarchived link needs attention.
+const EXPIRY_NOTICE_DAYS: i64 = 14;
+/// Most links that the overview lists as needing attention.
+const MAX_ATTENTION: i64 = 8;
+
+/// Unarchived links that need attention, at most one entry per link. Unreachable destinations
+/// come first, then links that expire within the notice period, then links that have used at
+/// least 80 percent of their visit limit. `?1` binds the current Unix time.
+const ATTENTION: &str = "WITH candidates AS (
+        SELECT l.id, l.host, l.slug, l.title, p.expires_at, p.max_visits,
+               COALESCE(p.visits_used, 0) AS visits_used,
+               CASE
+                   WHEN m.status IN ('unreachable', 'broken') THEN 0
+                   WHEN p.expires_at > ?1 AND p.expires_at <= ?1 + ?2 * 86400 THEN 1
+                   WHEN p.max_visits IS NOT NULL AND p.visits_used * 5 >= p.max_visits * 4 THEN 2
+               END AS rank
+        FROM links l
+        LEFT JOIN link_redirect_policies p ON p.link_id = l.id
+        LEFT JOIN link_monitor m ON m.link_id = l.id
+        WHERE l.archived = 0
+     )
+     SELECT id, host, slug, title,
+            CASE rank WHEN 0 THEN 'unreachable' WHEN 1 THEN 'expiring' ELSE 'limit' END AS reason,
+            expires_at, max_visits, visits_used
+     FROM candidates WHERE rank IS NOT NULL
+     ORDER BY rank,
+              CASE WHEN rank = 1 THEN expires_at END,
+              CASE WHEN rank = 2 THEN CAST(visits_used AS REAL) / max_visits END DESC,
+              id DESC
+     LIMIT ?3";
 
 #[derive(Clone)]
 struct MonitoringEnabled(bool);
@@ -82,6 +107,18 @@ struct RecentLink {
 }
 
 #[derive(Serialize, sqlx::FromRow)]
+struct AttentionLink {
+    id: i64,
+    host: String,
+    slug: String,
+    title: String,
+    reason: String,
+    expires_at: Option<i64>,
+    max_visits: Option<i64>,
+    visits_used: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
 struct MonitorCounts {
     enabled: bool,
     total: i64,
@@ -96,6 +133,7 @@ struct Overview {
     links: LinkCounts,
     active_domains: usize,
     recent_links: Vec<RecentLink>,
+    attention: Vec<AttentionLink>,
     monitoring: MonitorCounts,
 }
 
@@ -134,6 +172,13 @@ async fn read_overview(
         .fetch_all(&mut *transaction)
         .await?;
 
+    let attention = sqlx::query_as(ATTENTION)
+        .bind(now)
+        .bind(EXPIRY_NOTICE_DAYS)
+        .bind(MAX_ATTENTION)
+        .fetch_all(&mut *transaction)
+        .await?;
+
     let monitoring = sqlx::query_as(
         "SELECT ? AS enabled, count(*) AS total,
                 count(*) FILTER (WHERE status IN ('healthy', 'redirected')) AS healthy,
@@ -150,6 +195,7 @@ async fn read_overview(
         links,
         active_domains,
         recent_links,
+        attention,
         monitoring,
     })
 }

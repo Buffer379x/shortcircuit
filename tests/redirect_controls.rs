@@ -934,3 +934,225 @@ async fn tag_merge_and_qr_respect_existing_link_identity() {
     .await;
     assert_eq!(denied.status(), StatusCode::NOT_FOUND);
 }
+
+/// Asserts the shared contract of a public HTML page and returns its body.
+async fn public_page(response: Response, status: StatusCode) -> String {
+    assert_eq!(response.status(), status);
+    let headers = response.headers();
+    assert!(!headers.contains_key(header::LOCATION));
+    assert_eq!(headers[header::CONTENT_TYPE], "text/html; charset=utf-8");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY");
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    let policy = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+    assert!(policy.starts_with("default-src 'none'; style-src 'sha256-"));
+    assert!(policy.contains("base-uri 'none'") && policy.contains("frame-ancestors 'none'"));
+    assert!(!policy.contains("unsafe") && !policy.contains("script-src"));
+    let body = to_bytes(response.into_body(), 16_384).await.unwrap();
+    assert!(body.len() < 8_192, "{} bytes", body.len());
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    for request in [
+        "<script", " src=", "<link", "url(", "@import", "onload", "onerror",
+    ] {
+        assert!(!body.contains(request), "{request} in {body}");
+    }
+    assert_eq!(body.matches("<style>").count(), 1);
+    body
+}
+
+async fn visit_in(
+    app: &Fixture,
+    host: &str,
+    method: Method,
+    path: &str,
+    language: &str,
+) -> Response {
+    send(
+        &app.public,
+        method,
+        path,
+        &[("host", host), ("accept-language", language)],
+        None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn public_notices_explain_404s_in_the_visitor_language_and_keep_fallbacks() {
+    let app = Fixture::start().await;
+    let domain = "new.example";
+    let mut settings = json!({
+        "host":domain, "origin":"https://new.example", "enabled":true,
+        "root_target":"https://example.test/home", "missing_target":null
+    });
+    let set = app
+        .admin_request(
+            Method::POST,
+            "/api/v1/catalog/domains",
+            Some(settings.clone()),
+        )
+        .await;
+    assert_eq!(set.status(), StatusCode::OK);
+
+    // Unknown paths explain the miss and offer the domain root because it redirects.
+    let english = visit_in(&app, domain, Method::GET, "/not-here", "en-US,de;q=0.9").await;
+    let english = public_page(english, StatusCode::NOT_FOUND).await;
+    assert!(english.starts_with("<!doctype html><html lang=\"en\">"));
+    assert!(english.contains("<h1>This short link doesn’t exist</h1>"));
+    assert!(
+        english.contains("<a class=\"btn\" href=\"https://new.example/\">Go to example.test</a>")
+    );
+    assert!(!english.contains("example.test/home"));
+    let german = visit_in(&app, domain, Method::GET, "/not-here", "de-DE,en;q=0.5").await;
+    let german = public_page(german, StatusCode::NOT_FOUND).await;
+    assert!(german.starts_with("<!doctype html><html lang=\"de\">"));
+    assert!(german.contains("<h1>Diesen Kurzlink gibt es nicht</h1>"));
+    assert!(german.contains(">Weiter zu example.test</a>"));
+    let invalid = public_page(
+        app.visit(domain, Method::GET, "/not%20a%20slug").await,
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+    assert!(invalid.contains("href=\"https://new.example/\""));
+
+    // HEAD keeps the bare status without a body.
+    for path in ["/not-here", "/not%20a%20slug"] {
+        let head = app.visit(domain, Method::HEAD, path).await;
+        assert_eq!(head.status(), StatusCode::NOT_FOUND);
+        assert!(!head.headers().contains_key(header::CONTENT_TYPE));
+        assert!(to_bytes(head.into_body(), 1024).await.unwrap().is_empty());
+    }
+
+    // Fallbacks still redirect, and the root path never links to itself.
+    assert_eq!(
+        app.visit(domain, Method::GET, "/").await.headers()[header::LOCATION],
+        "https://example.test/home"
+    );
+    settings["missing_target"] = json!("https://example.test/help");
+    settings["root_target"] = json!(null);
+    assert_eq!(
+        app.admin_request(
+            Method::POST,
+            "/api/v1/catalog/domains",
+            Some(settings.clone())
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let fallback = app.visit(domain, Method::GET, "/not-here").await;
+    assert_eq!(fallback.status(), StatusCode::FOUND);
+    assert_eq!(
+        fallback.headers()[header::LOCATION],
+        "https://example.test/help"
+    );
+    assert!(
+        fallback
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .is_none()
+    );
+    let root = public_page(
+        app.visit(domain, Method::GET, "/").await,
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+    assert!(root.contains("<h1>This short link doesn’t exist</h1>") && !root.contains("<a "));
+
+    // Without a root destination the page offers no link.
+    let plain = public_page(
+        app.visit("go.example", Method::GET, "/not-here").await,
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+    assert!(!plain.contains("<a "));
+
+    // Unknown and disabled hosts get one generic page that does not echo the host.
+    for host in ["other.example", "unknown<b>.example"] {
+        let unknown = visit_in(&app, host, Method::GET, "/docs", "de").await;
+        let unknown = public_page(unknown, StatusCode::NOT_FOUND).await;
+        assert!(unknown.contains("<h1>Hier wird nichts bereitgestellt</h1>"));
+        assert!(!unknown.contains("other.example") && !unknown.contains("unknown-"));
+    }
+    settings["enabled"] = json!(false);
+    assert_eq!(
+        app.admin_request(Method::POST, "/api/v1/catalog/domains", Some(settings))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let disabled = public_page(
+        app.visit(domain, Method::GET, "/").await,
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+    assert!(disabled.contains("<h1>Nothing is served here</h1>"));
+    let head = app.visit("other.example", Method::HEAD, "/docs").await;
+    assert_eq!(head.status(), StatusCode::NOT_FOUND);
+    assert!(to_bytes(head.into_body(), 1024).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn confirmation_pages_follow_the_visitor_language_and_used_links_explain_themselves() {
+    let app = Fixture::start().await;
+    let create = app
+        .admin_request(
+            Method::POST,
+            "/api/v1/links",
+            Some(json!({"slug":"once","target":"https://example.test/once","protection":{"one_time":true}})),
+        )
+        .await;
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let id = app
+        .create("go.example", "secret", "https://example.test/secret", &[])
+        .await;
+    let protection = app
+        .admin_request(
+            Method::PATCH,
+            &format!("/api/v1/links/{id}/protection"),
+            Some(json!({"one_time":false,"password":"page-test-password"})),
+        )
+        .await;
+    assert_eq!(protection.status(), StatusCode::OK);
+
+    let once = visit_in(&app, "go.example", Method::GET, "/once?x='1'", "en").await;
+    assert_eq!(once.headers()[header::REFERRER_POLICY], "strict-origin");
+    let once = public_page(once, StatusCode::OK).await;
+    assert!(once.contains("<h1>Open this link once</h1>"));
+    assert!(once.contains("action=\"https://go.example/once?x=&#39;1&#39;\""));
+    assert!(once.contains(">Continue to the page</button>") && !once.contains("type=\"password\""));
+
+    let german = visit_in(&app, "go.example", Method::GET, "/secret", "de-AT").await;
+    let german = public_page(german, StatusCode::OK).await;
+    assert!(german.contains("<h1>Dieser Link ist geschützt</h1>"));
+    assert!(german.contains("<span class=\"mono\">go.example/secret</span> erhalten hast."));
+    assert!(german.contains("<label for=\"password\">Passwort</label>"));
+    assert!(!german.contains("aria-invalid=\"true\"") && !german.contains("example.test"));
+
+    let proof = confirmation(&app, "/secret").await;
+    let wrong = confirm(&app, "/secret", "https://go.example", &proof, "wrong").await;
+    let wrong = public_page(wrong, StatusCode::FORBIDDEN).await;
+    assert!(wrong.contains("aria-invalid=\"true\" aria-describedby=\"password-error\""));
+    assert!(wrong.contains("id=\"password-error\" role=\"alert\">"));
+    assert!(wrong.contains("That password is not correct. Try again.</p>"));
+
+    // A consumed one-time link and a used confirmation answer like a missing link, so the slug is not revealed.
+    let proof = confirmation(&app, "/once").await;
+    let used = confirm(&app, "/once", "https://go.example", &proof, "").await;
+    assert_eq!(used.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        used.headers()[header::LOCATION],
+        "https://example.test/once"
+    );
+    let again = confirm(&app, "/once", "https://go.example", &proof, "").await;
+    let again = public_page(again, StatusCode::NOT_FOUND).await;
+    assert!(again.contains("<h1>This short link doesn’t exist</h1>"));
+    let inactive = visit_in(&app, "go.example", Method::GET, "/once", "de").await;
+    let inactive = public_page(inactive, StatusCode::NOT_FOUND).await;
+    assert!(
+        inactive.contains("<h1>Diesen Kurzlink gibt es nicht</h1>") && !inactive.contains("<a ")
+    );
+    let head = app.visit("go.example", Method::HEAD, "/once").await;
+    assert_eq!(head.status(), StatusCode::NOT_FOUND);
+    assert!(to_bytes(head.into_body(), 1024).await.unwrap().is_empty());
+}
