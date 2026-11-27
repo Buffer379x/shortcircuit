@@ -74,18 +74,65 @@ pub(crate) enum Sort {
     TargetDesc,
     EnabledFirst,
     DisabledFirst,
+    VisitsDesc,
+    VisitsAsc,
+    LastVisitDesc,
+    LastVisitAsc,
+}
+
+/// Redirects of the link `l` in the visit window, or null when its traffic is not tracked.
+/// Matches `visits_30d`. Requires `search_context`.
+macro_rules! visits_sql {
+    () => {
+        "CASE WHEN l.analytics_enabled = 1 AND (SELECT tracking FROM search_context) = 1
+            THEN COALESCE((SELECT sum(d.total) FROM analytics_daily d
+                WHERE d.link_id = l.id AND d.kind = 'redirect'
+                  AND d.day BETWEEN (SELECT first_day FROM search_context)
+                                AND (SELECT last_day FROM search_context)), 0)
+         END"
+    };
+}
+
+/// Time of the last recorded redirect of the link `l` in Unix seconds, or null without one.
+/// Matches `last_redirect_at`, or the start of `last_redirect_date` once its detail is gone.
+macro_rules! last_visit_sql {
+    () => {
+        "(SELECT COALESCE((SELECT e.occurred_at FROM analytics_events e
+                WHERE e.link_id = l.id AND e.kind = 'redirect'
+                  AND e.occurred_at >= d.day * 86400 AND e.occurred_at < (d.day + 1) * 86400
+                ORDER BY e.occurred_at DESC LIMIT 1), d.day * 86400)
+          FROM analytics_daily d WHERE d.link_id = l.id AND d.kind = 'redirect'
+          ORDER BY d.day DESC LIMIT 1)"
+    };
 }
 
 impl Sort {
+    /// The ordered value. Text sorts compare without case; traffic sorts compare integers.
     fn expression(self) -> &'static str {
         match self {
-            Self::Newest | Self::Oldest => "created_at",
-            Self::TitleAsc | Self::TitleDesc => "title",
-            Self::SlugAsc | Self::SlugDesc => "slug",
-            Self::HostAsc | Self::HostDesc => "host",
-            Self::TargetAsc | Self::TargetDesc => "target",
-            Self::EnabledFirst | Self::DisabledFirst => "CAST(enabled AS TEXT)",
+            Self::Newest | Self::Oldest => "created_at COLLATE NOCASE",
+            Self::TitleAsc | Self::TitleDesc => "title COLLATE NOCASE",
+            Self::SlugAsc | Self::SlugDesc => "slug COLLATE NOCASE",
+            Self::HostAsc | Self::HostDesc => "host COLLATE NOCASE",
+            Self::TargetAsc | Self::TargetDesc => "target COLLATE NOCASE",
+            Self::EnabledFirst | Self::DisabledFirst => "CAST(enabled AS TEXT) COLLATE NOCASE",
+            Self::VisitsDesc => concat!("COALESCE(", visits_sql!(), ", -1)"),
+            Self::VisitsAsc => concat!("COALESCE(", visits_sql!(), ", 9223372036854775807)"),
+            Self::LastVisitDesc => concat!("COALESCE(", last_visit_sql!(), ", -1)"),
+            Self::LastVisitAsc => {
+                concat!("COALESCE(", last_visit_sql!(), ", 9223372036854775807)")
+            }
         }
+    }
+
+    /// Whether the sort reads analytics. Its cursor key is then a decimal integer. A link without
+    /// the value maps below every count or time when descending and above every one when
+    /// ascending, so it comes last either way.
+    pub(crate) fn traffic(self) -> bool {
+        matches!(
+            self,
+            Self::VisitsDesc | Self::VisitsAsc | Self::LastVisitDesc | Self::LastVisitAsc
+        )
     }
 
     fn descending(self) -> bool {
@@ -97,10 +144,13 @@ impl Sort {
                 | Self::HostDesc
                 | Self::TargetDesc
                 | Self::EnabledFirst
+                | Self::VisitsDesc
+                | Self::LastVisitDesc
         )
     }
 
-    fn key(self, link: &Link) -> String {
+    fn key(self, row: &SearchRow) -> String {
+        let link = &row.link;
         match self {
             Self::Newest | Self::Oldest => link.created_at.clone(),
             Self::TitleAsc | Self::TitleDesc => link.title.clone(),
@@ -108,6 +158,32 @@ impl Sort {
             Self::HostAsc | Self::HostDesc => link.host.clone(),
             Self::TargetAsc | Self::TargetDesc => link.target.clone(),
             Self::EnabledFirst | Self::DisabledFirst => u8::from(link.enabled).to_string(),
+            Self::VisitsDesc | Self::VisitsAsc | Self::LastVisitDesc | Self::LastVisitAsc => {
+                row.sort_value.unwrap_or_default().to_string()
+            }
+        }
+    }
+}
+
+/// Live lifecycle state that a search can require, as reported in the item `state`.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StateFilter {
+    Active,
+    Scheduled,
+    Expired,
+    Disabled,
+    Exhausted,
+}
+
+impl StateFilter {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Scheduled => "scheduled",
+            Self::Expired => "expired",
+            Self::Disabled => "disabled",
+            Self::Exhausted => "exhausted",
         }
     }
 }
@@ -118,6 +194,13 @@ pub(crate) struct Cursor {
     pub(crate) id: i64,
     pub(crate) key: String,
     pub(crate) sort: Sort,
+}
+
+impl Cursor {
+    /// The integer sort key of a traffic sort, or `None` if the key is not one.
+    pub(crate) fn traffic_key(&self) -> Option<i64> {
+        self.key.parse().ok()
+    }
 }
 
 #[derive(Deserialize)]
@@ -133,6 +216,7 @@ pub(crate) struct Search {
     #[serde(default)]
     view: View,
     pub(crate) enabled: Option<bool>,
+    state: Option<StateFilter>,
     #[serde(default)]
     pub(crate) sort: Sort,
     pub(crate) after: Option<Cursor>,
@@ -218,6 +302,8 @@ struct SearchRow {
     organization: Organization,
     selection_key: String,
     tags_json: String,
+    /// The traffic sort value, null for other sorts and single-link reads.
+    sort_value: Option<i64>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -239,11 +325,34 @@ struct DetailsRow {
     monitor_failure: Option<String>,
 }
 
-const SEARCH_COLUMNS: &str = "SELECT id, host, slug, target, created_at, title, description,
-        enabled, analytics_enabled, selection_key,
-        favorite, archived,
-        (SELECT json_group_array(tag ORDER BY tag) FROM link_tags WHERE link_id = links.id) AS tags_json
- FROM links WHERE 1";
+macro_rules! search_select {
+    () => {
+        "SELECT l.id, l.host, l.slug, l.target, l.created_at, l.title, l.description,
+        l.enabled, l.analytics_enabled, l.selection_key,
+        l.favorite, l.archived,
+        (SELECT json_group_array(tag ORDER BY tag) FROM link_tags WHERE link_id = l.id) AS tags_json"
+    };
+}
+
+const SEARCH_COLUMNS: &str = concat!(
+    search_select!(),
+    ", NULL AS sort_value FROM links l WHERE 1"
+);
+
+/// Values shared by one search statement, bound in order: the current Unix time, a JSON array
+/// of the active public hosts, the first and last UTC day of the visit window, and whether
+/// the installation records analytics.
+const SEARCH_CONTEXT: &str =
+    "WITH search_context(now, active_hosts, first_day, last_day, tracking) AS (SELECT ";
+
+const STATE_FILTER: &str = concat!(
+    " AND ",
+    crate::store::link_state_sql!(
+        "(SELECT now FROM search_context)",
+        "(SELECT active_hosts FROM search_context)"
+    ),
+    " = "
+);
 
 /// Live state for a bounded set of links in one statement. `?3` binds a JSON array of link IDs.
 const DETAILS: &str = concat!(
@@ -279,8 +388,43 @@ pub(crate) async fn search(
         .iter()
         .map(|domain| (domain.host.as_str(), domain.origin.as_str()))
         .collect();
-    let mut query = QueryBuilder::<Sqlite>::new(SEARCH_COLUMNS);
+    let sort = filter.sort;
+    // One read transaction keeps the page, its state, and its traffic consistent.
+    let mut transaction = pool.begin().await?;
+    let now: i64 = sqlx::query_scalar("SELECT unixepoch()")
+        .fetch_one(&mut *transaction)
+        .await?;
+    let today = now.div_euclid(86_400);
+    let mut query = QueryBuilder::<Sqlite>::new(SEARCH_CONTEXT);
+    query
+        .push_bind(now)
+        .push(", ")
+        .push_bind(serde_json::json!(active).to_string())
+        .push(", ")
+        .push_bind(today - VISIT_DAYS + 1)
+        .push(", ")
+        .push_bind(today)
+        .push(", COALESCE((SELECT enabled FROM analytics_settings WHERE id = 1), 0)) ");
+    // A traffic sort computes its value once per link in a subquery. Its LIMIT keeps SQLite
+    // from flattening the subquery, so the cursor condition and the order read the computed
+    // value instead of evaluating the correlated subqueries again.
+    let traffic = sort.traffic();
+    if traffic {
+        query.push("SELECT * FROM (");
+    }
+    query
+        .push(search_select!())
+        .push(", ")
+        .push(if traffic { sort.expression() } else { "NULL" })
+        .push(" AS sort_value FROM links l");
+    if filter.state.is_some() {
+        query.push(crate::store::link_state_joins!());
+    }
+    query.push(" WHERE 1");
     push_host_scope(&mut query, &hosts);
+    if let Some(state) = filter.state {
+        query.push(STATE_FILTER).push_bind(state.as_str());
+    }
     if let Some(host) = &filter.host {
         query.push(" AND host = ").push_bind(host);
     }
@@ -294,7 +438,7 @@ pub(crate) async fn search(
         View::Archived => " AND archived = 1",
     });
     if !filter.tags.is_empty() {
-        query.push(" AND (SELECT count(*) FROM link_tags WHERE link_id = links.id AND tag IN (");
+        query.push(" AND (SELECT count(*) FROM link_tags WHERE link_id = l.id AND tag IN (");
         let mut tags = query.separated(", ");
         for tag in &filter.tags {
             tags.push_bind(tag);
@@ -305,33 +449,44 @@ pub(crate) async fn search(
             TagMatch::Any => query.push(" > 0"),
         };
     }
-    let sort = filter.sort;
+    let (value, id) = if traffic {
+        query.push(" LIMIT -1) WHERE 1");
+        ("sort_value", "id")
+    } else {
+        (sort.expression(), "l.id")
+    };
     let comparison = if sort.descending() { " < " } else { " > " };
     let direction = if sort.descending() { " DESC" } else { " ASC" };
     if let Some(after) = &filter.after {
         query
             .push(" AND (")
-            .push(sort.expression())
-            .push(" COLLATE NOCASE, id)")
-            .push(comparison)
-            .push("(")
-            .push_bind(&after.key)
+            .push(value)
             .push(", ")
-            .push_bind(after.id)
-            .push(")");
+            .push(id)
+            .push(")")
+            .push(comparison)
+            .push("(");
+        if traffic {
+            // The handler rejects other keys; refuse defensively instead of guessing.
+            let key = after
+                .traffic_key()
+                .ok_or_else(|| sqlx::Error::Protocol("invalid traffic cursor".into()))?;
+            query.push_bind(key);
+        } else {
+            query.push_bind(&after.key);
+        }
+        query.push(", ").push_bind(after.id).push(")");
     }
     query
         .push(" ORDER BY ")
-        .push(sort.expression())
-        .push(" COLLATE NOCASE")
+        .push(value)
         .push(direction)
-        .push(", id")
+        .push(", ")
+        .push(id)
         .push(direction);
     if filter.query.is_none() {
         query.push(" LIMIT ").push_bind((PAGE_SIZE + 1) as i64);
     }
-    // One read transaction keeps the page, its state, and its traffic consistent.
-    let mut transaction = pool.begin().await?;
     let mut rows = query.build_query_as::<SearchRow>().fetch(&mut *transaction);
     let mut page = Vec::with_capacity(PAGE_SIZE + 1);
     while let Some(row) = rows.try_next().await? {
@@ -351,13 +506,13 @@ pub(crate) async fn search(
     drop(rows);
     let has_more = page.len() > PAGE_SIZE;
     page.truncate(PAGE_SIZE);
-    let items = complete(&mut transaction, page, &active, true).await?;
-    transaction.commit().await?;
-    let next_cursor = items.last().filter(|_| has_more).map(|link| Cursor {
-        id: link.link.id,
-        key: sort.key(&link.link),
+    let next_cursor = page.last().filter(|_| has_more).map(|row| Cursor {
+        id: row.link.id,
+        key: sort.key(row),
         sort,
     });
+    let items = complete(&mut transaction, page, &active, true, now).await?;
+    transaction.commit().await?;
     Ok(SearchPage { items, next_cursor })
 }
 
@@ -374,6 +529,9 @@ pub(crate) async fn find(
     query.push(" AND id = ").push_bind(id);
     push_host_scope(&mut query, hosts);
     let mut transaction = pool.begin().await?;
+    let now: i64 = sqlx::query_scalar("SELECT unixepoch()")
+        .fetch_one(&mut *transaction)
+        .await?;
     let row = query
         .build_query_as::<SearchRow>()
         .fetch_optional(&mut *transaction)
@@ -381,7 +539,14 @@ pub(crate) async fn find(
     let Some(row) = row else {
         return Ok(None);
     };
-    let items = complete(&mut transaction, vec![decode_tags(row)?], active, traffic).await?;
+    let items = complete(
+        &mut transaction,
+        vec![decode_tags(row)?],
+        active,
+        traffic,
+        now,
+    )
+    .await?;
     transaction.commit().await?;
     Ok(items.into_iter().next())
 }
@@ -393,21 +558,20 @@ fn decode_tags(mut row: SearchRow) -> Result<SearchRow, sqlx::Error> {
 }
 
 /// Adds live state and, if requested, traffic to a page of at most `PAGE_SIZE` rows. Each
-/// part is one bounded query for the whole page.
+/// part is one bounded query for the whole page. `now` is the Unix time the caller's read
+/// transaction classifies with.
 async fn complete(
     connection: &mut SqliteConnection,
     rows: Vec<SearchRow>,
     active: &[String],
     traffic: bool,
+    now: i64,
 ) -> Result<Vec<CatalogLink>, sqlx::Error> {
     if rows.is_empty() {
         return Ok(Vec::new());
     }
     let ids: Vec<i64> = rows.iter().map(|row| row.link.id).collect();
     let ids_json = serde_json::json!(ids).to_string();
-    let now: i64 = sqlx::query_scalar("SELECT unixepoch()")
-        .fetch_one(&mut *connection)
-        .await?;
     let mut details: HashMap<i64, DetailsRow> = sqlx::query_as::<_, DetailsRow>(DETAILS)
         .bind(now)
         .bind(serde_json::json!(active).to_string())

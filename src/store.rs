@@ -20,18 +20,31 @@ use crate::{
 
 /// Live lifecycle state of the link `l`, as the public listener would treat it now.
 ///
-/// Requires the joins from `link_state_joins`. `?1` binds the current Unix time and `?2` a
-/// JSON array of the active public hosts. Archiving does not change this state; callers that
-/// report archived links as a separate state test `l.archived` first.
+/// Requires the joins from `link_state_joins`. Without arguments, `?1` binds the current Unix
+/// time and `?2` a JSON array of the active public hosts. Two SQL expression literals replace
+/// those parameters, for statements that bind their parameters in order. Archiving does not
+/// change this state; callers that report archived links as a separate state test `l.archived`
+/// first.
 macro_rules! link_state_sql {
     () => {
-        "CASE
-            WHEN l.enabled = 0 OR l.host NOT IN (SELECT value FROM json_each(?2)) THEN 'disabled'
-            WHEN p.starts_at > ?1 THEN 'scheduled'
-            WHEN p.expires_at <= ?1 THEN 'expired'
+        crate::store::link_state_sql!("?1", "?2")
+    };
+    ($now:literal, $hosts:literal) => {
+        concat!(
+            "CASE
+            WHEN l.enabled = 0 OR l.host NOT IN (SELECT value FROM json_each(",
+            $hosts,
+            ")) THEN 'disabled'
+            WHEN p.starts_at > ",
+            $now,
+            " THEN 'scheduled'
+            WHEN p.expires_at <= ",
+            $now,
+            " THEN 'expired'
             WHEN protection.consumed = 1 OR p.visits_used >= p.max_visits THEN 'exhausted'
             ELSE 'active'
          END"
+        )
     };
 }
 
