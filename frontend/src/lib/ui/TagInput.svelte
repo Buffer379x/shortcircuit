@@ -120,12 +120,14 @@
   input::placeholder {
     color: var(--text-muted);
   }
+  /* The suggestions follow typing, so they appear without the popover entrance animation. */
   .tag-list {
     position: absolute;
     top: calc(100% + 6px);
     left: 0;
     right: 0;
     max-width: none;
+    animation: none;
   }
   .sw {
     width: 8px;
