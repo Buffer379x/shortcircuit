@@ -153,7 +153,7 @@ jobs += [
     ["app-icon.svg", "pwa-192.png", 192, 192, True],
     ["app-icon.svg", "pwa-512.png", 512, 512, True],
     ["app-icon-maskable.svg", "pwa-maskable-512.png", 512, 512, False],
-    ["app-icon.svg", "unraid-docker.png", 512, 512, True],
+    ["app-icon.svg", "unraid-docker.png", 256, 256, True],
     ["mark-dark.svg", "mark-dark-512.png", 512, 512, True],
     ["mark-light.svg", "mark-light-512.png", 512, 512, True],
     ["logo-horizontal-dark.svg", "logo-horizontal-dark.png", 1200, 0, True],

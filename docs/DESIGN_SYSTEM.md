@@ -1,65 +1,170 @@
-# Design system
+# Design system: Polar Signal
 
-The local preview uses sample data and runs without cloud services. Routes are `#overview`, `#links`, `#link/1`, `#analytics`, `#qr`, `#health`, `#domains`, `#settings`, and `#login`. The dashboard and link list both open the Create Link dialog. The theme switch is in the top right. Settings offers English, German, and a system theme. On small screens, navigation opens in a side panel. The interface and sign-in use functional copy. [Design preview](../prototype/index.html)
+Polar Signal is the visual system of the ShortCircuit admin interface and its public pages. The interface is near-monochrome and dark first. Pink is a signal: it marks your action and your current place. Every page is built from the same tokens and components. If a component is missing here, read the [UI guidelines](UI_GUIDELINES.md) before adding one. [Branding](BRANDING.md)
 
-## Color, typography, and layout
-
-Graphite backgrounds and neutral borders structure tables and controls. Electric lime marks primary actions, active navigation, and the current time series. Statuses and errors also use text and icons, and some chart series use distinct line patterns. Numbers use tabular figures. Slugs and hostnames use monospace. The preview uses system fonts.
-
-| Role | Dark | Light |
-|---|---|---|
-| Page background | `#101517` | `#f3f5ee` |
-| Surface | `#192124` | `#fdfefb` |
-| Raised surface | `#212b2e` | `#eef1e8` |
-| Border / controls | `#303b3e` / `#59696c` | `#d8e0d5` / `#808f82` |
-| Primary / secondary text | `#f3f6f2` / `#a3b0ab` | `#192320` / `#43564d` |
-| Primary action background / text | `#d3fc51` / `#18220b` | `#d3fc51` / `#18220b` |
-| Accent text on a surface | `#d3fc51` | `#314b00` |
-| Success / warning / error / info | `#75dca6` / `#f5bf67` / `#ff8989` / `#9cbaff` | `#146140` / `#754900` / `#a02b35` / `#284fa1` |
-
-Calculated token contrasts include **14.0:1** for dark text on lime. In dark and light themes respectively, secondary text on the surface measures **7.28:1 / 7.75:1**, muted text measures **5.57:1 / 6.01:1**, and accent text measures **13.87:1 / 9.71:1**. Verify WCAG 2.2 AA in the production interface, including interaction states, control contrast, keyboard operation, and screen reader behavior. [WCAG 2.2](https://www.w3.org/TR/WCAG22/)
-
-The layout uses a 4 px grid. Spacing tokens are 4, 8, 12, 16, 20, 24, and 32 px. Corner radii are 5, 8, and 12 px. The preview's primary controls are 38–39 px high. The product target for touch controls is 44 px, with any exceptions in dense tables subject to review. Icons are 17 px, body text is 14 px, and page headings range from 28 to 40 px. Navigation switches at 920 px and complex views become more compact at 690 px. Tables scroll within their own containers. Primary row actions remain accessible at narrow widths. [Design tokens](../prototype/tokens.css)
-
-## Components and workflows
-
-- Share navigation, page headers, buttons, status badges, fields, and table components across views. Show validation and errors next to the relevant field. Give icon buttons accessible names.
-- The dashboard preview shows a time range, key metrics, a main chart, destination health, and recent links. The links view demonstrates search, status and domain filters, sorting, selection, and a sample JSON export.
-- The Create Link dialog accepts a destination, optional slug, and tags. An expandable section holds additional settings. The preview displays duplicate slug errors, saves changes locally, and opens the link details with a copy action. Permanent redirects carry a cache warning.
-- QR Studio previews scannable codes for six sample addresses. The controls cover error correction, quiet zone, color, transparency, and SVG and PNG downloads. The color warning compares luminance. Verify the product exports for contrast and scanability with an independent decoder.
-- Health shows sample probe results and labels simulated actions. Domains demonstrates creating and editing a domain. Settings groups appearance, language, privacy, and operations.
-- Sign-in demonstrates local form states. The product implementation covers first-run setup, authentication, API integration, redirects, live health intervals, QR generation for arbitrary URLs, full settings, and integration jobs.
-- Product components need visible focus, loading and empty states, inline validation, and confirmation for irreversible actions. Keep English and German UI strings in a shared typed Svelte catalog. Store timestamps in UTC and format dates and numbers for the selected locale.
-
-## Branding
-
-| Concept | Description |
+| Source | Purpose |
 |---|---|
-| Circuit with lightning bolt | Preferred design. Two open circuit traces frame the bolt, and its solid silhouette stays legible at small sizes. |
-| Branch | A node with branches represents rules and destination domains. [Branch concept](../assets/branding/concept-branch.svg) |
-| Jump | A simplified arrow represents a redirect. [Jump concept](../assets/branding/concept-jump.svg) |
+| `frontend/src/styles/tokens.css` | Every color, type, size, radius, layer, and motion token. The only file that may contain color literals. |
+| `frontend/src/styles/base.css` | Reset, document type, focus ring, scrollbars, reduced motion. |
+| `frontend/src/styles/ui.css` | Every shared component, defined once. |
+| `frontend/src/styles/shell.css` | Application frame and shared page layouts. |
+| `frontend/src/lib/` | Svelte components and helpers: icons, menus, dialogs, drawer, badges, tags, charts, status mapping, routing, toasts, catalog access. |
+| `frontend/tools/lint-design.py` | Fails on color literals outside tokens, on literal font sizes, radii, or z-indexes, and on pages that restyle shared component classes. Runs with `npm run check`, together with `tools/contrast.py` and `tests/i18n_catalog.py`. |
 
-[Dark logo](../assets/branding/logo-dark.svg) · [Light logo](../assets/branding/logo-light.svg) · [Wordmark](../assets/branding/wordmark-dark.svg) · [App icon](../assets/branding/app-icon.svg) · [Favicon](../assets/branding/favicon.svg) · [192 px PWA icon](../assets/branding/pwa-192.png) · [512 px PWA icon](../assets/branding/pwa-512.png) · [Unraid icon](../assets/branding/unraid-docker.png)
+## Color
 
-Additional transparent PNG and SVG variants are in `assets/branding/`. The wordmark uses DejaVu Sans outlines. The preview uses local path icons, and the product is expected to use selected Lucide icons after license review. The demo QR fixtures were generated offline with the MIT-licensed generator identified in the fixture file. [DejaVu license](https://dejavu-fonts.github.io/License.html) · [QR Code Generator](https://github.com/kazuhikoarase/qrcode-generator)
+Semantic tokens only. Components never use raw values. Both themes define the same tokens with their own values. The light theme is a separate palette, not an inversion.
 
-The preview follows the written design brief. Review against the graphics in the separate ShortCircuit chat is pending.
+| Role | Token | Dark | Light |
+|---|---|---|---|
+| Page background | `--bg` | `#101115` | `#F5F5F8` |
+| Sidebar | `--bg-sidebar` | `#13151A` | `#EEEEF3` |
+| Panel, table | `--surface` | `#1C1E24` | `#FFFFFF` |
+| Dialog, menu | `--surface-raised` | `#242731` | `#FFFFFF` |
+| Hover | `--surface-hover` | `#292D36` | `#F0EFF5` |
+| Divider | `--border` / `--border-subtle` | `#333640` / `#272A32` | `#DADBE3` / `#E7E7EE` |
+| Field border | `--border-control` | `#727788` | `#858998` |
+| Text | `--text` / `--text-secondary` / `--text-muted` / `--text-disabled` | `#F6F6FA` / `#C3C5CF` / `#969AA9` / `#686C7B` | `#20222A` / `#484C59` / `#666A79` / `#9A9DAA` |
+| Brand and primary action | `--accent` / `-hover` / `-active` / `-soft` | `#FF79C6` / `#FF94D2` / `#E963AF` / `#302333` | `#B52B7C` / `#9F226B` / `#8A1D5D` / `#FBEAF4` |
+| Text on accent | `--on-accent` | `#101115` | `#FFFFFF` |
+| Success / warning / error / info | `--success` … `--info` | `#43D19E` / `#F3BB63` / `#FF6B61` / `#85A9F5` | `#157254` / `#95610F` / `#C2372B` / `#365FC7` |
 
-## Design renders and browser verification
+- **Contrast.** Every text pair meets WCAG 2.2 AA (4.5:1). Field borders and focus meet 3:1. `frontend/tools/contrast.py` checks every pair from `tokens.css` and runs with `npm run check`. Notable pairs:
+  - Dark text on pink: 7.91:1.
+  - Pink on the dark surface: 6.98:1.
+  - Muted text: 5.94:1 dark, 5.38:1 light.
+- **Error versus brand.** Error is shifted to hue 4–5°, away from the pink at 325°, and always comes with an icon and text.
+- **Use pink for:**
+  - The single primary action of a view.
+  - The active navigation icon and the selected tab.
+  - Focus.
+  - Selected filters (as the soft tint).
+  - The primary chart series.
+  - Progress toward a limit.
+  - Links.
+- **Do not use pink for:** tags, counts, sparklines, rankings, status, or decoration.
+- **Charts.**
+  - Series `--chart-1` (pink, primary) to `--chart-6` (slate).
+  - The comparison period is `--chart-previous`, dashed.
+  - Rankings use slate.
+  - Grid and axes use `--chart-grid` and `--chart-axis`.
+- **Tags** use a palette without pink.
+- **QR codes** stay dark on white in both themes (`--qr-fg`, `--qr-bg`).
 
-| View | Render |
+## Typography
+
+- **Families.**
+  - Geist for interface text.
+  - Geist Mono for hosts, slugs, URLs, tokens, and code.
+  - Both are variable, local, and licensed under the SIL Open Font License (`frontend/src/fonts/OFL-Geist.txt`), so no external font service is used.
+  - Mono is for link data, never for labels.
+- **Scale.**
+
+  | Size | Use |
+  |---|---|
+  | 11 px | Axes and counters |
+  | 12 px | Metadata |
+  | 13 px | Tables and secondary text |
+  | 14 px | Body |
+  | 16 px | Section titles |
+  | 20 px | Dialog and hero titles |
+  | 24 px | Page titles |
+  | 30 px | Key figures |
+
+  Line heights are in `tokens.css`.
+- **Weights.** 400, 500 (labels and buttons), and 600 (titles, figures, primary buttons).
+- **Figures** use tabular numbers (`.num`) and are right-aligned in tables.
+- **Case.** Sentence case everywhere. No uppercase labels.
+
+## Space, size, radius, elevation
+
+- **Spacing.** A 4 px grid: `--space-1` (4) to `--space-12` (48). Page sections are 24 px apart, panel padding is 20 px, and fields are 16–20 px apart.
+- **Controls.** 28 px (small), 32 px (default), and 40 px (large, only for sign-in and inline shortening). On `pointer: coarse` they grow to 36/44/48 px.
+- **Radius by role.**
+
+  | Size | Use |
+  |---|---|
+  | 2 px | Marks |
+  | 4 px | Badges, chips, checkboxes |
+  | 6 px | Buttons, inputs, menu items |
+  | 8 px | Menus, notices, tooltips |
+  | 12 px | Panels, dialogs, drawers |
+
+- **Elevation.** Panels sit on the page through surface steps and a subtle border. Shadows are only for floating layers: `--shadow-popover` and `--shadow-dialog`.
+- **Layers.** `--z-sticky` 10 < nav 20 < dropdown 40 < drawer 50 < dialog 60 < toast 70 < tooltip 80.
+- **Motion.** 120 ms for hover, 180 ms for menus, dialogs, and toasts, 260 ms for the drawer. `prefers-reduced-motion` turns all of it off.
+- **Breakpoints.**
+
+  | Width | Change |
+  |---|---|
+  | 640 px | Phone: dialogs become bottom sheets, panel heads wrap |
+  | 900 px | The sidebar becomes a drawer |
+  | 1100 px | Search becomes an icon |
+  | 1200 px | Two-column layouts stack |
+
+  Tables use container queries instead of breakpoints.
+
+## Layout
+
+- **Shell.**
+  - A 236 px sidebar, collapsible to a 60 px rail. Below 900 px it becomes a modal drawer, and the page behind it is inert.
+  - The sidebar groups navigation into the main tasks, Configuration, and System.
+  - It shows counts and the instance state.
+  - A 56 px top bar holds a breadcrumb on deeper views, search (Ctrl/Cmd+K), the theme menu, and New link (shortcut N).
+  - Content is at most 1,480 px wide.
+- **Page anatomy.**
+  1. A page header with the title, a one-line description, and right-aligned page actions.
+  2. Optional tabs.
+  3. Panels, each with a 52 px head that holds a title, an optional hint, and the panel's own actions.
+- **Grids.**
+  - `grid-main-side`: a main column plus a 300–380 px side column.
+  - `grid-2`.
+  - Key-figure strips are one panel divided by hairlines, not separate cards.
+- **Detail pages** use a hero panel (badges, title, short link, destination, actions), then tabs. The tab state is kept in the URL.
+
+## Components
+
+The table lists every shared component in `ui.css` or `lib/`. Pages compose them and add only layout.
+
+| Component | Rules |
 |---|---|
-| Desktop, dark, 1440 × 900 | [Dashboard](../assets/design-renders/desktop-overview-dark.png) |
-| Desktop, light, 1440 × 900 | [Dashboard](../assets/design-renders/desktop-overview-light.png) |
-| Mobile, dark, 390 × 844 | [Dashboard](../assets/design-renders/mobile-overview.png) · [Create Link](../assets/design-renders/mobile-create-link.png) |
+| Button `.btn` | Variants: `primary`, `secondary` (default), `outline`, `ghost`, `danger`, `danger-quiet`, `link`. `data-icon-only` for square icon buttons, which need `aria-label` and `use:tip`. `aria-busy` shows the spinner and keeps the width. Disabled uses its own neutral style. One primary per view; destructive actions confirm. |
+| Field | `.field` > `.field-label` + control + `.field-hint` or `.field-error`. The error has an icon, is linked through `aria-describedby`, and the control gets `aria-invalid`. |
+| Inputs | `.input`, `.select`, `.textarea`. `.input-group` for a fixed host prefix plus a slug. `.search` with an icon and a key hint. Native options follow the theme. |
+| Selection | `.checkbox`, `.radio`, `.switch` (applies immediately) inside `.check`. `.choice` cards for options with a description. `.seg` for exclusive modes. `.chip` for filters. |
+| Status | `Badge` with the central mapping in `lib/status.ts`: every state has a tone, an icon, and text. Normal states (Active, Reachable) render quietly. `HealthIcon` for dense tables. |
+| Tag | `TagChip`, `TagInput` (a combobox with suggestions and create). |
+| Short link | `ShortUrl`: the mono host truncates first, and `/slug` stays whole. `CopyButton` confirms in place and with a toast. |
+| Panel | `.panel`, `.panel-head` / `.panel-title` / `.panel-body` / `.panel-foot`. `.setting` rows for settings. `.facts` for key and value lists. |
+| Table | `.table` in `.table-wrap`. Rows are 52 px, or 40 px compact. Sticky header. `.th-sort` with `aria-sort`. Numbers right-aligned. One opener plus a `Menu` per row, with destructive items last. Container-query tiers hide columns, then turn rows into cards. |
+| Tabs | `.tabs` / `.tab` with `role="tab"` and arrow keys, or `aria-current` for route tabs. A fade shows where they overflow. |
+| Menu | `Menu`: arrow keys, Home, End, Escape back to the trigger, stays inside the viewport. `menuitemradio` and `menuitemcheckbox` for choices. |
+| Dialog | `Dialog`, a native `<dialog>`: the body scrolls while the head and foot stay visible, focus goes to the first field, and it becomes a bottom sheet on phones. `Drawer` for editing next to a list. |
+| Feedback | Toasts (`toast()`) for results: at most 4, 4.5 s, or 9 s for errors, in polite and alert regions. `.notice` in five tones for lasting conditions. `Empty` with a next action. `.skeleton`, `.spinner`. |
+| Charts | `TimeChart` (pointer and arrow-key crosshair, comparison series, a hidden data table), `BarList` (label, bar, value, share), `Donut` (at most 5 parts, with a legend that repeats the numbers), `Columns`, `Sparkline` (slate). |
+| Icons | `Icon` with 96 Lucide icons (ISC), 24-unit grid, stroke 1.75, 16 px by default (14 small, 20 large). Each icon has one meaning. Regenerate the set with `frontend/tools/icons.py`. |
+| Command palette | Searches links, pages, and actions. A pasted URL offers to shorten it. |
 
-The PNG renders use the preview's design tokens and sample data. Browser verification is pending. Chromium failed to start in the development sandbox, and the available WebKit build lacked system libraries. The capture script records 13 Chromium screenshots and checks seven viewport sizes for horizontal page overflow. Final design approval is pending. [Capture script](../prototype/capture.cjs) · [Capture instructions](../README.md)
+## States and copy
 
-## Admin interface conventions after preview.2
+- **Every list** has a loading state, an empty state with an action, a no-results state with "Clear filters", and an error with "Try again".
+- **Every action** reports its outcome: a toast for results, an inline error next to the field, and a notice for lasting conditions.
+- **Copy.** Functional and specific, in sentence case. A button names its result ("Create link", "Save rules"), and the toast repeats it ("Link created"). Errors say what happened and how to fix it.
+- **Strings** live in the central catalog: `frontend/src/i18n.ts` merges `i18n/*.ts`, in English and German. No string is written into a component.
 
-- Every page has a hash route: `#overview`, `#links`, `#analytics`, `#monitoring`, `#domains`, `#tags`, `#exchange`, `#apiKeys`, `#account`, `#operations`, and `#auditLog`. Reload, Back, and bookmarks keep the page.
-- Below 760 px, navigation collapses behind a **Menu** button that reports its state with `aria-expanded` and closes on navigation or Escape.
-- Field borders (`--control`) measure at least 3:1 against `--bg`, `--surface`, and `--raised`: dark `#6b7d80` at 4.27, 3.79, and 3.36, light `#76857a` at 3.53, 3.84, and 3.40.
-- `h3` labels a group inside a panel: 14 px, weight 650, `--sub`, no margin.
-- Dialog bodies scroll while the header and footer stay visible. A dialog opens with focus on its first field, or on its first footer action. Errors that belong to a field appear below it, are referenced by `aria-describedby`, and receive focus.
-- Only wide tables with per-cell labels (links and API keys) turn into cards in narrow containers. Ranking and report tables stay tables.
+## Accessibility
+
+- A visible 2 px focus ring.
+- A skip link.
+- Named landmarks.
+- Headings receive focus after navigation.
+- Icon buttons have names.
+- Status never depends on color alone.
+- Keyboard operation everywhere: menus, tabs, charts, and the palette.
+- 44 px touch targets on coarse pointers.
+- Reduced motion is respected.
+- axe-core (WCAG 2.2 A/AA) runs in the browser test.
+
+## Public pages
+
+The password, one-time, not-found, expired, and unknown-domain pages use the same mark, colors, and type scale. They use the system font stack, contain no JavaScript, set a strict CSP, and choose English or German from `Accept-Language`. Their status codes and headers are unchanged.

@@ -22,6 +22,8 @@ GitHub Actions runs the core test suite on pull requests and on `main`. The desi
 
 Test core workflows in Dark, Light, and System themes, in English and German, at all seven target resolutions. Cover keyboard input, focus, form errors, loading and empty states, and races. Measure contrast and manually review WCAG 2.2 AA conformance with at least one screen reader and Mobile Safari. Check asset requests and common browsers. Scan real QR PNG and SVG output at different sizes and on different backgrounds. [WCAG 2.2](https://www.w3.org/TR/WCAG22/)
 
+`npm run check --prefix frontend` runs svelte-check, the design lint (`frontend/tools/lint-design.py`: no color literals outside the tokens, no literal font sizes, radii, or z-indexes, no page restyling a shared component), the WCAG contrast check of every token pair in both themes (`frontend/tools/contrast.py`), and the catalog check (`tests/i18n_catalog.py`: identical English and German keys, unique keys across area files, no empty strings). The browser smoke test also runs axe-core in both themes and fails on a Content Security Policy violation. [Design system](DESIGN_SYSTEM.md) · [UI guidelines](UI_GUIDELINES.md)
+
 The release review report records severity from P0 through P4, component, impact, evidence and reproduction steps, resolution, effort, and benefit. Track required 1.0 features and any deviations by version in the test report. Unresolved critical or high risks, an unverified planned traffic switch, or an untested restore block release. Stable version tags and `latest` follow approval.
 
 ## CI and Versioning
