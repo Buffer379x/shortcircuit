@@ -281,6 +281,9 @@ async fn turning_health_checks_on_and_off_applies_without_a_restart() {
 
     let (status, _) = app.patch(json!({"monitor_enabled": false})).await;
     assert_eq!(status, StatusCode::OK);
+    // A probe already in flight may still finish (see SECURITY.md); let it settle first, then
+    // check that no new probe starts.
+    tokio::time::sleep(Duration::from_millis(800)).await;
     sqlx::query("UPDATE link_monitor SET next_check = 0, last_checked = 1")
         .execute(&app.pool)
         .await
